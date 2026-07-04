@@ -1,0 +1,47 @@
+{
+  "name": "smart-data-workbench-macos",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@hookform/resolvers": "^5.4.0",
+    "@radix-ui/react-dialog": "^1.1.18",
+    "@radix-ui/react-progress": "^1.1.11",
+    "@radix-ui/react-select": "^2.3.2",
+    "@radix-ui/react-switch": "^1.3.2",
+    "@radix-ui/react-tabs": "^1.1.16",
+    "@radix-ui/react-tooltip": "^1.2.11",
+    "@react-pdf/renderer": "^4.5.1",
+    "@tanstack/react-query": "^5.101.2",
+    "@tanstack/react-table": "^8.21.3",
+    "@tauri-apps/api": "^2.11.1",
+    "echarts": "^6.1.0",
+    "exceljs": "^4.4.0",
+    "lucide-react": "^1.23.0",
+    "pdf-lib": "^1.17.1",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "react-hook-form": "^7.80.0",
+    "zod": "^4.4.3",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.2",
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/node": "^24.13.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "esbuild": "^0.28.1",
+    "oxlint": "^1.71.0",
+    "tailwindcss": "^4.3.2",
+    "typescript": "~6.0.2",
+    "vite": "^8.1.1"
+  }
+}
