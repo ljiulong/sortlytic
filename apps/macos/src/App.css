@@ -289,6 +289,7 @@ h3 {
 .inspector {
   display: grid;
   gap: 12px;
+  min-width: 0;
 }
 
 .inspector {
@@ -297,17 +298,26 @@ h3 {
 }
 
 .glass-panel {
+  min-width: 0;
   padding: 16px;
 }
 
 .compact-panel {
+  min-width: 0;
   padding: 14px;
 }
 
 .section-heading {
   justify-content: space-between;
+  align-items: flex-start;
   gap: 14px;
   margin-bottom: 14px;
+}
+
+.section-heading > div,
+.topbar > div:first-child,
+.plan-header > div {
+  min-width: 0;
 }
 
 .connection-grid {
@@ -322,6 +332,12 @@ h3 {
   padding: 12px;
   border-radius: 8px;
   background: rgba(11, 15, 20, 0.45);
+}
+
+.connection-card > div:not(.connection-icon),
+.export-item div:last-child,
+.regression-row div {
+  min-width: 0;
 }
 
 .connection-icon {
@@ -413,7 +429,7 @@ h3 {
 
 .collection-form {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 10px;
 }
 
@@ -421,6 +437,7 @@ h3 {
 .natural-input {
   display: grid;
   gap: 7px;
+  min-width: 0;
 }
 
 .field span,
@@ -434,6 +451,7 @@ h3 {
 .field select,
 .natural-input textarea {
   width: 100%;
+  min-width: 0;
   min-height: 40px;
   padding: 0 11px;
   color: #f5f7fa;
@@ -451,6 +469,8 @@ h3 {
 
 .form-submit {
   align-self: end;
+  width: 100%;
+  min-width: 0;
 }
 
 .natural-input textarea {
@@ -717,77 +737,5 @@ select:focus-visible {
     transition-duration: 1ms !important;
     animation-duration: 1ms !important;
     animation-iteration-count: 1 !important;
-  }
-}
-
-@media (max-width: 1180px) {
-  .app-shell {
-    grid-template-columns: 210px minmax(0, 1fr);
-  }
-
-  .metric-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .main-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .inspector {
-    position: static;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 860px) {
-  .app-shell {
-    display: block;
-  }
-
-  .sidebar {
-    position: static;
-    height: auto;
-    gap: 14px;
-  }
-
-  .nav-list {
-    display: flex;
-    overflow-x: auto;
-    padding-bottom: 4px;
-  }
-
-  .nav-item {
-    flex: 0 0 auto;
-    width: auto;
-  }
-
-  .workspace {
-    padding: 16px;
-  }
-
-  .topbar {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .topbar-actions,
-  .search-box {
-    width: 100%;
-  }
-
-  .connection-grid,
-  .collection-form,
-  .plan-grid,
-  .inspector {
-    grid-template-columns: 1fr;
-  }
-
-  .task-row {
-    grid-template-columns: 1fr;
-    align-items: start;
-  }
-
-  .progress-cell strong {
-    text-align: left;
   }
 }

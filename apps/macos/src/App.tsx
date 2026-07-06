@@ -43,6 +43,7 @@ import { useForm } from 'react-hook-form'
 import { create } from 'zustand'
 import { z } from 'zod'
 import './App.css'
+import './App.responsive.css'
 import {
   type CollectionPlan,
   type NavKey,
