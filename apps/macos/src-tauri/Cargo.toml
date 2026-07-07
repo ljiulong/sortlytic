@@ -15,11 +15,23 @@ name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.6.3" }
+tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
-serde_json = "1.0"
-serde = { version = "1.0", features = ["derive"] }
+chrono = { version = "0.4.45", features = ["serde"] }
+keyring = "4.1.3"
 log = "0.4"
-tauri = { version = "2.11.3" }
+reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "json", "rustls"] }
+rusqlite = { version = "0.39.0", features = ["bundled", "chrono", "serde_json"] }
+rust_xlsxwriter = "0.96.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10.9"
+tauri = { version = "2.11.3", features = ["protocol-asset"] }
+tauri-plugin-fs = "2.5.1"
 tauri-plugin-log = "2"
+uuid = { version = "1.23.4", features = ["v4", "serde"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1.0.0", features = ["keychain"] }
+keyring-core = "1.0.0"

@@ -1,6 +1,654 @@
+pub mod ai;
+pub mod app_state;
+pub mod collection;
+pub mod domain;
+pub mod exports;
+pub mod prompts;
+pub mod providers;
+pub mod secrets;
+pub mod tasks;
+pub mod tikhub;
+pub mod workspace;
+
+use std::path::PathBuf;
+
+use ai::{AiRunView, GenerateCollectionPlanFromTextInput, GeneratedCollectionPlanView};
+use app_state::{AppState, BackendStatus, WorkspaceContext};
+use collection::{
+  CollectionParamValidationResult, CollectionPlanDraftView, DataTypeCapabilityView,
+  FormCollectionPlanRequest, PlatformCapabilityView,
+};
+use domain::{AppError, AppErrorStage, AppResult};
+use exports::{ExportIntegrityResult, ExportJobView, ReportView};
+use prompts::{
+  CreatePromptVersionInput, PromptRegressionCaseView, PromptRegressionRunView, PromptTemplateView,
+  PromptVersionView,
+};
+use providers::{
+  ModelProfileInput, ModelProfileView, ModelProviderInput, ModelProviderView, ProviderTestResult,
+};
+use secrets::{SecretConnectionTestResult, SecretRefView};
+use tasks::{
+  CollectionPlanView, CollectionTaskView, CostEstimateView, CreateCollectionTaskInput,
+  SaveCollectionPlanInput, TaskLogView, TaskRunView, UpdateCollectionTaskInput,
+};
+use tauri::Manager;
+use tikhub::TikhubConnectionTestResult;
+use workspace::{WorkspaceHealthCheck, WorkspaceSummary};
+
+#[tauri::command]
+fn get_backend_status(state: tauri::State<'_, AppState>) -> AppResult<BackendStatus> {
+  Ok(state.backend_status())
+}
+
+#[tauri::command]
+fn create_workspace(
+  name: String,
+  root_path: String,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<WorkspaceSummary> {
+  let summary = workspace::create_workspace(&name, root_path)?;
+  state.set_active_workspace(workspace_context_from_summary(&summary));
+  Ok(summary)
+}
+
+#[tauri::command]
+fn ensure_default_workspace(
+  app: tauri::AppHandle,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<WorkspaceSummary> {
+  let app_data_dir = app.path().app_data_dir().map_err(|error| {
+    AppError::new(
+      domain::AppErrorCode::WorkspaceError,
+      format!("无法解析默认工作区目录：{error}"),
+      AppErrorStage::Workspace,
+      false,
+    )
+  })?;
+  let root_path = app_data_dir.join("default-workspace");
+  let summary = workspace::ensure_workspace("本地研究工作区", root_path)?;
+  prompts::seed_builtin_prompts(&summary.root_path)?;
+  state.set_active_workspace(workspace_context_from_summary(&summary));
+  Ok(summary)
+}
+
+#[tauri::command]
+fn open_workspace(
+  root_path: String,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<WorkspaceSummary> {
+  let summary = workspace::open_workspace(root_path)?;
+  state.set_active_workspace(workspace_context_from_summary(&summary));
+  Ok(summary)
+}
+
+#[tauri::command]
+fn get_active_workspace(state: tauri::State<'_, AppState>) -> AppResult<Option<WorkspaceContext>> {
+  Ok(state.active_workspace())
+}
+
+#[tauri::command]
+fn run_workspace_health_check(
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<WorkspaceHealthCheck> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  workspace::run_workspace_health_check(root_path)
+}
+
+#[tauri::command]
+fn close_workspace(workspace_id: String, state: tauri::State<'_, AppState>) -> AppResult<bool> {
+  let active_workspace = state
+    .active_workspace()
+    .ok_or_else(|| AppError::validation("当前没有打开的工作区", AppErrorStage::Workspace))?;
+
+  if active_workspace.id != workspace_id {
+    return Err(AppError::validation(
+      "要关闭的工作区不是当前活动工作区",
+      AppErrorStage::Workspace,
+    ));
+  }
+
+  state.clear_active_workspace();
+  Ok(true)
+}
+
+#[tauri::command]
+fn save_secret(
+  provider_type: String,
+  provider_id: String,
+  secret: String,
+  alias: Option<String>,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<SecretRefView> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  secrets::save_secret(root_path, &provider_type, &provider_id, &secret, alias)
+}
+
+#[tauri::command]
+fn update_secret(
+  secret_ref_id: String,
+  secret: String,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<SecretRefView> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  secrets::update_secret(root_path, &secret_ref_id, &secret)
+}
+
+#[tauri::command]
+fn delete_secret(
+  secret_ref_id: String,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<bool> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  secrets::delete_secret(root_path, &secret_ref_id)
+}
+
+#[tauri::command]
+fn list_secret_refs(
+  provider_type: Option<String>,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<Vec<SecretRefView>> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  secrets::list_secret_refs(root_path, provider_type)
+}
+
+#[tauri::command]
+fn test_secret_connection(
+  secret_ref_id: String,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<SecretConnectionTestResult> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  secrets::test_secret_connection(root_path, &secret_ref_id)
+}
+
+#[tauri::command]
+fn test_tikhub_connection(
+  secret_ref_id: String,
+  base_url: Option<String>,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<TikhubConnectionTestResult> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  tikhub::test_tikhub_connection(root_path, &secret_ref_id, base_url)
+}
+
+#[tauri::command]
+fn list_model_providers(
+  enabled: Option<bool>,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<Vec<ModelProviderView>> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  providers::list_model_providers(root_path, enabled)
+}
+
+#[tauri::command]
+fn create_model_provider(
+  input: ModelProviderInput,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<ModelProviderView> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  providers::create_model_provider(root_path, input)
+}
+
+#[tauri::command]
+fn update_model_provider(
+  provider_id: String,
+  input: ModelProviderInput,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<ModelProviderView> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  providers::update_model_provider(root_path, &provider_id, input)
+}
+
+#[tauri::command]
+fn delete_model_provider(
+  provider_id: String,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<bool> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  providers::delete_model_provider(root_path, &provider_id)
+}
+
+#[tauri::command]
+fn list_model_profiles(
+  provider_id: String,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<Vec<ModelProfileView>> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  providers::list_model_profiles(root_path, &provider_id)
+}
+
+#[tauri::command]
+fn upsert_model_profile(
+  input: ModelProfileInput,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<ModelProfileView> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  providers::upsert_model_profile(root_path, input)
+}
+
+#[tauri::command]
+fn test_model_provider(
+  provider_id: String,
+  model_id: Option<String>,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<ProviderTestResult> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  providers::test_model_provider(root_path, &provider_id, model_id)
+}
+
+#[tauri::command]
+fn set_default_model(
+  provider_id: String,
+  model_id: String,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<bool> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  providers::set_default_model(root_path, &provider_id, &model_id)
+}
+
+#[tauri::command]
+fn create_collection_task(
+  input: CreateCollectionTaskInput,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<CollectionTaskView> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  tasks::create_collection_task(root_path, input)
+}
+
+#[tauri::command]
+fn update_collection_task(
+  task_id: String,
+  input: UpdateCollectionTaskInput,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<CollectionTaskView> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  tasks::update_collection_task(root_path, &task_id, input)
+}
+
+#[tauri::command]
+fn save_collection_plan(
+  input: SaveCollectionPlanInput,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<CollectionPlanView> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  tasks::save_collection_plan(root_path, input)
+}
+
+#[tauri::command]
+fn estimate_task_cost(
+  task_id: Option<String>,
+  plan_json: Option<serde_json::Value>,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<CostEstimateView> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  tasks::estimate_task_cost(root_path, task_id, plan_json)
+}
+
+#[tauri::command]
+fn confirm_collection_plan(
+  task_id: String,
+  plan_id: String,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<CollectionTaskView> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  tasks::confirm_collection_plan(root_path, &task_id, &plan_id)
+}
+
+#[tauri::command]
+fn enqueue_task(
+  task_id: String,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<TaskRunView> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  tasks::enqueue_task(root_path, &task_id)
+}
+
+#[tauri::command]
+fn cancel_task(
+  task_id: String,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<CollectionTaskView> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  tasks::cancel_task(root_path, &task_id)
+}
+
+#[tauri::command]
+fn retry_task(
+  task_id: String,
+  stage: Option<String>,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<TaskRunView> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  tasks::retry_task(root_path, &task_id, stage)
+}
+
+#[tauri::command]
+fn copy_task(
+  task_id: String,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<CollectionTaskView> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  tasks::copy_task(root_path, &task_id)
+}
+
+#[tauri::command]
+fn get_task(
+  task_id: String,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<CollectionTaskView> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  tasks::get_task(root_path, &task_id)
+}
+
+#[tauri::command]
+fn list_tasks(
+  status: Option<String>,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<Vec<CollectionTaskView>> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  tasks::list_tasks(root_path, status)
+}
+
+#[tauri::command]
+fn list_task_logs(
+  task_run_id: String,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<Vec<TaskLogView>> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  tasks::list_task_logs(root_path, &task_run_id)
+}
+
+#[tauri::command]
+fn list_supported_platforms() -> AppResult<Vec<PlatformCapabilityView>> {
+  Ok(collection::list_supported_platforms())
+}
+
+#[tauri::command]
+fn list_platform_data_types(platform: String) -> AppResult<Vec<DataTypeCapabilityView>> {
+  collection::list_platform_data_types(&platform)
+}
+
+#[tauri::command]
+fn validate_collection_params(
+  platform: String,
+  data_type: String,
+  params: serde_json::Value,
+) -> AppResult<CollectionParamValidationResult> {
+  collection::validate_collection_params(&platform, &data_type, params)
+}
+
+#[tauri::command]
+fn generate_form_collection_plan(
+  request: FormCollectionPlanRequest,
+) -> AppResult<CollectionPlanDraftView> {
+  collection::generate_form_collection_plan(request)
+}
+
+#[tauri::command]
+fn preview_collection_plan(plan_json: serde_json::Value) -> AppResult<CostEstimateView> {
+  collection::preview_collection_plan(plan_json)
+}
+
+#[tauri::command]
+fn seed_builtin_prompts(
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<Vec<PromptTemplateView>> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  prompts::seed_builtin_prompts(root_path)
+}
+
+#[tauri::command]
+fn list_prompt_templates(
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<Vec<PromptTemplateView>> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  prompts::list_prompt_templates(root_path)
+}
+
+#[tauri::command]
+fn list_prompt_versions(
+  template_id: String,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<Vec<PromptVersionView>> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  prompts::list_prompt_versions(root_path, &template_id)
+}
+
+#[tauri::command]
+fn create_prompt_version(
+  input: CreatePromptVersionInput,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<PromptVersionView> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  prompts::create_prompt_version(root_path, input)
+}
+
+#[tauri::command]
+fn activate_prompt_version(
+  prompt_version_id: String,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<PromptVersionView> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  prompts::activate_prompt_version(root_path, &prompt_version_id)
+}
+
+#[tauri::command]
+fn list_prompt_regression_cases(
+  template_id: String,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<Vec<PromptRegressionCaseView>> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  prompts::list_prompt_regression_cases(root_path, &template_id)
+}
+
+#[tauri::command]
+fn list_prompt_regression_runs(
+  prompt_version_id: String,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<Vec<PromptRegressionRunView>> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  prompts::list_prompt_regression_runs(root_path, &prompt_version_id)
+}
+
+#[tauri::command]
+fn generate_collection_plan_from_text(
+  input: GenerateCollectionPlanFromTextInput,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<GeneratedCollectionPlanView> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  ai::generate_collection_plan_from_text(root_path, input)
+}
+
+#[tauri::command]
+fn get_ai_run(
+  ai_run_id: String,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<AiRunView> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  ai::get_ai_run(root_path, &ai_run_id)
+}
+
+#[tauri::command]
+fn list_ai_runs(
+  task_id: String,
+  run_type: Option<String>,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<Vec<AiRunView>> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  ai::list_ai_runs(root_path, task_id, run_type)
+}
+
+#[tauri::command]
+fn build_report_model(
+  task_id: String,
+  report_type: String,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<ReportView> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  exports::build_report_model(root_path, &task_id, &report_type)
+}
+
+#[tauri::command]
+fn validate_export_integrity(
+  report_id: String,
+  export_type: String,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<ExportIntegrityResult> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  exports::validate_export_integrity(root_path, &report_id, &export_type)
+}
+
+#[tauri::command]
+fn create_export_job(
+  report_id: String,
+  export_type: String,
+  target_path: Option<String>,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<ExportJobView> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  exports::create_export_job(root_path, &report_id, &export_type, target_path)
+}
+
+#[tauri::command]
+fn get_export_job(
+  export_job_id: String,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<ExportJobView> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  exports::get_export_job(root_path, &export_job_id)
+}
+
+#[tauri::command]
+fn list_export_jobs(
+  report_id: Option<String>,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<Vec<ExportJobView>> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  exports::list_export_jobs(root_path, report_id)
+}
+
+fn resolve_workspace_root(root_path: Option<String>, state: &AppState) -> AppResult<PathBuf> {
+  if let Some(root_path) = root_path {
+    return Ok(PathBuf::from(root_path));
+  }
+
+  state
+    .active_workspace()
+    .map(|workspace| workspace.root_path)
+    .ok_or_else(|| AppError::validation("当前没有打开的工作区", AppErrorStage::Workspace))
+}
+
+fn workspace_context_from_summary(summary: &WorkspaceSummary) -> WorkspaceContext {
+  WorkspaceContext {
+    id: summary.id.clone(),
+    name: summary.name.clone(),
+    root_path: summary.root_path.clone(),
+    schema_version: summary.schema_version,
+  }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
+    .manage(AppState::new())
+    .plugin(tauri_plugin_fs::init())
+    .invoke_handler(tauri::generate_handler![
+      get_backend_status,
+      create_workspace,
+      ensure_default_workspace,
+      open_workspace,
+      get_active_workspace,
+      run_workspace_health_check,
+      close_workspace,
+      save_secret,
+      update_secret,
+      delete_secret,
+      list_secret_refs,
+      test_secret_connection,
+      test_tikhub_connection,
+      list_model_providers,
+      create_model_provider,
+      update_model_provider,
+      delete_model_provider,
+      list_model_profiles,
+      upsert_model_profile,
+      test_model_provider,
+      set_default_model,
+      create_collection_task,
+      update_collection_task,
+      save_collection_plan,
+      estimate_task_cost,
+      confirm_collection_plan,
+      enqueue_task,
+      cancel_task,
+      retry_task,
+      copy_task,
+      get_task,
+      list_tasks,
+      list_task_logs,
+      list_supported_platforms,
+      list_platform_data_types,
+      validate_collection_params,
+      generate_form_collection_plan,
+      preview_collection_plan,
+      seed_builtin_prompts,
+      list_prompt_templates,
+      list_prompt_versions,
+      create_prompt_version,
+      activate_prompt_version,
+      list_prompt_regression_cases,
+      list_prompt_regression_runs,
+      generate_collection_plan_from_text,
+      get_ai_run,
+      list_ai_runs,
+      build_report_model,
+      validate_export_integrity,
+      create_export_job,
+      get_export_job,
+      list_export_jobs
+    ])
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(

@@ -1,4 +1,4 @@
-import { type ReactNode, useMemo, useState } from 'react'
+import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import * as Tabs from '@radix-ui/react-tabs'
 import { zodResolver } from '@hookform/resolvers/zod'
 import {
@@ -7,7 +7,7 @@ import {
   getCoreRowModel,
   useReactTable,
 } from '@tanstack/react-table'
-import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   Activity,
   AlertTriangle,
@@ -19,22 +19,18 @@ import {
   Clock3,
   Database,
   Download,
-  FileSpreadsheet,
-  FileText,
   Gauge,
   KeyRound,
   Layers3,
   ListChecks,
   MessageSquareText,
   MonitorCheck,
-  Network,
   Pause,
   Play,
   RefreshCcw,
   Search,
   Settings,
   Share2,
-  ShieldCheck,
   Sparkles,
   Table2,
   Wrench,
@@ -45,13 +41,18 @@ import { z } from 'zod'
 import './App.css'
 import './App.responsive.css'
 import {
-  type CollectionPlan,
+  type RuntimeCollectionPlan,
+  type WorkbenchRuntimeData,
+  useWorkbenchBackend,
+} from './use-workbench-backend'
+import ExportPanel from './ExportPanel'
+import TikhubSettingsPanel from './TikhubSettingsPanel'
+import {
   type NavKey,
   type SocialRecord,
   type TaskStatus,
   dataTypeOptions,
   platformOptions,
-  workspaceSnapshot,
 } from './workbench-data'
 
 const queryClient = new QueryClient()
@@ -107,11 +108,8 @@ function App() {
 }
 
 function Workbench() {
-  const { data = workspaceSnapshot } = useQuery({
-    queryKey: ['workspace', 'local-mvp'],
-    queryFn: async () => workspaceSnapshot,
-    staleTime: Number.POSITIVE_INFINITY,
-  })
+  const backend = useWorkbenchBackend()
+  const data = backend.data
   const activeNav = useWorkbenchStore((state) => state.activeNav)
   const setActiveNav = useWorkbenchStore((state) => state.setActiveNav)
 
@@ -153,7 +151,11 @@ function Workbench() {
       </aside>
 
       <main className="workspace">
-        <TopBar workspace={data.workspace} />
+        <TopBar
+          actionMessage={backend.actionMessage}
+          isInitializing={backend.isInitializing}
+          workspace={data.workspace}
+        />
         <section className="metric-grid" aria-label="工作区指标">
           {data.metrics.map((metric) => (
             <MetricCard key={metric.label} {...metric} />
@@ -162,15 +164,35 @@ function Workbench() {
 
         <section className="main-grid">
           <div className="main-column">
-            <ConnectionStrip connections={data.connections} />
-            <CollectionBuilder />
+            <ConnectionStrip
+              connections={data.connections}
+              isBusy={backend.isBusy}
+              onRefresh={backend.refresh}
+            />
+            <CollectionBuilder
+              actionMessage={backend.actionMessage}
+              activePlan={backend.activePlan}
+              isBusy={backend.isBusy}
+              onConfirmPlan={backend.confirmActivePlan}
+              onGenerateFormPlan={backend.generateFormPlan}
+              onGenerateNaturalPlan={backend.generateNaturalPlan}
+            />
             <TaskQueue tasks={data.tasks} />
             <RecordTable records={data.records} />
           </div>
           <aside className="inspector" aria-label="详情与证据">
             <EvidencePanel records={data.records} />
             <PromptRegressionPanel runs={data.promptRuns} />
-            <ExportPanel />
+            <TikhubSettingsPanel
+              isBusy={backend.isBusy}
+              result={backend.tikhubTestResult}
+              onSaveAndTest={backend.saveAndTestTikhubToken}
+            />
+            <ExportPanel
+              isBusy={backend.isBusy}
+              latestExports={backend.latestExports}
+              onExport={backend.exportLatestReport}
+            />
           </aside>
         </section>
       </main>
@@ -179,15 +201,20 @@ function Workbench() {
 }
 
 function TopBar({
+  actionMessage,
+  isInitializing,
   workspace,
 }: {
-  workspace: typeof workspaceSnapshot.workspace
+  actionMessage: string
+  isInitializing: boolean
+  workspace: WorkbenchRuntimeData['workspace']
 }) {
   return (
     <header className="topbar">
       <div>
         <p className="eyebrow">工作区</p>
         <h1>{workspace.name}</h1>
+        <p className="muted-text">{isInitializing ? '正在连接本地后端' : actionMessage}</p>
       </div>
       <div className="topbar-actions">
         <label className="search-box">
@@ -230,8 +257,12 @@ function MetricCard({
 
 function ConnectionStrip({
   connections,
+  isBusy,
+  onRefresh,
 }: {
-  connections: typeof workspaceSnapshot.connections
+  connections: WorkbenchRuntimeData['connections']
+  isBusy: boolean
+  onRefresh: () => void
 }) {
   return (
     <section className="glass-panel">
@@ -240,7 +271,7 @@ function ConnectionStrip({
           <p className="eyebrow">连接状态</p>
           <h2>TikHub、模型与自动化</h2>
         </div>
-        <button className="ghost-button" type="button">
+        <button className="ghost-button" disabled={isBusy} type="button" onClick={onRefresh}>
           <RefreshCcw size={16} aria-hidden="true" />
           <span>重新测试</span>
         </button>
@@ -269,8 +300,22 @@ function ConnectionStrip({
   )
 }
 
-function CollectionBuilder() {
-  const [plan, setPlan] = useState<CollectionPlan>({
+function CollectionBuilder({
+  actionMessage,
+  activePlan,
+  isBusy,
+  onConfirmPlan,
+  onGenerateFormPlan,
+  onGenerateNaturalPlan,
+}: {
+  actionMessage: string
+  activePlan?: RuntimeCollectionPlan
+  isBusy: boolean
+  onConfirmPlan: () => Promise<unknown>
+  onGenerateFormPlan: (values: CollectionFormValues) => Promise<RuntimeCollectionPlan>
+  onGenerateNaturalPlan: (intentText: string) => Promise<RuntimeCollectionPlan>
+}) {
+  const [plan, setPlan] = useState<RuntimeCollectionPlan>({
     platform: '小红书',
     dataType: '评论采集',
     regionCode: 'CN',
@@ -281,6 +326,15 @@ function CollectionBuilder() {
     status: '等待确认',
     missing: [],
   })
+  const [naturalText, setNaturalText] = useState(
+    '分析中国小红书近 30 天新能源汽车女性车主评论，重点看安全感、补能和售后体验，成本控制在 35 美元以内。',
+  )
+
+  useEffect(() => {
+    if (activePlan) {
+      setPlan(activePlan)
+    }
+  }, [activePlan])
 
   const {
     register,
@@ -299,12 +353,14 @@ function CollectionBuilder() {
     },
   })
 
-  const submitForm = (values: CollectionFormValues) => {
-    setPlan({
-      ...values,
-      status: values.budget > 120 ? '待人工确认' : '等待确认',
-      missing: values.regionCode.trim() ? [] : ['国家/地区'],
-    })
+  const submitForm = async (values: CollectionFormValues) => {
+    const nextPlan = await onGenerateFormPlan(values)
+    setPlan(nextPlan)
+  }
+
+  const submitNaturalText = async () => {
+    const nextPlan = await onGenerateNaturalPlan(naturalText)
+    setPlan(nextPlan)
   }
 
   return (
@@ -364,7 +420,7 @@ function CollectionBuilder() {
             <Field error={errors.budget?.message} label="成本上限">
               <input type="number" {...register('budget', { valueAsNumber: true })} />
             </Field>
-            <button className="primary-button form-submit" type="submit">
+            <button className="primary-button form-submit" disabled={isBusy} type="submit">
               <Gauge size={16} aria-hidden="true" />
               生成计划
             </button>
@@ -376,14 +432,15 @@ function CollectionBuilder() {
             <label htmlFor="intent">自然语言需求</label>
             <textarea
               id="intent"
-              defaultValue="分析小红书近 30 天新能源汽车女性车主评论，重点看安全感、补能和售后体验，成本控制在 35 美元以内。"
+              value={naturalText}
+              onChange={(event) => setNaturalText(event.target.value)}
             />
             <div className="action-row">
-              <button className="primary-button" type="button">
+              <button className="primary-button" disabled={isBusy} type="button" onClick={submitNaturalText}>
                 <Sparkles size={16} aria-hidden="true" />
                 解析为计划
               </button>
-              <button className="ghost-button" type="button">
+              <button className="ghost-button" disabled={isBusy} type="button" onClick={submitNaturalText}>
                 <RefreshCcw size={16} aria-hidden="true" />
                 重新生成
               </button>
@@ -392,7 +449,12 @@ function CollectionBuilder() {
         </Tabs.Content>
       </Tabs.Root>
 
-      <CollectionPlanPreview plan={plan} />
+      <CollectionPlanPreview
+        actionMessage={actionMessage}
+        isBusy={isBusy}
+        onConfirmPlan={onConfirmPlan}
+        plan={plan}
+      />
     </section>
   )
 }
@@ -415,7 +477,22 @@ function Field({
   )
 }
 
-function CollectionPlanPreview({ plan }: { plan: CollectionPlan }) {
+function CollectionPlanPreview({
+  actionMessage,
+  isBusy,
+  onConfirmPlan,
+  plan,
+}: {
+  actionMessage: string
+  isBusy: boolean
+  onConfirmPlan: () => Promise<unknown>
+  plan: RuntimeCollectionPlan
+}) {
+  const canConfirm = Boolean(
+    plan.taskId && plan.planId && plan.validationStatus === 'valid' && plan.status === '等待确认',
+  )
+  const confirmLabel = plan.status === '运行中' ? '已入队' : plan.taskId ? '确认运行' : '先生成计划'
+
   return (
     <div className="plan-preview">
       <div className="plan-header">
@@ -430,17 +507,28 @@ function CollectionPlanPreview({ plan }: { plan: CollectionPlan }) {
         <InfoLine label="数据类型" value={plan.dataType} />
         <InfoLine label="国家/地区" value={`${plan.regionCode}，来源：用户输入，置信度 1.00`} />
         <InfoLine label="范围" value={`${plan.range}，最多 ${plan.maxRecords.toLocaleString()} 条`} />
-        <InfoLine label="成本" value={`预计 $${(plan.budget * 0.72).toFixed(2)}，上限 $${plan.budget}`} />
+        <InfoLine
+          label="成本"
+          value={`${plan.costEstimate ?? `预计 $${(plan.budget * 0.72).toFixed(2)}`}，上限 $${plan.budget}`}
+        />
         <InfoLine label="缺失条件" value={plan.missing.length ? plan.missing.join('、') : '无'} />
       </div>
+      <p className="muted-text">{actionMessage}</p>
       <div className="action-row">
-        <button className="primary-button" type="button">
+        <button
+          className="primary-button"
+          disabled={!canConfirm || isBusy}
+          type="button"
+          onClick={() => {
+            void onConfirmPlan()
+          }}
+        >
           <CheckCircle2 size={16} aria-hidden="true" />
-          确认运行
+          {confirmLabel}
         </button>
-        <button className="ghost-button" type="button">
+        <button className="ghost-button" disabled={!plan.planId || isBusy} type="button">
           <Pause size={16} aria-hidden="true" />
-          保存草稿
+          已保存草稿
         </button>
       </div>
     </div>
@@ -459,7 +547,7 @@ function InfoLine({ label, value }: { label: string; value: string }) {
 function TaskQueue({
   tasks,
 }: {
-  tasks: typeof workspaceSnapshot.tasks
+  tasks: WorkbenchRuntimeData['tasks']
 }) {
   return (
     <section className="glass-panel">
@@ -474,6 +562,7 @@ function TaskQueue({
         </button>
       </div>
       <div className="task-list">
+        {tasks.length === 0 ? <p className="muted-text">暂无任务，生成采集计划后会出现在这里。</p> : null}
         {tasks.map((task) => (
           <article className="task-row" key={task.name}>
             <div>
@@ -632,8 +721,10 @@ function EvidencePanel({ records }: { records: SocialRecord[] }) {
 function PromptRegressionPanel({
   runs,
 }: {
-  runs: typeof workspaceSnapshot.promptRuns
+  runs: WorkbenchRuntimeData['promptRuns']
 }) {
+  const failedCount = runs.filter((run) => run.status === '失败').length
+
   return (
     <section className="glass-panel compact-panel">
       <div className="section-heading">
@@ -641,7 +732,7 @@ function PromptRegressionPanel({
           <p className="eyebrow">提示词回归</p>
           <h2>版本与 Schema</h2>
         </div>
-        <StatusPill tone="warning" label="1 项失败" />
+        <StatusPill tone={failedCount ? 'warning' : 'success'} label={`${failedCount} 项失败`} />
       </div>
       <div className="regression-list">
         {runs.map((run) => (
@@ -656,58 +747,6 @@ function PromptRegressionPanel({
         ))}
       </div>
     </section>
-  )
-}
-
-function ExportPanel() {
-  return (
-    <section className="glass-panel compact-panel">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">导出中心</p>
-          <h2>Excel 与 PDF 门禁</h2>
-        </div>
-        <StatusPill tone="info" label="待检查" />
-      </div>
-      <div className="export-grid">
-        <ExportItem
-          icon={FileSpreadsheet}
-          label="Excel 工作簿"
-          meta="7 个工作表，含成本明细"
-          tone="success"
-        />
-        <ExportItem icon={FileText} label="PDF 报告" meta="中文字体可用性待检" tone="warning" />
-        <ExportItem icon={Network} label="Webhook 摘要" meta="不发送密钥与完整 Header" tone="info" />
-      </div>
-      <button className="primary-button wide-button" type="button">
-        <ShieldCheck size={16} aria-hidden="true" />
-        执行导出检查
-      </button>
-    </section>
-  )
-}
-
-function ExportItem({
-  icon: Icon,
-  label,
-  meta,
-  tone,
-}: {
-  icon: typeof FileText
-  label: string
-  meta: string
-  tone: string
-}) {
-  return (
-    <article className="export-item">
-      <div className="connection-icon" data-tone={tone}>
-        <Icon size={17} aria-hidden="true" />
-      </div>
-      <div>
-        <strong>{label}</strong>
-        <span>{meta}</span>
-      </div>
-    </article>
   )
 }
 

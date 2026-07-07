@@ -1,0 +1,538 @@
+use std::path::Path;
+
+use chrono::Utc;
+use rusqlite::{params, Connection, OptionalExtension, Row};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use uuid::Uuid;
+
+use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
+use crate::prompts::seed_builtin_prompts;
+use crate::tasks::{save_collection_plan, CollectionPlanView, SaveCollectionPlanInput};
+use crate::workspace::{open_workspace_database, DATABASE_FILE_NAME};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GenerateCollectionPlanFromTextInput {
+  pub task_id: String,
+  pub intent_text: String,
+  pub provider_id: Option<String>,
+  pub model_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RuntimeSnapshotView {
+  pub id: String,
+  pub task_id: String,
+  pub agent_profile_id: Option<String>,
+  pub provider_id: String,
+  pub model_id: String,
+  pub api_format: String,
+  pub base_url_type: String,
+  pub prompt_version_id: String,
+  pub output_schema_id: String,
+  pub capabilities_json: Value,
+  pub config_source: String,
+  pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AiRunView {
+  pub id: String,
+  pub task_id: String,
+  pub runtime_snapshot_id: String,
+  pub run_type: String,
+  pub input_record_set_id: Option<String>,
+  pub input_summary: Option<String>,
+  pub output_json: Option<Value>,
+  pub raw_output_path: Option<String>,
+  pub schema_valid: bool,
+  pub validation_status: String,
+  pub error_code: Option<String>,
+  pub error_message: Option<String>,
+  pub input_tokens: Option<i64>,
+  pub output_tokens: Option<i64>,
+  pub latency_ms: Option<i64>,
+  pub first_token_latency_ms: Option<i64>,
+  pub retry_count: i64,
+  pub cost_estimate_json: Value,
+  pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GeneratedCollectionPlanView {
+  pub ai_run: AiRunView,
+  pub runtime_snapshot: RuntimeSnapshotView,
+  pub collection_plan: CollectionPlanView,
+}
+
+pub fn generate_collection_plan_from_text(
+  root_path: impl AsRef<Path>,
+  input: GenerateCollectionPlanFromTextInput,
+) -> AppResult<GeneratedCollectionPlanView> {
+  let root_path = root_path.as_ref().to_path_buf();
+  seed_builtin_prompts(&root_path)?;
+  let connection = open_workspace_connection(&root_path)?;
+  ensure_task_exists(&connection, &input.task_id)?;
+  let prompt = active_prompt_version(&connection, "collection_plan_from_text")?;
+  let generated = generate_plan_json(&input.intent_text);
+  let schema_valid = generated
+    .get("missing_fields")
+    .and_then(Value::as_array)
+    .is_some_and(|items| items.is_empty());
+  let validation_status = if schema_valid {
+    "valid"
+  } else {
+    "needs_review"
+  };
+  let now = Utc::now().to_rfc3339();
+  let runtime_snapshot_id = Uuid::new_v4().to_string();
+  let ai_run_id = Uuid::new_v4().to_string();
+  let provider_id = input
+    .provider_id
+    .unwrap_or_else(|| "local-rule-engine".to_string());
+  let model_id = input
+    .model_id
+    .unwrap_or_else(|| "rule-parser-v1".to_string());
+
+  connection
+    .execute(
+      "INSERT INTO runtime_snapshot (
+        id, task_id, provider_id, model_id, api_format, base_url_type, prompt_version_id,
+        output_schema_id, capabilities_json, config_source, created_at
+      ) VALUES (?1, ?2, ?3, ?4, 'local_rule', 'none', ?5, 'collection_plan_v1', ?6, 'local', ?7)",
+      params![
+        runtime_snapshot_id,
+        input.task_id,
+        provider_id,
+        model_id,
+        prompt.id,
+        serde_json::json!({ "structured_output": true }).to_string(),
+        now
+      ],
+    )
+    .map_err(database_error)?;
+
+  connection
+    .execute(
+      "INSERT INTO ai_run (
+        id, task_id, runtime_snapshot_id, run_type, input_summary, output_json, schema_valid,
+        validation_status, input_tokens, output_tokens, latency_ms, retry_count,
+        cost_estimate_json, created_at
+      ) VALUES (?1, ?2, ?3, 'collection_plan_generation', ?4, ?5, ?6, ?7, ?8, ?9, 0, 0, '{}', ?10)",
+      params![
+        ai_run_id,
+        input.task_id,
+        runtime_snapshot_id,
+        input.intent_text,
+        generated.to_string(),
+        bool_to_i64(schema_valid),
+        validation_status,
+        estimate_tokens(&input.intent_text),
+        estimate_tokens(&generated.to_string()),
+        now
+      ],
+    )
+    .map_err(database_error)?;
+
+  connection
+    .execute(
+      "INSERT INTO task_intent (id, task_id, intent_text, language, parse_status, ai_run_id, created_at)
+       VALUES (?1, ?2, ?3, 'zh-CN', ?4, ?5, ?6)",
+      params![
+        Uuid::new_v4().to_string(),
+        input.task_id,
+        input.intent_text,
+        validation_status,
+        ai_run_id,
+        now
+      ],
+    )
+    .map_err(database_error)?;
+
+  let collection_plan = save_collection_plan(
+    &root_path,
+    SaveCollectionPlanInput {
+      task_id: input.task_id.clone(),
+      source: "ai_generated".to_string(),
+      plan_json: generated.clone(),
+      validation_status: validation_status.to_string(),
+      validation_errors_json: Some(generated["missing_fields"].clone()),
+      cost_estimate_json: generated.get("cost_estimate").cloned(),
+    },
+  )?;
+  let ai_run = get_ai_run(&root_path, &ai_run_id)?;
+  let runtime_snapshot = get_runtime_snapshot(&connection, &runtime_snapshot_id)?;
+
+  Ok(GeneratedCollectionPlanView {
+    ai_run,
+    runtime_snapshot,
+    collection_plan,
+  })
+}
+
+pub fn get_ai_run(root_path: impl AsRef<Path>, ai_run_id: &str) -> AppResult<AiRunView> {
+  let connection = open_workspace_connection(root_path)?;
+  connection
+    .query_row(
+      "SELECT id, task_id, runtime_snapshot_id, run_type, input_record_set_id, input_summary,
+              output_json, raw_output_path, schema_valid, validation_status, error_code,
+              error_message, input_tokens, output_tokens, latency_ms, first_token_latency_ms,
+              retry_count, cost_estimate_json, created_at
+       FROM ai_run
+       WHERE id = ?1",
+      params![ai_run_id],
+      map_ai_run,
+    )
+    .optional()
+    .map_err(database_error)?
+    .ok_or_else(|| ai_error("AI 运行记录不存在"))
+}
+
+pub fn list_ai_runs(
+  root_path: impl AsRef<Path>,
+  task_id: String,
+  run_type: Option<String>,
+) -> AppResult<Vec<AiRunView>> {
+  let connection = open_workspace_connection(root_path)?;
+
+  if let Some(run_type) = run_type {
+    let mut statement = connection
+      .prepare(
+        "SELECT id, task_id, runtime_snapshot_id, run_type, input_record_set_id, input_summary,
+                output_json, raw_output_path, schema_valid, validation_status, error_code,
+                error_message, input_tokens, output_tokens, latency_ms, first_token_latency_ms,
+                retry_count, cost_estimate_json, created_at
+         FROM ai_run
+         WHERE task_id = ?1 AND run_type = ?2
+         ORDER BY created_at DESC",
+      )
+      .map_err(database_error)?;
+    let rows = statement
+      .query_map(params![task_id, run_type], map_ai_run)
+      .map_err(database_error)?;
+    collect_rows(rows)
+  } else {
+    let mut statement = connection
+      .prepare(
+        "SELECT id, task_id, runtime_snapshot_id, run_type, input_record_set_id, input_summary,
+                output_json, raw_output_path, schema_valid, validation_status, error_code,
+                error_message, input_tokens, output_tokens, latency_ms, first_token_latency_ms,
+                retry_count, cost_estimate_json, created_at
+         FROM ai_run
+         WHERE task_id = ?1
+         ORDER BY created_at DESC",
+      )
+      .map_err(database_error)?;
+    let rows = statement
+      .query_map(params![task_id], map_ai_run)
+      .map_err(database_error)?;
+    collect_rows(rows)
+  }
+}
+
+fn generate_plan_json(intent_text: &str) -> Value {
+  let lower = intent_text.to_ascii_lowercase();
+  let mut platforms = Vec::new();
+  let mut data_types = Vec::new();
+  let mut missing_fields = Vec::new();
+
+  if lower.contains("tiktok") {
+    platforms.push("tiktok");
+  }
+  if intent_text.contains("抖音") || lower.contains("douyin") {
+    platforms.push("douyin");
+  }
+  if intent_text.contains("小红书") || lower.contains("xiaohongshu") {
+    platforms.push("xiaohongshu");
+  }
+  if intent_text.contains("评论") || lower.contains("comment") {
+    data_types.push("comments");
+  }
+  if intent_text.contains("关键词") || lower.contains("keyword") || lower.contains("search") {
+    data_types.push("keyword_search");
+  }
+
+  let should_infer_cn = intent_text.contains("中国")
+    || lower.contains("china")
+    || lower.contains(" cn")
+    || platforms
+      .iter()
+      .any(|platform| matches!(*platform, "douyin" | "xiaohongshu"));
+  let region = if intent_text.contains("美国") || lower.contains(" us") || lower.contains("usa") {
+    Some("US")
+  } else if should_infer_cn {
+    Some("CN")
+  } else {
+    None
+  };
+
+  if platforms.is_empty() {
+    missing_fields.push("platforms");
+  }
+  if data_types.is_empty() {
+    missing_fields.push("data_types");
+  }
+  if region.is_none() {
+    missing_fields.push("region");
+  }
+
+  let endpoint_key = match (platforms.first(), data_types.first()) {
+    (Some(platform), Some(data_type)) => format!("{platform}.{data_type}"),
+    _ => "unresolved".to_string(),
+  };
+  let request_count_estimate = platforms.len().max(1) * data_types.len().max(1);
+
+  serde_json::json!({
+    "platforms": platforms,
+    "data_types": data_types,
+    "region": region.map(|value| serde_json::json!({
+      "value": value,
+      "source": "natural_language",
+      "confidence": 0.8,
+      "validation_status": "unverified"
+    })).unwrap_or(Value::Null),
+    "keywords": extract_keywords(intent_text),
+    "accounts": [],
+    "time_range": Value::Null,
+    "steps": [{
+      "endpoint_key": endpoint_key,
+      "params": {}
+    }],
+    "request_limit": request_count_estimate,
+    "cost_estimate": {
+      "request_count_estimate": request_count_estimate,
+      "requires_confirmation": true
+    },
+    "missing_fields": missing_fields,
+    "confidence": 0.65,
+    "requires_user_confirmation": true
+  })
+}
+
+fn extract_keywords(intent_text: &str) -> Value {
+  for marker in ["关键词", "keyword"] {
+    if let Some(index) = intent_text.find(marker) {
+      let keyword = intent_text[index + marker.len()..]
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim_matches(['：', ':', '，', ',']);
+      if !keyword.is_empty() {
+        return serde_json::json!([keyword]);
+      }
+    }
+  }
+
+  Value::Array(Vec::new())
+}
+
+fn active_prompt_version(
+  connection: &Connection,
+  template_key: &str,
+) -> AppResult<ActivePromptVersion> {
+  connection
+    .query_row(
+      "SELECT pv.id
+       FROM prompt_version pv
+       JOIN prompt_template pt ON pt.id = pv.template_id
+       WHERE pt.template_key = ?1 AND pv.status = 'active'
+       ORDER BY pv.version DESC
+       LIMIT 1",
+      params![template_key],
+      |row| Ok(ActivePromptVersion { id: row.get(0)? }),
+    )
+    .optional()
+    .map_err(database_error)?
+    .ok_or_else(|| ai_error("缺少可用的 active 提示词版本"))
+}
+
+fn ensure_task_exists(connection: &Connection, task_id: &str) -> AppResult<()> {
+  let exists = connection
+    .query_row(
+      "SELECT COUNT(*) FROM collection_task WHERE id = ?1",
+      params![task_id],
+      |row| row.get::<_, i64>(0),
+    )
+    .map_err(database_error)?
+    > 0;
+
+  if exists {
+    Ok(())
+  } else {
+    Err(ai_error("任务不存在"))
+  }
+}
+
+fn get_runtime_snapshot(
+  connection: &Connection,
+  snapshot_id: &str,
+) -> AppResult<RuntimeSnapshotView> {
+  connection
+    .query_row(
+      "SELECT id, task_id, agent_profile_id, provider_id, model_id, api_format, base_url_type,
+              prompt_version_id, output_schema_id, capabilities_json, config_source, created_at
+       FROM runtime_snapshot
+       WHERE id = ?1",
+      params![snapshot_id],
+      map_runtime_snapshot,
+    )
+    .map_err(database_error)
+}
+
+fn map_runtime_snapshot(row: &Row<'_>) -> rusqlite::Result<RuntimeSnapshotView> {
+  Ok(RuntimeSnapshotView {
+    id: row.get(0)?,
+    task_id: row.get(1)?,
+    agent_profile_id: row.get(2)?,
+    provider_id: row.get(3)?,
+    model_id: row.get(4)?,
+    api_format: row.get(5)?,
+    base_url_type: row.get(6)?,
+    prompt_version_id: row.get(7)?,
+    output_schema_id: row.get(8)?,
+    capabilities_json: string_to_json(row.get(9)?),
+    config_source: row.get(10)?,
+    created_at: row.get(11)?,
+  })
+}
+
+fn map_ai_run(row: &Row<'_>) -> rusqlite::Result<AiRunView> {
+  let output_json = row.get::<_, Option<String>>(6)?.map(string_to_json);
+
+  Ok(AiRunView {
+    id: row.get(0)?,
+    task_id: row.get(1)?,
+    runtime_snapshot_id: row.get(2)?,
+    run_type: row.get(3)?,
+    input_record_set_id: row.get(4)?,
+    input_summary: row.get(5)?,
+    output_json,
+    raw_output_path: row.get(7)?,
+    schema_valid: i64_to_bool(row.get(8)?),
+    validation_status: row.get(9)?,
+    error_code: row.get(10)?,
+    error_message: row.get(11)?,
+    input_tokens: row.get(12)?,
+    output_tokens: row.get(13)?,
+    latency_ms: row.get(14)?,
+    first_token_latency_ms: row.get(15)?,
+    retry_count: row.get(16)?,
+    cost_estimate_json: string_to_json(row.get(17)?),
+    created_at: row.get(18)?,
+  })
+}
+
+fn collect_rows<T>(rows: impl Iterator<Item = rusqlite::Result<T>>) -> AppResult<Vec<T>> {
+  rows
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .map_err(database_error)
+}
+
+fn open_workspace_connection(root_path: impl AsRef<Path>) -> AppResult<Connection> {
+  open_workspace_database(root_path.as_ref().join(DATABASE_FILE_NAME))
+}
+
+fn string_to_json(value: String) -> Value {
+  serde_json::from_str(&value).unwrap_or_else(|_| serde_json::json!({}))
+}
+
+fn bool_to_i64(value: bool) -> i64 {
+  if value {
+    1
+  } else {
+    0
+  }
+}
+
+fn i64_to_bool(value: i64) -> bool {
+  value != 0
+}
+
+fn estimate_tokens(text: &str) -> i64 {
+  (text.chars().count() as i64 / 2).max(1)
+}
+
+fn ai_error(message: impl Into<String>) -> AppError {
+  AppError::new(
+    AppErrorCode::ValidationError,
+    message,
+    AppErrorStage::Ai,
+    false,
+  )
+}
+
+fn database_error(error: impl ToString) -> AppError {
+  AppError::new(
+    AppErrorCode::DatabaseError,
+    error.to_string(),
+    AppErrorStage::Database,
+    false,
+  )
+}
+
+#[derive(Debug)]
+struct ActivePromptVersion {
+  id: String,
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::tasks::{create_collection_task, CreateCollectionTaskInput};
+  use crate::workspace::create_workspace;
+
+  #[test]
+  fn text_generation_saves_ai_run_snapshot_and_plan() {
+    let root_path = unique_temp_workspace("ai-plan");
+    create_workspace("AI 测试", &root_path).expect("workspace should be created");
+    let task = create_collection_task(
+      &root_path,
+      CreateCollectionTaskInput {
+        name: "自然语言任务".to_string(),
+        source_type: "natural_language".to_string(),
+        platforms: vec!["tiktok".to_string()],
+        data_types: vec!["comments".to_string()],
+      },
+    )
+    .expect("task should be created");
+
+    let result = generate_collection_plan_from_text(
+      &root_path,
+      GenerateCollectionPlanFromTextInput {
+        task_id: task.id,
+        intent_text: "采集美国 TikTok 汽车评论".to_string(),
+        provider_id: None,
+        model_id: None,
+      },
+    )
+    .expect("plan should generate");
+    let runs = list_ai_runs(
+      &root_path,
+      result.ai_run.task_id.clone(),
+      Some("collection_plan_generation".to_string()),
+    )
+    .expect("runs should list");
+
+    assert!(result.ai_run.schema_valid);
+    assert_eq!(
+      result.runtime_snapshot.output_schema_id,
+      "collection_plan_v1"
+    );
+    assert_eq!(result.collection_plan.validation_status, "valid");
+    assert_eq!(runs.len(), 1);
+
+    std::fs::remove_dir_all(root_path).ok();
+  }
+
+  #[test]
+  fn domestic_platform_text_infers_cn_region() {
+    let generated = generate_plan_json("采集小红书汽车评论");
+
+    assert_eq!(generated["region"]["value"], "CN");
+    assert_eq!(generated["missing_fields"], serde_json::json!([]));
+  }
+
+  fn unique_temp_workspace(label: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("smart-data-workbench-{label}-{}", Uuid::new_v4()))
+  }
+}
