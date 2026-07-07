@@ -59,6 +59,8 @@ jobs:
           git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml
           git commit -m "chore: release v$VERSION"
           git push origin HEAD:${{ github.ref_name }}
+          git tag "app-v$VERSION"
+          git push origin "app-v$VERSION"
           echo "release_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   build-and-release:
