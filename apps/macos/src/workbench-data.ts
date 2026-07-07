@@ -4,7 +4,7 @@ export const dataTypeOptions = ['关键词搜索', '账号公开信息', '评论
 export type Platform = (typeof platformOptions)[number]
 export type DataType = (typeof dataTypeOptions)[number]
 export type TaskStatus = '运行中' | '等待确认' | '部分成功' | '成功' | '待人工确认' | '失败'
-export type NavKey = 'overview' | 'tasks' | 'data' | 'prompts' | 'exports' | 'settings'
+export type NavKey = 'overview' | 'guide' | 'tasks' | 'data' | 'prompts' | 'exports' | 'settings'
 export type Tone = 'success' | 'warning' | 'danger' | 'info'
 export type ConnectionIcon = 'key' | 'bot' | 'share'
 

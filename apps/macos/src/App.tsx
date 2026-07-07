@@ -14,6 +14,7 @@ import {
   Archive,
   BadgeCheck,
   Bot,
+  BookOpen,
   CheckCircle2,
   ChevronRight,
   Clock3,
@@ -46,6 +47,7 @@ import {
   useWorkbenchBackend,
 } from './use-workbench-backend'
 import ExportPanel from './ExportPanel'
+import GuidePage from './GuidePage'
 import TikhubSettingsPanel from './TikhubSettingsPanel'
 import {
   type NavKey,
@@ -86,6 +88,7 @@ type CollectionFormValues = z.output<typeof collectionFormSchema>
 
 const navItems = [
   { key: 'overview', label: '概览', icon: MonitorCheck },
+  { key: 'guide', label: '指南', icon: BookOpen },
   { key: 'tasks', label: '任务', icon: ListChecks },
   { key: 'data', label: '数据', icon: Database },
   { key: 'prompts', label: '提示词', icon: Sparkles },
@@ -156,45 +159,51 @@ function Workbench() {
           isInitializing={backend.isInitializing}
           workspace={data.workspace}
         />
-        <section className="metric-grid" aria-label="工作区指标">
-          {data.metrics.map((metric) => (
-            <MetricCard key={metric.label} {...metric} />
-          ))}
-        </section>
+        {activeNav === 'guide' ? (
+          <GuidePage onOpenSettings={() => setActiveNav('settings')} />
+        ) : (
+          <>
+            <section className="metric-grid" aria-label="工作区指标">
+              {data.metrics.map((metric) => (
+                <MetricCard key={metric.label} {...metric} />
+              ))}
+            </section>
 
-        <section className="main-grid">
-          <div className="main-column">
-            <ConnectionStrip
-              connections={data.connections}
-              isBusy={backend.isBusy}
-              onRefresh={backend.refresh}
-            />
-            <CollectionBuilder
-              actionMessage={backend.actionMessage}
-              activePlan={backend.activePlan}
-              isBusy={backend.isBusy}
-              onConfirmPlan={backend.confirmActivePlan}
-              onGenerateFormPlan={backend.generateFormPlan}
-              onGenerateNaturalPlan={backend.generateNaturalPlan}
-            />
-            <TaskQueue tasks={data.tasks} />
-            <RecordTable records={data.records} />
-          </div>
-          <aside className="inspector" aria-label="详情与证据">
-            <EvidencePanel records={data.records} />
-            <PromptRegressionPanel runs={data.promptRuns} />
-            <TikhubSettingsPanel
-              isBusy={backend.isBusy}
-              result={backend.tikhubTestResult}
-              onSaveAndTest={backend.saveAndTestTikhubToken}
-            />
-            <ExportPanel
-              isBusy={backend.isBusy}
-              latestExports={backend.latestExports}
-              onExport={backend.exportLatestReport}
-            />
-          </aside>
-        </section>
+            <section className="main-grid">
+              <div className="main-column">
+                <ConnectionStrip
+                  connections={data.connections}
+                  isBusy={backend.isBusy}
+                  onRefresh={backend.refresh}
+                />
+                <CollectionBuilder
+                  actionMessage={backend.actionMessage}
+                  activePlan={backend.activePlan}
+                  isBusy={backend.isBusy}
+                  onConfirmPlan={backend.confirmActivePlan}
+                  onGenerateFormPlan={backend.generateFormPlan}
+                  onGenerateNaturalPlan={backend.generateNaturalPlan}
+                />
+                <TaskQueue tasks={data.tasks} />
+                <RecordTable records={data.records} />
+              </div>
+              <aside className="inspector" aria-label="详情与证据">
+                <EvidencePanel records={data.records} />
+                <PromptRegressionPanel runs={data.promptRuns} />
+                <TikhubSettingsPanel
+                  isBusy={backend.isBusy}
+                  result={backend.tikhubTestResult}
+                  onSaveAndTest={backend.saveAndTestTikhubToken}
+                />
+                <ExportPanel
+                  isBusy={backend.isBusy}
+                  latestExports={backend.latestExports}
+                  onExport={backend.exportLatestReport}
+                />
+              </aside>
+            </section>
+          </>
+        )}
       </main>
     </div>
   )
