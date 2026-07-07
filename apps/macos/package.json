@@ -1,13 +1,16 @@
 {
   "name": "smart-data-workbench-macos",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "packageManager": "pnpm@11.5.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:mac": "tauri build --bundles app,dmg",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "version:sync": "node -e \"const fs=require('node:fs');const pkg=JSON.parse(fs.readFileSync('package.json','utf8'));const confPath='src-tauri/tauri.conf.json';const conf=JSON.parse(fs.readFileSync(confPath,'utf8'));conf.version=pkg.version;fs.writeFileSync(confPath,JSON.stringify(conf,null,2)+'\\n');const cargoPath='src-tauri/Cargo.toml';const cargo=fs.readFileSync(cargoPath,'utf8').replace(/^(version\\s*=\\s*)\\\"[^\\\"]+\\\"/m,(_,prefix)=>prefix+'\\\"'+pkg.version+'\\\"');fs.writeFileSync(cargoPath,cargo);\""
   },
   "dependencies": {
     "@hookform/resolvers": "^5.4.0",
