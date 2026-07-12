@@ -3,6 +3,7 @@ pub mod app_state;
 pub mod collection;
 pub mod domain;
 pub mod exports;
+mod planning;
 pub mod prompts;
 pub mod providers;
 pub mod secrets;
