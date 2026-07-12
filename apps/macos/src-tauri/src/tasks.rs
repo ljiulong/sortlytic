@@ -9,8 +9,13 @@ use uuid::Uuid;
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 use crate::workspace::{open_workspace_database, DATABASE_FILE_NAME};
 
+mod execution;
 mod validation;
 
+pub use execution::{
+  cancel_task, claim_next_task, complete_task_run, enqueue_task, fail_task_run,
+  recover_interrupted_runs, retry_task,
+};
 use validation::{estimate_from_plan_json, validate_plan_for_task};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -336,103 +341,6 @@ pub fn confirm_collection_plan(
   get_task_by_id(&connection, task_id)
 }
 
-pub fn enqueue_task(root_path: impl AsRef<Path>, task_id: &str) -> AppResult<TaskRunView> {
-  let connection = open_workspace_connection(root_path)?;
-  let task = get_task_by_id(&connection, task_id)?;
-
-  if task.confirmed_at.is_none() {
-    return Err(task_error("任务必须先确认采集计划才能入队"));
-  }
-
-  if !["waiting_confirmation", "failed"].contains(&task.status.as_str()) {
-    return Err(task_error("只有已确认或失败任务可以入队"));
-  }
-
-  let run_id = Uuid::new_v4().to_string();
-  let now = Utc::now().to_rfc3339();
-  connection
-    .execute(
-      "INSERT INTO task_run (id, task_id, status, started_at, current_stage, retryable)
-       VALUES (?1, ?2, 'queued', ?3, '用户确认', 0)",
-      params![run_id, task_id, now],
-    )
-    .map_err(database_error)?;
-  connection
-    .execute(
-      "UPDATE collection_task SET status = 'queued', updated_at = ?1 WHERE id = ?2",
-      params![now, task_id],
-    )
-    .map_err(database_error)?;
-  append_task_log(
-    &connection,
-    &run_id,
-    "用户确认",
-    "info",
-    "任务已加入本地队列",
-  )?;
-
-  get_task_run(&connection, &run_id)
-}
-
-pub fn cancel_task(root_path: impl AsRef<Path>, task_id: &str) -> AppResult<CollectionTaskView> {
-  let connection = open_workspace_connection(root_path)?;
-  let task = get_task_by_id(&connection, task_id)?;
-
-  if matches!(task.status.as_str(), "success" | "cancelled") {
-    return Err(task_error("成功或已取消任务不能再次取消"));
-  }
-
-  let now = Utc::now().to_rfc3339();
-  connection
-    .execute(
-      "UPDATE collection_task SET status = 'cancelled', cancelled_at = ?1, updated_at = ?1
-       WHERE id = ?2",
-      params![now, task_id],
-    )
-    .map_err(database_error)?;
-  connection
-    .execute(
-      "UPDATE task_run SET status = 'cancelled', ended_at = ?1, current_stage = '用户取消'
-       WHERE task_id = ?2 AND status IN ('queued', 'running')",
-      params![now, task_id],
-    )
-    .map_err(database_error)?;
-
-  get_task_by_id(&connection, task_id)
-}
-
-pub fn retry_task(
-  root_path: impl AsRef<Path>,
-  task_id: &str,
-  stage: Option<String>,
-) -> AppResult<TaskRunView> {
-  let connection = open_workspace_connection(root_path)?;
-  let task = get_task_by_id(&connection, task_id)?;
-
-  if task.status != "failed" {
-    return Err(task_error("只有失败任务可以重试"));
-  }
-
-  let run_id = Uuid::new_v4().to_string();
-  let now = Utc::now().to_rfc3339();
-  let stage = stage.unwrap_or_else(|| "参数校验".to_string());
-  connection
-    .execute(
-      "INSERT INTO task_run (id, task_id, status, started_at, current_stage, retryable)
-       VALUES (?1, ?2, 'queued', ?3, ?4, 0)",
-      params![run_id, task_id, now, stage],
-    )
-    .map_err(database_error)?;
-  connection
-    .execute(
-      "UPDATE collection_task SET status = 'queued', updated_at = ?1 WHERE id = ?2",
-      params![now, task_id],
-    )
-    .map_err(database_error)?;
-
-  get_task_run(&connection, &run_id)
-}
-
 pub fn copy_task(root_path: impl AsRef<Path>, task_id: &str) -> AppResult<CollectionTaskView> {
   let connection = open_workspace_connection(&root_path)?;
   let task = get_task_by_id(&connection, task_id)?;
@@ -622,30 +530,6 @@ fn get_task_run(connection: &Connection, run_id: &str) -> AppResult<TaskRunView>
     .ok_or_else(|| task_error("任务运行记录不存在"))
 }
 
-fn append_task_log(
-  connection: &Connection,
-  run_id: &str,
-  stage: &str,
-  level: &str,
-  message: &str,
-) -> AppResult<()> {
-  connection
-    .execute(
-      "INSERT INTO task_log (id, task_run_id, stage, level, message, safe_details_json, created_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, '{}', ?6)",
-      params![
-        Uuid::new_v4().to_string(),
-        run_id,
-        stage,
-        level,
-        message,
-        Utc::now().to_rfc3339()
-      ],
-    )
-    .map(|_| ())
-    .map_err(database_error)
-}
-
 fn write_task_audit_log(
   connection: &Connection,
   action: &str,
@@ -779,3 +663,7 @@ fn database_error(error: impl ToString) -> AppError {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "tasks/execution_tests.rs"]
+mod execution_tests;
