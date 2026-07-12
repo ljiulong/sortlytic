@@ -92,7 +92,7 @@ fn maps_business_params_to_platform_specific_names_and_pagination() {
     "tiktok",
     "comments",
     &serde_json::json!({ "item_id": "video-1", "region": "US", "time_range": "近 7 天", "page_size": 50 }),
-    Some(&serde_json::json!(20)),
+    Some(&cursor_for("tiktok.comments", serde_json::json!(20))),
   )
   .expect("TikTok comments request should build");
   assert!(tiktok_comments
@@ -109,7 +109,10 @@ fn maps_business_params_to_platform_specific_names_and_pagination() {
     "douyin",
     "keyword_search",
     &serde_json::json!({ "keyword": "汽车", "region": "CN", "time_range": "近 30 天", "page_size": 20 }),
-    Some(&serde_json::json!({ "cursor": 10, "search_id": "search-1", "backtrace": "trace-1" })),
+    Some(&cursor_for(
+      "douyin.keyword_search",
+      serde_json::json!({ "cursor": 10, "search_id": "search-1", "backtrace": "trace-1" }),
+    )),
   )
   .expect("Douyin search request should build");
   let body = douyin_search.body().expect("Douyin search uses JSON body");
@@ -175,7 +178,10 @@ fn parses_records_and_next_cursor_without_treating_wrapper_as_data() {
 
   assert_eq!(page.records.len(), 2);
   assert_eq!(page.records[0]["cid"], "comment-1");
-  assert_eq!(page.next_cursor, Some(serde_json::json!(20)));
+  assert_eq!(
+    page.next_cursor,
+    Some(cursor_for("tiktok.comments", serde_json::json!(20)))
+  );
   assert!(page.has_more);
 }
 
@@ -255,9 +261,45 @@ fn unwraps_douyin_search_records_and_keeps_continuation_metadata() {
   assert_eq!(
     page.next_cursor,
     Some(serde_json::json!({
-      "cursor": 10,
-      "search_id": "search-1",
-      "backtrace": "trace-1"
+      "endpoint_key": "douyin.keyword_search",
+      "value": {
+        "cursor": 10,
+        "search_id": "search-1",
+        "backtrace": "trace-1"
+      }
+    }))
+  );
+}
+
+#[test]
+fn ignores_empty_optional_search_continuation_metadata() {
+  let request = build_collection_request(
+    "douyin",
+    "keyword_search",
+    &params_for("keyword_search"),
+    None,
+  )
+  .expect("request should build");
+  let page = parse_collection_page(
+    &request,
+    serde_json::json!({
+      "code": 200,
+      "data": {
+        "business_data": [],
+        "cursor": 10,
+        "search_id": "",
+        "backtrace": null,
+        "has_more": true
+      }
+    }),
+  )
+  .expect("empty optional metadata should normalize to absence");
+
+  assert_eq!(
+    page.next_cursor,
+    Some(serde_json::json!({
+      "endpoint_key": "douyin.keyword_search",
+      "value": { "cursor": 10 }
     }))
   );
 }
@@ -301,7 +343,7 @@ fn rejects_boolean_cursor_instead_of_requesting_cursor_true() {
     "tiktok",
     "comments",
     &params_for("comments"),
-    Some(&serde_json::json!(true)),
+    Some(&cursor_for("tiktok.comments", serde_json::json!(true))),
   )
   .expect_err("boolean cursor must not reach provider query parameters");
 
@@ -315,7 +357,7 @@ fn rejects_scalar_xiaohongshu_comment_cursor() {
     "xiaohongshu",
     "comments",
     &params_for("comments"),
-    Some(&serde_json::json!(20)),
+    Some(&cursor_for("xiaohongshu.comments", serde_json::json!(20))),
   )
   .expect_err("Xiaohongshu comments require cursor and index together");
 
@@ -324,12 +366,75 @@ fn rejects_scalar_xiaohongshu_comment_cursor() {
 }
 
 #[test]
+fn rejects_endpoint_specific_cursor_field_type_mismatches() {
+  for cursor in [
+    cursor_for(
+      "douyin.keyword_search",
+      serde_json::json!({ "cursor": "10" }),
+    ),
+    cursor_for(
+      "douyin.keyword_search",
+      serde_json::json!({ "cursor": 10, "search_id": 123 }),
+    ),
+  ] {
+    let error = build_collection_request(
+      "douyin",
+      "keyword_search",
+      &params_for("keyword_search"),
+      Some(&cursor),
+    )
+    .expect_err("Douyin cursor and search ID types must match the provider schema");
+    assert_eq!(error.code, AppErrorCode::ValidationError);
+  }
+
+  let error = build_collection_request(
+    "xiaohongshu",
+    "comments",
+    &params_for("comments"),
+    Some(&cursor_for(
+      "xiaohongshu.comments",
+      serde_json::json!({ "cursor": "cursor-1", "index": 1.5 }),
+    )),
+  )
+  .expect_err("Xiaohongshu comment index must be a non-negative integer");
+  assert_eq!(error.code, AppErrorCode::ValidationError);
+}
+
+#[test]
+fn rejects_cursor_envelope_from_a_different_endpoint() {
+  let source_request =
+    build_collection_request("tiktok", "comments", &params_for("comments"), None)
+      .expect("source request should build");
+  let source_page = parse_collection_page(
+    &source_request,
+    serde_json::json!({
+      "code": 200,
+      "data": { "comments": [], "cursor": 20, "has_more": true }
+    }),
+  )
+  .expect("source response should parse");
+  let cursor = source_page
+    .next_cursor
+    .as_ref()
+    .expect("source page should expose a cursor");
+
+  for (platform, data_type) in [("douyin", "comments"), ("tiktok", "keyword_search")] {
+    let error = build_collection_request(platform, data_type, &params_for(data_type), Some(cursor))
+      .expect_err("cursor endpoint identity must match the target request");
+    assert_eq!(error.code, AppErrorCode::ValidationError);
+  }
+}
+
+#[test]
 fn rejects_search_cursor_object_without_primary_page_or_cursor() {
   let error = build_collection_request(
     "xiaohongshu",
     "keyword_search",
     &params_for("keyword_search"),
-    Some(&serde_json::json!({ "search_id": "search-1" })),
+    Some(&cursor_for(
+      "xiaohongshu.keyword_search",
+      serde_json::json!({ "search_id": "search-1" }),
+    )),
   )
   .expect_err("search metadata without a page cursor must not restart page one");
 
@@ -363,7 +468,10 @@ fn stops_pagination_when_remote_page_number_would_overflow() {
     "xiaohongshu",
     "keyword_search",
     &params_for("keyword_search"),
-    Some(&serde_json::json!(i64::MAX)),
+    Some(&cursor_for(
+      "xiaohongshu.keyword_search",
+      serde_json::json!(i64::MAX),
+    )),
   )
   .expect("request should build");
   let error = parse_collection_page(
@@ -389,7 +497,10 @@ fn keeps_xiaohongshu_comment_cursor_and_index_together() {
     "xiaohongshu",
     "comments",
     &params_for("comments"),
-    Some(&serde_json::json!({ "cursor": "cursor-1", "index": 20 })),
+    Some(&cursor_for(
+      "xiaohongshu.comments",
+      serde_json::json!({ "cursor": "cursor-1", "index": 20 }),
+    )),
   )
   .expect("request should build");
   assert!(request
@@ -414,7 +525,10 @@ fn keeps_xiaohongshu_comment_cursor_and_index_together() {
   .expect("response should parse");
   assert_eq!(
     page.next_cursor,
-    Some(serde_json::json!({ "cursor": "cursor-2", "index": 40 }))
+    Some(cursor_for(
+      "xiaohongshu.comments",
+      serde_json::json!({ "cursor": "cursor-2", "index": 40 }),
+    ))
   );
 }
 
@@ -480,7 +594,7 @@ fn rejects_continuation_that_does_not_advance() {
     "tiktok",
     "comments",
     &params_for("comments"),
-    Some(&serde_json::json!(20)),
+    Some(&cursor_for("tiktok.comments", serde_json::json!(20))),
   )
   .expect("request should build");
   let error = parse_collection_page(
@@ -493,6 +607,46 @@ fn rejects_continuation_that_does_not_advance() {
   .expect_err("unchanged cursor must not request the same page again");
 
   assert!(error.message.contains("没有前进"));
+}
+
+#[test]
+fn rejects_semantically_stalled_cursor_across_json_shapes() {
+  let request = build_collection_request(
+    "tiktok",
+    "comments",
+    &params_for("comments"),
+    Some(&cursor_for(
+      "tiktok.comments",
+      serde_json::json!({ "cursor": 20 }),
+    )),
+  )
+  .expect("legacy cursor object should normalize");
+  let error = parse_collection_page(
+    &request,
+    serde_json::json!({
+      "code": 200,
+      "data": { "comments": [], "cursor": 20, "has_more": true }
+    }),
+  )
+  .expect_err("object and scalar forms of the same cursor must compare equal");
+
+  assert!(error.message.contains("没有前进"));
+}
+
+#[test]
+fn rejects_non_boolean_integer_has_more() {
+  let request = build_collection_request("tiktok", "comments", &params_for("comments"), None)
+    .expect("request should build");
+  let error = parse_collection_page(
+    &request,
+    serde_json::json!({
+      "code": 200,
+      "data": { "comments": [], "cursor": 20, "has_more": 2 }
+    }),
+  )
+  .expect_err("has_more only accepts boolean or 0/1");
+
+  assert!(error.message.contains("has_more"));
 }
 
 #[test]
@@ -546,6 +700,13 @@ fn rejects_empty_detail_data_so_xiaohongshu_can_try_video_fallback() {
     !collection::should_try_video_fallback(&request, 0, &server_error),
     "网络、服务端和通用业务错误不得产生额外计费请求"
   );
+}
+
+fn cursor_for(endpoint_key: &str, value: Value) -> Value {
+  serde_json::json!({
+    "endpoint_key": endpoint_key,
+    "value": value
+  })
 }
 
 fn params_for(data_type: &str) -> Value {

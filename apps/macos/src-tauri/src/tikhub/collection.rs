@@ -9,6 +9,13 @@ use super::{
 use crate::collection::validate_collection_params;
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 
+mod cursor;
+
+use cursor::{
+  boolish, copy_cursor_field, copy_cursor_query, cursor_primary, extract_next_cursor,
+  normalize_input_cursor, normalize_provider_cursor, value_to_text,
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestMethod {
   Get,
@@ -63,7 +70,7 @@ pub fn build_collection_request(
   params: &Value,
   cursor: Option<&Value>,
 ) -> AppResult<TikHubCollectionRequest> {
-  validate_collection_cursor(platform, data_type, cursor)?;
+  let normalized_cursor = normalize_input_cursor(platform, data_type, cursor)?;
   let validation = validate_collection_params(platform, data_type, params.clone())?;
   if !validation.valid {
     let mut errors = validation.errors;
@@ -88,8 +95,9 @@ pub fn build_collection_request(
     platform: platform.trim().to_string(),
     data_type: data_type.trim().to_string(),
     source_params: params.clone(),
-    input_cursor: cursor.cloned(),
+    input_cursor: normalized_cursor.clone(),
   };
+  let cursor = normalized_cursor.as_ref();
 
   match (platform.trim(), data_type.trim()) {
     ("tiktok", "keyword_search") => {
@@ -308,33 +316,37 @@ pub fn parse_collection_page(
 
   let data = response.get("data").unwrap_or(&Value::Null);
   let records = extract_records(request, data)?;
-  let has_more = match continuation_field(data, &response, "has_more") {
+  let has_more = match data.get("has_more").or_else(|| response.get("has_more")) {
     Some(value) => boolish(value)
       .ok_or_else(|| response_shape_error("invalid_has_more", "has_more 不是布尔值或 0/1"))?,
     None => false,
   };
   let next_cursor = if has_more {
-    let cursor = extract_next_cursor(request, data, &response).ok_or_else(|| {
+    let raw_cursor = extract_next_cursor(request, data, &response).ok_or_else(|| {
       response_shape_error(
         "invalid_continuation",
         "has_more 为 true，但响应缺少可用的续页游标",
       )
     })?;
-    validate_collection_cursor(&request.platform, &request.data_type, Some(&cursor)).map_err(
-      |_| {
-        response_shape_error(
-          "invalid_continuation",
-          "续页游标类型或字段不符合 endpoint 契约",
-        )
-      },
-    )?;
-    if request.input_cursor.as_ref() == Some(&cursor) {
+    let cursor_envelope =
+      normalize_provider_cursor(&request.platform, &request.data_type, &raw_cursor).map_err(
+        |_| {
+          response_shape_error(
+            "invalid_continuation",
+            "续页游标类型或字段不符合 endpoint 契约",
+          )
+        },
+      )?;
+    let cursor = cursor_envelope
+      .get("value")
+      .ok_or_else(|| response_shape_error("invalid_continuation", "续页游标不能为空"))?;
+    if request.input_cursor.as_ref() == Some(cursor) {
       return Err(response_shape_error(
         "stalled_continuation",
         "续页游标没有前进",
       ));
     }
-    Some(cursor)
+    Some(cursor_envelope)
   } else {
     None
   };
@@ -493,88 +505,6 @@ fn push_query(request: &mut TikHubCollectionRequest, key: &str, value: String) {
   request.query.push((key.to_string(), value));
 }
 
-fn cursor_primary(cursor: Option<&Value>, keys: &[&str]) -> Option<Value> {
-  let cursor = cursor?;
-  if let Some(object) = cursor.as_object() {
-    return keys.iter().find_map(|key| object.get(*key).cloned());
-  }
-  (!cursor.is_null()).then(|| cursor.clone())
-}
-
-fn copy_cursor_field(cursor: Option<&Value>, key: &str, target: &mut Map<String, Value>) {
-  if let Some(value) = cursor.and_then(|value| value.get(key)).cloned() {
-    target.insert(key.to_string(), value);
-  }
-}
-
-fn copy_cursor_query(cursor: Option<&Value>, key: &str, request: &mut TikHubCollectionRequest) {
-  if let Some(value) = cursor
-    .and_then(|value| value.get(key))
-    .and_then(value_to_text)
-  {
-    push_query(request, key, value);
-  }
-}
-
-fn value_to_text(value: &Value) -> Option<String> {
-  match value {
-    Value::String(value) if !value.trim().is_empty() => Some(value.trim().to_string()),
-    Value::Number(value) => Some(value.to_string()),
-    _ => None,
-  }
-}
-
-fn validate_collection_cursor(
-  platform: &str,
-  data_type: &str,
-  cursor: Option<&Value>,
-) -> AppResult<()> {
-  let Some(cursor) = cursor.filter(|value| !value.is_null()) else {
-    return Ok(());
-  };
-  let (allowed_keys, required_keys): (&[&str], &[&str]) = match (platform.trim(), data_type.trim())
-  {
-    ("tiktok", "keyword_search") => (&["offset", "cursor"], &[]),
-    ("tiktok" | "douyin", "comments") => (&["cursor"], &[]),
-    ("douyin", "keyword_search") => (&["cursor", "search_id", "backtrace"], &["cursor"]),
-    ("xiaohongshu", "keyword_search") => {
-      (&["page", "cursor", "search_id", "search_session_id"], &[])
-    }
-    ("xiaohongshu", "comments") => (&["cursor", "index"], &["cursor", "index"]),
-    _ => (&[], &[]),
-  };
-  let valid = match cursor {
-    Value::Number(number) => {
-      !allowed_keys.is_empty()
-        && required_keys.is_empty()
-        && number.as_i64().is_some_and(|value| value >= 0)
-    }
-    Value::Object(object) => {
-      let has_primary = platform.trim() != "xiaohongshu"
-        || data_type.trim() != "keyword_search"
-        || ["page", "cursor"]
-          .iter()
-          .any(|key| object.contains_key(*key));
-      !object.is_empty()
-        && object
-          .keys()
-          .all(|key| allowed_keys.contains(&key.as_str()))
-        && object.values().all(|value| value_to_text(value).is_some())
-        && required_keys.iter().all(|key| object.contains_key(*key))
-        && has_primary
-    }
-    _ => false,
-  };
-  if valid {
-    Ok(())
-  } else {
-    Err(AppError::validation(
-      "续页游标的类型或字段与 endpoint 不匹配",
-      AppErrorStage::Collection,
-    ))
-  }
-}
-
 fn relative_days(params: &Value) -> Option<String> {
   let value = params.get("time_range")?.as_str()?;
   let compact = value
@@ -701,98 +631,4 @@ fn response_shape_error(issue: &str, message: &str) -> AppError {
     false,
   )
   .with_safe_detail("response_issue", issue)
-}
-
-fn extract_next_cursor(
-  request: &TikHubCollectionRequest,
-  data: &Value,
-  response: &Value,
-) -> Option<Value> {
-  if request.data_type == "comments" && request.platform == "xiaohongshu" {
-    return required_continuation_object(data, response, &["cursor", "index"]);
-  }
-  if request.data_type == "keyword_search" && request.platform == "douyin" {
-    return continuation_object(data, response, &["cursor", "search_id", "backtrace"]);
-  }
-  if request.data_type == "keyword_search" && request.platform == "xiaohongshu" {
-    let mut cursor = Map::new();
-    let current_page = request_query_i64(request, "page").unwrap_or(1);
-    cursor.insert(
-      "page".to_string(),
-      Value::from(current_page.checked_add(1)?),
-    );
-    for key in ["search_id", "search_session_id"] {
-      if let Some(value) = continuation_field(data, response, key)
-        .cloned()
-        .or_else(|| request_query_value(request, key))
-      {
-        cursor.insert(key.to_string(), value);
-      }
-    }
-    return Some(Value::Object(cursor));
-  }
-  if request.data_type == "keyword_search" {
-    return continuation_field(data, response, "cursor")
-      .or_else(|| continuation_field(data, response, "offset"))
-      .cloned()
-      .or_else(|| {
-        let offset = request_query_i64(request, "offset")?;
-        let count = request_query_i64(request, "count")?;
-        Some(Value::from(offset.checked_add(count)?))
-      });
-  }
-  continuation_field(data, response, "cursor").cloned()
-}
-
-fn required_continuation_object(data: &Value, response: &Value, keys: &[&str]) -> Option<Value> {
-  let mut cursor = Map::new();
-  for key in keys {
-    cursor.insert(
-      (*key).to_string(),
-      continuation_field(data, response, key)?.clone(),
-    );
-  }
-  Some(Value::Object(cursor))
-}
-
-fn continuation_object(data: &Value, response: &Value, keys: &[&str]) -> Option<Value> {
-  let mut cursor = Map::new();
-  for key in keys {
-    if let Some(value) = continuation_field(data, response, key).cloned() {
-      cursor.insert((*key).to_string(), value);
-    }
-  }
-  (!cursor.is_empty()).then_some(Value::Object(cursor))
-}
-
-fn continuation_field<'a>(data: &'a Value, response: &'a Value, key: &str) -> Option<&'a Value> {
-  data.get(key).or_else(|| response.get(key))
-}
-
-fn boolish(value: &Value) -> Option<bool> {
-  value.as_bool().or_else(|| {
-    value.as_i64().map(|number| number != 0).or_else(|| {
-      match value.as_str()?.trim().to_ascii_lowercase().as_str() {
-        "true" | "1" => Some(true),
-        "false" | "0" => Some(false),
-        _ => None,
-      }
-    })
-  })
-}
-
-fn request_query_i64(request: &TikHubCollectionRequest, key: &str) -> Option<i64> {
-  request
-    .query
-    .iter()
-    .find(|(candidate, _)| candidate == key)
-    .and_then(|(_, value)| value.parse().ok())
-}
-
-fn request_query_value(request: &TikHubCollectionRequest, key: &str) -> Option<Value> {
-  request
-    .query
-    .iter()
-    .find(|(candidate, _)| candidate == key)
-    .map(|(_, value)| Value::String(value.clone()))
 }
