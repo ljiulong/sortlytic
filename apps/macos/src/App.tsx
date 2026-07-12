@@ -37,6 +37,7 @@ import {
 } from './use-workbench-backend'
 import ExportPanel from './ExportPanel'
 import GuidePage from './GuidePage'
+import ModelSettingsPanel from './ModelSettingsPanel'
 import TikhubSettingsPanel from './TikhubSettingsPanel'
 import {
   type NavKey,
@@ -63,7 +64,6 @@ type CollectionFormValues = z.output<typeof collectionFormSchema>
 
 const navItems = [
   { key: 'overview', label: '工作台', icon: MonitorCheck },
-  { key: 'guide', label: '指南', icon: BookOpen },
   { key: 'settings', label: '设置', icon: Settings },
 ] satisfies Array<{ key: NavKey; label: string; icon: typeof MonitorCheck }>
 
@@ -72,7 +72,6 @@ const connectionIcons = {
   bot: Bot,
   share: Share2,
 }
-
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -80,7 +79,6 @@ function App() {
     </QueryClientProvider>
   )
 }
-
 function Workbench() {
   const backend = useWorkbenchBackend()
   const data = backend.data
@@ -128,6 +126,7 @@ function Workbench() {
         <TopBar
           actionMessage={backend.actionMessage}
           isInitializing={backend.isInitializing}
+          onOpenGuide={() => setActiveNav('guide')}
           workspace={data.workspace}
         />
         {activeNav === 'guide' ? (
@@ -144,6 +143,12 @@ function Workbench() {
                 isBusy={backend.isBusy}
                 result={backend.tikhubTestResult}
                 onSaveAndTest={backend.saveAndTestTikhubToken}
+              />
+              <ModelSettingsPanel
+                isPending={backend.isModelSettingsPending}
+                providers={data.modelProviders}
+                result={backend.modelValidationResult}
+                onSaveAndValidate={backend.saveAndValidateModelProvider}
               />
             </div>
           </section>
@@ -193,14 +198,15 @@ function Workbench() {
     </div>
   )
 }
-
 function TopBar({
   actionMessage,
   isInitializing,
+  onOpenGuide,
   workspace,
 }: {
   actionMessage: string
   isInitializing: boolean
+  onOpenGuide: () => void
   workspace: WorkbenchRuntimeData['workspace']
 }) {
   return (
@@ -210,12 +216,23 @@ function TopBar({
         <h1>{workspace.name}</h1>
         <p className="muted-text">{isInitializing ? '正在连接本地后端' : actionMessage}</p>
       </div>
-      <div className="workspace-meta" aria-label="当前工作区状态">
-        <span>{workspace.storage}</span>
-        <StatusPill
-          tone={isInitializing ? 'info' : workspace.health === '浏览器预览' ? 'warning' : 'success'}
-          label={workspace.health}
-        />
+      <div className="topbar-actions">
+        <button
+          aria-label="打开使用指南"
+          className="toolbar-icon-button"
+          title="使用指南"
+          type="button"
+          onClick={onOpenGuide}
+        >
+          <BookOpen size={18} aria-hidden="true" />
+        </button>
+        <div className="workspace-meta" aria-label="当前工作区状态">
+          <span>{workspace.storage}</span>
+          <StatusPill
+            tone={isInitializing ? 'info' : workspace.health === '浏览器预览' ? 'warning' : 'success'}
+            label={workspace.health}
+          />
+        </div>
       </div>
     </header>
   )
