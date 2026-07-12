@@ -38,6 +38,7 @@ import {
 import ExportPanel from './ExportPanel'
 import GuidePage from './GuidePage'
 import ModelSettingsPanel from './ModelSettingsPanel'
+import ThemeToggle from './ThemeToggle'
 import TikhubSettingsPanel from './TikhubSettingsPanel'
 import {
   type NavKey,
@@ -48,7 +49,6 @@ import {
 } from './workbench-data'
 
 const queryClient = new QueryClient()
-
 const collectionFormSchema = z.object({
   platform: z.enum(platformOptions),
   dataType: z.enum(dataTypeOptions),
@@ -61,12 +61,10 @@ const collectionFormSchema = z.object({
 
 type CollectionFormInput = z.input<typeof collectionFormSchema>
 type CollectionFormValues = z.output<typeof collectionFormSchema>
-
 const navItems = [
   { key: 'overview', label: '工作台', icon: MonitorCheck },
   { key: 'settings', label: '设置', icon: Settings },
 ] satisfies Array<{ key: NavKey; label: string; icon: typeof MonitorCheck }>
-
 const connectionIcons = {
   key: KeyRound,
   bot: Bot,
@@ -87,6 +85,7 @@ function Workbench() {
 
   return (
     <div className="app-shell" lang="zh-CN">
+      <a className="skip-link" href="#main-content">跳至主要内容</a>
       <aside className="sidebar" aria-label="主导航">
         <div className="brand-block">
           <div className="brand-mark">
@@ -122,7 +121,7 @@ function Workbench() {
         </div>
       </aside>
 
-      <main className="workspace">
+      <main className="workspace" id="main-content" tabIndex={-1}>
         <TopBar
           actionMessage={backend.actionMessage}
           isInitializing={backend.isInitializing}
@@ -217,6 +216,7 @@ function TopBar({
         <p className="muted-text">{isInitializing ? '正在连接本地后端' : actionMessage}</p>
       </div>
       <div className="topbar-actions">
+        <ThemeToggle />
         <button
           aria-label="打开使用指南"
           className="toolbar-icon-button"
