@@ -117,7 +117,7 @@ fn opening_legacy_workspace_deduplicates_cases_and_preserves_runs() {
 }
 
 #[test]
-fn activation_runs_regression_gate() {
+fn activation_rejects_prompt_that_ignores_case_contract() {
   let root_path = unique_temp_workspace("prompt-regression");
   create_workspace("提示词测试", &root_path).expect("workspace should be created");
   let templates = seed_builtin_prompts(&root_path).expect("builtins should seed");
@@ -135,13 +135,84 @@ fn activation_runs_regression_gate() {
   )
   .expect("version created");
 
+  let error = activate_prompt_version(&root_path, &version.id)
+    .expect_err("field-name-only prompt must not pass real cases");
+  let runs = list_prompt_regression_runs(&root_path, &version.id).expect("runs should list");
+
+  assert_eq!(error.code, AppErrorCode::ValidationError);
+  assert!(!runs.is_empty());
+  assert!(runs.iter().any(|run| run.status == "failed"));
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn evaluator_result_changes_when_case_input_violates_expected_rules() {
+  let version = PromptVersionView {
+    id: "version-1".to_string(),
+    template_id: "template-1".to_string(),
+    version: 1,
+    content: "读取 input_json.text，只输出 JSON 采集计划，包含 platforms、data_types、region、steps、missing_fields 和 requires_user_confirmation，不得猜测缺失信息。".to_string(),
+    change_note: "测试".to_string(),
+    status: "draft".to_string(),
+    created_at: "2026-01-01T00:00:00Z".to_string(),
+    activated_at: None,
+    rollback_from_version: None,
+    content_hash: "hash".to_string(),
+  };
+  let case = PromptRegressionCaseView {
+    id: "case-1".to_string(),
+    template_id: "template-1".to_string(),
+    name: "预期完整输入".to_string(),
+    input_json: serde_json::json!({ "text": "采集汽车评论" }),
+    expected_schema_id: "collection_plan_v1".to_string(),
+    expected_rules_json: serde_json::json!({
+      "expected_platforms": ["tiktok"],
+      "expected_data_types": ["comments"],
+      "expected_missing_fields": [],
+      "expected_plan_valid": false
+    }),
+    enabled: true,
+    created_at: "2026-01-01T00:00:00Z".to_string(),
+    updated_at: "2026-01-01T00:00:00Z".to_string(),
+  };
+
+  let (schema_valid, rules_valid, _) = evaluate_prompt_case(&version, &case);
+
+  assert!(schema_valid);
+  assert!(!rules_valid);
+}
+
+#[test]
+fn complete_builtin_contract_executes_all_cases_and_can_activate() {
+  let root_path = unique_temp_workspace("prompt-regression-success");
+  create_workspace("提示词测试", &root_path).expect("workspace should be created");
+  let templates = seed_builtin_prompts(&root_path).expect("builtins should seed");
+  let template = templates
+    .iter()
+    .find(|template| template.template_key == "collection_plan_from_text")
+    .expect("collection template exists");
+  let builtin = BUILTIN_PROMPTS
+    .iter()
+    .find(|builtin| builtin.key == "collection_plan_from_text")
+    .expect("builtin contract exists");
+  let version = create_prompt_version(
+    &root_path,
+    CreatePromptVersionInput {
+      template_id: template.id.clone(),
+      content: builtin.content.to_string(),
+      change_note: "验证真实回归路径".to_string(),
+    },
+  )
+  .expect("version should create");
+
   let activated =
-    activate_prompt_version(&root_path, &version.id).expect("version should activate");
+    activate_prompt_version(&root_path, &version.id).expect("complete contract should activate");
   let runs = list_prompt_regression_runs(&root_path, &version.id).expect("runs should list");
 
   assert_eq!(activated.status, "active");
-  assert!(!runs.is_empty());
-  assert!(runs.iter().all(|run| run.status == "passed"));
+  assert_eq!(runs.len(), 3);
+  assert!(runs.iter().all(|run| run.schema_valid && run.rules_valid));
 
   std::fs::remove_dir_all(root_path).ok();
 }

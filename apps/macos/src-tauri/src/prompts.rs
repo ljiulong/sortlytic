@@ -10,6 +10,10 @@ use uuid::Uuid;
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 use crate::workspace::{open_workspace_database, DATABASE_FILE_NAME};
 
+mod regression;
+
+use regression::evaluate_prompt_case;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PromptTemplateView {
   pub id: String,
@@ -90,7 +94,7 @@ const BUILTIN_PROMPTS: &[BuiltinPromptTemplate] = &[
     task_type: "collection_plan",
     description: "把自然语言需求转为结构化采集计划，不调用 TikHub。",
     output_schema_id: "collection_plan_v1",
-    content: "你只输出 JSON 采集计划，必须包含 platforms、data_types、region、steps、missing_fields 和 requires_user_confirmation。",
+    content: "读取 input_json.text，只输出 JSON 采集计划，必须包含 platforms、data_types、region、steps、missing_fields 和 requires_user_confirmation。未识别的信息写入 missing_fields，地区推断必须标记 unverified，不得猜测缺失信息。",
   },
   BuiltinPromptTemplate {
     key: "general_summary",
@@ -98,7 +102,7 @@ const BUILTIN_PROMPTS: &[BuiltinPromptTemplate] = &[
     task_type: "analysis",
     description: "对标准化记录生成带证据引用的摘要。",
     output_schema_id: "analysis_summary_v1",
-    content: "你只输出 JSON 摘要，核心结论必须包含 source_record_ids。",
+    content: "读取 input_json.records，只输出 JSON 摘要，每条核心结论必须包含 source_record_ids。records 为空时返回空结果，不得编造结论。",
   },
   BuiltinPromptTemplate {
     key: "comment_sentiment",
@@ -106,7 +110,7 @@ const BUILTIN_PROMPTS: &[BuiltinPromptTemplate] = &[
     task_type: "analysis",
     description: "分析评论情绪并保存字段级证据。",
     output_schema_id: "sentiment_v1",
-    content: "你只输出 JSON 情绪分类，每个生成字段必须包含证据记录 ID。",
+    content: "读取 input_json.records，只输出 JSON 情绪分类，每个生成字段必须包含 source_record_ids。records 为空时返回空结果，不得编造结论。",
   },
 ];
 
@@ -335,29 +339,56 @@ fn ensure_builtin_regression_cases(
       (
         "正常自然语言需求",
         serde_json::json!({ "text": "采集美国 TikTok 汽车评论" }),
+        serde_json::json!({
+          "expected_platforms": ["tiktok"],
+          "expected_data_types": ["comments"],
+          "expected_missing_fields": [],
+          "expected_plan_valid": false,
+          "expected_error_contains": ["item_id", "time_range", "region 尚未验证"]
+        }),
       ),
-      ("缺少平台", serde_json::json!({ "text": "采集汽车评论" })),
+      (
+        "缺少平台",
+        serde_json::json!({ "text": "采集汽车评论" }),
+        serde_json::json!({
+          "expected_platforms": [],
+          "expected_data_types": ["comments"],
+          "expected_missing_fields": ["platforms", "region"],
+          "expected_plan_valid": false
+        }),
+      ),
       (
         "缺少国家地区",
         serde_json::json!({ "text": "采集 TikTok 汽车评论" }),
+        serde_json::json!({
+          "expected_platforms": ["tiktok"],
+          "expected_data_types": ["comments"],
+          "expected_missing_fields": ["region"],
+          "expected_plan_valid": false
+        }),
       ),
     ],
     _ => vec![
       (
         "正常输入",
         serde_json::json!({ "records": [{ "id": "r1", "text": "好评" }] }),
+        serde_json::json!({ "records_empty": false, "requires_evidence": true }),
       ),
-      ("证据不足", serde_json::json!({ "records": [] })),
+      (
+        "证据不足",
+        serde_json::json!({ "records": [] }),
+        serde_json::json!({ "records_empty": true, "requires_evidence": true }),
+      ),
     ],
   };
 
-  for (name, input_json) in cases {
+  for (name, input_json, expected_rules_json) in cases {
     connection
       .execute(
         "INSERT INTO prompt_regression_case (
           id, template_id, name, input_json, expected_schema_id, expected_rules_json,
           enabled, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, '{}', 1, ?6, ?7)
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?8)
         ON CONFLICT(template_id, name) DO UPDATE SET
           input_json = excluded.input_json,
           expected_schema_id = excluded.expected_schema_id,
@@ -370,6 +401,7 @@ fn ensure_builtin_regression_cases(
           name,
           input_json.to_string(),
           builtin.output_schema_id,
+          expected_rules_json.to_string(),
           now,
           now
         ],
@@ -436,27 +468,6 @@ fn regression_cases_for_template(
     .query_map(params![template_id], map_regression_case)
     .map_err(database_error)?;
   collect_rows(rows)
-}
-
-fn evaluate_prompt_case(
-  version: &PromptVersionView,
-  case: &PromptRegressionCaseView,
-) -> (bool, bool, Option<String>) {
-  let schema_valid = !version.content.trim().is_empty();
-  let rules_valid = if case.expected_schema_id == "collection_plan_v1" {
-    version.content.contains("JSON")
-      && version.content.contains("platforms")
-      && version.content.contains("missing_fields")
-  } else {
-    version.content.contains("JSON") && version.content.contains("source_record_ids")
-  };
-  let error_summary = if schema_valid && rules_valid {
-    None
-  } else {
-    Some("提示词缺少结构化输出或证据约束".to_string())
-  };
-
-  (schema_valid, rules_valid, error_summary)
 }
 
 fn list_prompt_templates_from_connection(
