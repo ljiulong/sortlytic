@@ -6,6 +6,15 @@ pub(super) fn schema_checksum() -> String {
   format!("{:x}", hasher.finalize())
 }
 
+pub(super) fn record_observation_migration_checksum() -> String {
+  use sha2::{Digest, Sha256};
+
+  let mut hasher = Sha256::new();
+  hasher.update(RECORD_OBSERVATION_MIGRATION_SQL.as_bytes());
+  hasher.update(RECORD_OBSERVATION_INDEX_SQL.as_bytes());
+  format!("{:x}", hasher.finalize())
+}
+
 pub(super) const SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS schema_migrations (
   version INTEGER PRIMARY KEY,
@@ -218,7 +227,9 @@ CREATE TABLE IF NOT EXISTS task_log (
 CREATE TABLE IF NOT EXISTS raw_record (
   id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL,
+  task_run_id TEXT,
   platform TEXT NOT NULL,
+  data_type TEXT NOT NULL DEFAULT 'legacy',
   platform_record_id TEXT NOT NULL,
   raw_url TEXT,
   raw_file_path TEXT NOT NULL,
@@ -226,8 +237,10 @@ CREATE TABLE IF NOT EXISTS raw_record (
   summary_json TEXT NOT NULL DEFAULT '{}',
   collected_at TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  UNIQUE (platform, platform_record_id, task_id),
-  FOREIGN KEY (task_id) REFERENCES collection_task(id) ON DELETE CASCADE
+  UNIQUE (id, task_id, platform),
+  FOREIGN KEY (task_id) REFERENCES collection_task(id) ON DELETE CASCADE,
+  FOREIGN KEY (task_run_id) REFERENCES task_run(id) ON DELETE CASCADE,
+  CHECK (data_type IN ('keyword_search', 'comments', 'account_profile', 'item_detail', 'legacy'))
 );
 
 CREATE TABLE IF NOT EXISTS normalized_record (
@@ -245,7 +258,9 @@ CREATE TABLE IF NOT EXISTS normalized_record (
   tags_json TEXT NOT NULL DEFAULT '[]',
   normalized_schema_version INTEGER NOT NULL,
   created_at TEXT NOT NULL,
-  FOREIGN KEY (raw_record_id) REFERENCES raw_record(id) ON DELETE CASCADE,
+  UNIQUE (raw_record_id),
+  FOREIGN KEY (raw_record_id, task_id, platform)
+    REFERENCES raw_record(id, task_id, platform) ON DELETE CASCADE,
   FOREIGN KEY (task_id) REFERENCES collection_task(id) ON DELETE CASCADE
 );
 
@@ -446,4 +461,109 @@ WHERE EXISTS (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_regression_case_template_name
 ON prompt_regression_case(template_id, name);
+"#;
+
+pub(super) const RECORD_OBSERVATION_MIGRATION_SQL: &str = r#"
+CREATE TABLE raw_record_v2 (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  task_run_id TEXT,
+  platform TEXT NOT NULL,
+  data_type TEXT NOT NULL DEFAULT 'legacy',
+  platform_record_id TEXT NOT NULL,
+  raw_url TEXT,
+  raw_file_path TEXT NOT NULL,
+  raw_hash TEXT NOT NULL,
+  summary_json TEXT NOT NULL DEFAULT '{}',
+  collected_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (id, task_id, platform),
+  FOREIGN KEY (task_id) REFERENCES collection_task(id) ON DELETE CASCADE,
+  FOREIGN KEY (task_run_id) REFERENCES task_run(id) ON DELETE CASCADE,
+  CHECK (data_type IN ('keyword_search', 'comments', 'account_profile', 'item_detail', 'legacy'))
+);
+
+INSERT INTO raw_record_v2 (
+  id, task_id, task_run_id, platform, data_type, platform_record_id, raw_url,
+  raw_file_path, raw_hash, summary_json, collected_at, created_at
+)
+SELECT
+  raw.id,
+  raw.task_id,
+  CASE
+    WHEN EXISTS (
+      SELECT 1
+      FROM task_run run
+      WHERE run.id = json_extract(raw.summary_json, '$.task_run_id')
+        AND run.task_id = raw.task_id
+    ) THEN json_extract(raw.summary_json, '$.task_run_id')
+    ELSE NULL
+  END,
+  raw.platform,
+  CASE json_extract(raw.summary_json, '$.data_type')
+    WHEN 'keyword_search' THEN 'keyword_search'
+    WHEN 'comments' THEN 'comments'
+    WHEN 'account_profile' THEN 'account_profile'
+    WHEN 'item_detail' THEN 'item_detail'
+    ELSE 'legacy'
+  END,
+  raw.platform_record_id,
+  raw.raw_url,
+  raw.raw_file_path,
+  raw.raw_hash,
+  raw.summary_json,
+  raw.collected_at,
+  raw.created_at
+FROM raw_record raw;
+
+CREATE TABLE normalized_record_v2 (
+  id TEXT PRIMARY KEY,
+  raw_record_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  author_id TEXT,
+  author_name TEXT,
+  content_text TEXT,
+  content_url TEXT,
+  published_at TEXT,
+  region TEXT,
+  metrics_json TEXT NOT NULL DEFAULT '{}',
+  tags_json TEXT NOT NULL DEFAULT '[]',
+  normalized_schema_version INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (raw_record_id),
+  FOREIGN KEY (raw_record_id, task_id, platform)
+    REFERENCES raw_record_v2(id, task_id, platform) ON DELETE CASCADE,
+  FOREIGN KEY (task_id) REFERENCES collection_task(id) ON DELETE CASCADE
+);
+
+INSERT INTO normalized_record_v2 (
+  id, raw_record_id, task_id, platform, author_id, author_name, content_text,
+  content_url, published_at, region, metrics_json, tags_json,
+  normalized_schema_version, created_at
+)
+SELECT
+  id, raw_record_id, task_id, platform, author_id, author_name, content_text,
+  content_url, published_at, region, metrics_json, tags_json,
+  normalized_schema_version, created_at
+FROM normalized_record;
+
+DROP TABLE normalized_record;
+DROP TABLE raw_record;
+ALTER TABLE raw_record_v2 RENAME TO raw_record;
+ALTER TABLE normalized_record_v2 RENAME TO normalized_record;
+"#;
+
+pub(super) const RECORD_OBSERVATION_INDEX_SQL: &str = r#"
+CREATE UNIQUE INDEX IF NOT EXISTS idx_raw_record_run_type_identity
+ON raw_record(task_run_id, platform, data_type, platform_record_id)
+WHERE task_run_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_normalized_record_raw_record_id
+ON normalized_record(raw_record_id);
+CREATE INDEX IF NOT EXISTS idx_raw_record_task_id ON raw_record(task_id);
+CREATE INDEX IF NOT EXISTS idx_raw_record_task_run_id ON raw_record(task_run_id);
+CREATE INDEX IF NOT EXISTS idx_raw_record_platform ON raw_record(platform);
+CREATE INDEX IF NOT EXISTS idx_raw_record_data_type ON raw_record(data_type);
+CREATE INDEX IF NOT EXISTS idx_raw_record_platform_record_id ON raw_record(platform_record_id);
+CREATE INDEX IF NOT EXISTS idx_normalized_record_task_id ON normalized_record(task_id);
 "#;

@@ -2,16 +2,19 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
-use schema::{schema_checksum, SCHEMA_SQL};
+use schema::{
+  record_observation_migration_checksum, schema_checksum, RECORD_OBSERVATION_INDEX_SQL,
+  RECORD_OBSERVATION_MIGRATION_SQL, SCHEMA_SQL,
+};
 
 mod schema;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 1;
+pub const CURRENT_SCHEMA_VERSION: i64 = 2;
 pub const DATABASE_FILE_NAME: &str = "app.sqlite";
 
 const WORKSPACE_DIRS: &[&str] = &[
@@ -62,8 +65,8 @@ pub fn create_workspace(name: &str, root_path: impl AsRef<Path>) -> AppResult<Wo
 
   create_workspace_directories(&root_path)?;
 
-  let connection = open_workspace_database(&database_path)?;
-  apply_schema(&connection)?;
+  let mut connection = open_workspace_database(&database_path)?;
+  apply_schema(&mut connection)?;
 
   if existing_workspace(&connection)?.is_some() {
     return Err(AppError::validation(
@@ -131,8 +134,8 @@ pub fn open_workspace(root_path: impl AsRef<Path>) -> AppResult<WorkspaceSummary
 
   create_workspace_directories(&root_path)?;
 
-  let connection = open_workspace_database(&database_path)?;
-  apply_schema(&connection)?;
+  let mut connection = open_workspace_database(&database_path)?;
+  apply_schema(&mut connection)?;
   let mut summary = get_workspace_summary(&connection, &database_path)?;
   let now = Utc::now().to_rfc3339();
 
@@ -248,7 +251,7 @@ fn apply_connection_pragmas(connection: &Connection) -> AppResult<()> {
     .map_err(database_error)
 }
 
-fn apply_schema(connection: &Connection) -> AppResult<()> {
+fn apply_schema(connection: &mut Connection) -> AppResult<()> {
   connection
     .execute_batch(SCHEMA_SQL)
     .map_err(database_error)?;
@@ -257,15 +260,120 @@ fn apply_schema(connection: &Connection) -> AppResult<()> {
     .execute(
       "INSERT OR IGNORE INTO schema_migrations (version, name, applied_at, checksum)
        VALUES (?1, 'initial_schema', ?2, ?3)",
-      params![
-        CURRENT_SCHEMA_VERSION,
-        Utc::now().to_rfc3339(),
-        schema_checksum()
-      ],
+      params![1, Utc::now().to_rfc3339(), schema_checksum()],
     )
     .map_err(database_error)?;
 
-  Ok(())
+  apply_record_observation_migration(connection)
+}
+
+fn apply_record_observation_migration(connection: &mut Connection) -> AppResult<()> {
+  let expected_checksum = record_observation_migration_checksum();
+  let applied_checksum = connection
+    .query_row(
+      "SELECT checksum FROM schema_migrations WHERE version = 2",
+      [],
+      |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(database_error)?;
+  let schema_is_current = table_has_column(connection, "raw_record", "task_run_id")?
+    && table_has_column(connection, "raw_record", "data_type")?;
+
+  if let Some(applied_checksum) = applied_checksum {
+    if applied_checksum != expected_checksum || !schema_is_current {
+      return Err(workspace_error(
+        "数据库迁移 v2 校验失败，记录结构与迁移标记不一致",
+      ));
+    }
+    connection
+      .execute_batch(RECORD_OBSERVATION_INDEX_SQL)
+      .map_err(database_error)?;
+    update_workspace_schema_version(connection)?;
+    return ensure_foreign_key_integrity(connection);
+  }
+
+  if schema_is_current {
+    let transaction = connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)
+      .map_err(database_error)?;
+    transaction
+      .execute_batch(RECORD_OBSERVATION_INDEX_SQL)
+      .map_err(database_error)?;
+    record_v2_migration(&transaction, &expected_checksum)?;
+    transaction.commit().map_err(database_error)?;
+    return ensure_foreign_key_integrity(connection);
+  }
+
+  connection
+    .execute_batch("PRAGMA foreign_keys = OFF;")
+    .map_err(database_error)?;
+  let migration_result = (|| -> AppResult<()> {
+    let transaction = connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)
+      .map_err(database_error)?;
+    transaction
+      .execute_batch(RECORD_OBSERVATION_MIGRATION_SQL)
+      .map_err(database_error)?;
+    transaction
+      .execute_batch(RECORD_OBSERVATION_INDEX_SQL)
+      .map_err(database_error)?;
+    record_v2_migration(&transaction, &expected_checksum)?;
+    transaction.commit().map_err(database_error)
+  })();
+  let restore_result = connection
+    .execute_batch("PRAGMA foreign_keys = ON;")
+    .map_err(database_error);
+
+  migration_result?;
+  restore_result?;
+  ensure_foreign_key_integrity(connection)
+}
+
+fn record_v2_migration(connection: &Connection, checksum: &str) -> AppResult<()> {
+  connection
+    .execute(
+      "INSERT INTO schema_migrations (version, name, applied_at, checksum)
+       VALUES (2, 'record_observations', ?1, ?2)",
+      params![Utc::now().to_rfc3339(), checksum],
+    )
+    .map_err(database_error)?;
+  update_workspace_schema_version(connection)
+}
+
+fn update_workspace_schema_version(connection: &Connection) -> AppResult<()> {
+  connection
+    .execute(
+      "UPDATE workspace SET schema_version = ?1 WHERE schema_version < ?1",
+      params![CURRENT_SCHEMA_VERSION],
+    )
+    .map(|_| ())
+    .map_err(database_error)
+}
+
+fn table_has_column(connection: &Connection, table: &str, column: &str) -> AppResult<bool> {
+  let mut statement = connection
+    .prepare(&format!("PRAGMA table_info({table})"))
+    .map_err(database_error)?;
+  let rows = statement
+    .query_map([], |row| row.get::<_, String>(1))
+    .map_err(database_error)?;
+  let columns = rows
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .map_err(database_error)?;
+  Ok(columns.iter().any(|value| value == column))
+}
+
+fn ensure_foreign_key_integrity(connection: &Connection) -> AppResult<()> {
+  let mut statement = connection
+    .prepare("PRAGMA foreign_key_check")
+    .map_err(database_error)?;
+  let mut rows = statement.query([]).map_err(database_error)?;
+  if rows.next().map_err(database_error)?.is_some() {
+    Err(workspace_error("数据库迁移后外键完整性检查失败"))
+  } else {
+    Ok(())
+  }
 }
 
 fn existing_workspace(connection: &Connection) -> AppResult<Option<WorkspaceSummary>> {
@@ -471,3 +579,7 @@ mod tests {
     std::env::temp_dir().join(format!("smart-data-workbench-{label}-{}", Uuid::new_v4()))
   }
 }
+
+#[cfg(test)]
+#[path = "workspace/migration_tests.rs"]
+mod migration_tests;
