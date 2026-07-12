@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import {
   backendErrorMessage,
   buildReportModel,
@@ -105,9 +105,12 @@ export type WorkbenchRuntimeData = {
 
 type BackendWorkbenchData = WorkbenchRuntimeData & {
   latestTaskId?: string
+  runtimeMode: 'backend' | 'demo' | 'loading' | 'error'
 }
 
-const fallbackData: BackendWorkbenchData = {
+const initialActionMessage = '后端正在初始化本地工作区'
+
+const browserPreviewData: BackendWorkbenchData = {
   ...workspaceSnapshot,
   modelProviders: [],
   workspace: {
@@ -115,12 +118,59 @@ const fallbackData: BackendWorkbenchData = {
     health: '浏览器预览',
   },
   latestTaskId: undefined,
+  runtimeMode: 'demo',
+}
+
+function createEmptyWorkbenchData(mode: 'loading' | 'error'): BackendWorkbenchData {
+  const isError = mode === 'error'
+
+  return {
+    workspace: {
+      name: '本地工作区',
+      storage: '尚未读取',
+      lastBackup: '尚未读取',
+      health: isError ? '后端不可用' : '正在加载',
+    },
+    connections: [],
+    metrics: [
+      {
+        label: '本地任务',
+        value: '—',
+        delta: isError ? '后端读取失败' : '正在读取真实数据',
+        tone: isError ? 'danger' : 'info',
+      },
+      {
+        label: '入库记录',
+        value: '—',
+        delta: isError ? '后端读取失败' : '正在读取真实数据',
+        tone: isError ? 'danger' : 'info',
+      },
+      {
+        label: '预计请求',
+        value: '—',
+        delta: isError ? '后端读取失败' : '正在读取真实数据',
+        tone: isError ? 'danger' : 'info',
+      },
+      {
+        label: '证据覆盖',
+        value: '—',
+        delta: isError ? '后端读取失败' : '正在读取真实数据',
+        tone: isError ? 'danger' : 'info',
+      },
+    ],
+    tasks: [],
+    records: [],
+    promptRuns: [],
+    modelProviders: [],
+    latestTaskId: undefined,
+    runtimeMode: mode,
+  }
 }
 
 export function useWorkbenchBackend() {
   const queryClient = useQueryClient()
   const [activePlan, setActivePlan] = useState<RuntimeCollectionPlan>()
-  const [actionMessage, setActionMessage] = useState('后端正在初始化本地工作区')
+  const [actionMessage, setActionMessage] = useState(initialActionMessage)
   const [latestExports, setLatestExports] = useState<ExportJobView[]>([])
   const [tikhubTestResult, setTikhubTestResult] = useState<TikhubConnectionTestResult>()
   const [modelValidationResult, setModelValidationResult] = useState<ProviderTestResult>()
@@ -131,12 +181,6 @@ export function useWorkbenchBackend() {
     queryFn: loadBackendWorkbench,
     retry: 1,
   })
-
-  useEffect(() => {
-    if (dataQuery.isSuccess && actionMessage === '后端正在初始化本地工作区') {
-      setActionMessage('本地工作区已打开，后端可用')
-    }
-  }, [actionMessage, dataQuery.isSuccess])
 
   const generateFormPlanMutation = useMutation({
     mutationFn: createFormPlan,
@@ -282,11 +326,20 @@ export function useWorkbenchBackend() {
     }
   }
 
+  const data = dataQuery.data ?? createEmptyWorkbenchData(dataQuery.error ? 'error' : 'loading')
+  const resolvedActionMessage = dataQuery.error
+    ? backendErrorMessage(dataQuery.error)
+    : actionMessage === initialActionMessage && dataQuery.isSuccess
+      ? data.runtimeMode === 'demo'
+        ? '浏览器演示模式：未连接 Tauri 后端，当前内容均为演示数据'
+        : '本地工作区已打开，后端可用'
+      : actionMessage
+
   return {
-    data: dataQuery.data ?? fallbackData,
+    data,
     activePlan,
     latestExports,
-    actionMessage: dataQuery.error ? backendErrorMessage(dataQuery.error) : actionMessage,
+    actionMessage: resolvedActionMessage,
     isInitializing: dataQuery.isLoading,
     isBusy:
       generateFormPlanMutation.isPending ||
@@ -310,7 +363,7 @@ export function useWorkbenchBackend() {
 
 async function loadBackendWorkbench(): Promise<BackendWorkbenchData> {
   if (!isTauriRuntime()) {
-    return fallbackData
+    return browserPreviewData
   }
 
   const workspace = await ensureDefaultWorkspace()
@@ -415,6 +468,7 @@ export function mapBackendData(
     promptRuns: [],
     modelProviders: providers,
     latestTaskId,
+    runtimeMode: 'backend',
   }
 }
 
@@ -547,6 +601,7 @@ function toUiDataType(dataType: string): DataType {
 function toUiTaskStatus(status: string): TaskStatus {
   if (status === 'success') return '成功'
   if (status === 'failed') return '失败'
+  if (status === 'queued') return '已排队'
   if (status === 'waiting_confirmation') return '等待确认'
   if (status === 'draft') return '待人工确认'
   if (status === 'cancelled') return '失败'
