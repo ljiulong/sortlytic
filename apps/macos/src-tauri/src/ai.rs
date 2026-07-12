@@ -6,9 +6,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::collection::validate_collection_plan;
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 use crate::prompts::seed_builtin_prompts;
-use crate::tasks::{save_collection_plan, CollectionPlanView, SaveCollectionPlanInput};
+use crate::tasks::{
+  save_collection_plan, update_collection_task, CollectionPlanView, SaveCollectionPlanInput,
+  UpdateCollectionTaskInput,
+};
 use crate::workspace::{open_workspace_database, DATABASE_FILE_NAME};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -81,10 +85,21 @@ pub fn generate_collection_plan_from_text(
   ensure_task_exists(&connection, &input.task_id)?;
   let prompt = active_prompt_version(&connection, "collection_plan_from_text")?;
   let generated = generate_plan_json(&input.intent_text);
-  let schema_valid = generated
-    .get("missing_fields")
-    .and_then(Value::as_array)
-    .is_some_and(|items| items.is_empty());
+  let generated_platforms = json_string_array(generated.get("platforms"));
+  let generated_data_types = json_string_array(generated.get("data_types"));
+  if !generated_platforms.is_empty() && !generated_data_types.is_empty() {
+    update_collection_task(
+      &root_path,
+      &input.task_id,
+      UpdateCollectionTaskInput {
+        name: None,
+        platforms: Some(generated_platforms),
+        data_types: Some(generated_data_types),
+      },
+    )?;
+  }
+  let plan_validation = validate_collection_plan(&generated);
+  let schema_valid = plan_validation.valid;
   let validation_status = if schema_valid {
     "valid"
   } else {
@@ -120,7 +135,7 @@ pub fn generate_collection_plan_from_text(
         id, task_id, runtime_snapshot_id, run_type, input_summary, output_json, schema_valid,
         validation_status, input_tokens, output_tokens, latency_ms, retry_count,
         cost_estimate_json, created_at
-      ) VALUES (?1, ?2, ?3, 'collection_plan_generation', ?4, ?5, ?6, ?7, ?8, ?9, 0, 0, '{}', ?10)",
+      ) VALUES (?1, ?2, ?3, 'collection_plan_generation', ?4, ?5, ?6, ?7, ?8, ?9, 0, 0, ?10, ?11)",
       params![
         ai_run_id,
         input.task_id,
@@ -131,6 +146,11 @@ pub fn generate_collection_plan_from_text(
         validation_status,
         estimate_tokens(&input.intent_text),
         estimate_tokens(&generated.to_string()),
+        generated
+          .get("cost_estimate")
+          .cloned()
+          .unwrap_or_else(|| serde_json::json!({}))
+          .to_string(),
         now
       ],
     )
@@ -158,7 +178,7 @@ pub fn generate_collection_plan_from_text(
       source: "ai_generated".to_string(),
       plan_json: generated.clone(),
       validation_status: validation_status.to_string(),
-      validation_errors_json: Some(generated["missing_fields"].clone()),
+      validation_errors_json: Some(serde_json::json!(plan_validation.errors)),
       cost_estimate_json: generated.get("cost_estimate").cloned(),
     },
   )?;
@@ -278,10 +298,34 @@ fn generate_plan_json(intent_text: &str) -> Value {
     missing_fields.push("region");
   }
 
-  let endpoint_key = match (platforms.first(), data_types.first()) {
-    (Some(platform), Some(data_type)) => format!("{platform}.{data_type}"),
-    _ => "unresolved".to_string(),
-  };
+  let keywords = extract_keywords(intent_text);
+  let steps = platforms
+    .iter()
+    .flat_map(|platform| {
+      let keywords = keywords.clone();
+      data_types.iter().map(move |data_type| {
+        let mut params = serde_json::Map::new();
+        if let Some(region) = region {
+          params.insert("region".to_string(), Value::String(region.to_string()));
+        }
+        if *data_type == "keyword_search" {
+          if let Some(keyword) = keywords
+            .as_array()
+            .and_then(|items| items.first())
+            .and_then(Value::as_str)
+          {
+            params.insert("keyword".to_string(), Value::String(keyword.to_string()));
+          }
+        }
+        serde_json::json!({
+          "endpoint_key": format!("{platform}.{data_type}"),
+          "platform": platform,
+          "data_type": data_type,
+          "params": params
+        })
+      })
+    })
+    .collect::<Vec<_>>();
   let request_count_estimate = platforms.len().max(1) * data_types.len().max(1);
 
   serde_json::json!({
@@ -293,13 +337,10 @@ fn generate_plan_json(intent_text: &str) -> Value {
       "confidence": 0.8,
       "validation_status": "unverified"
     })).unwrap_or(Value::Null),
-    "keywords": extract_keywords(intent_text),
+    "keywords": keywords,
     "accounts": [],
     "time_range": Value::Null,
-    "steps": [{
-      "endpoint_key": endpoint_key,
-      "params": {}
-    }],
+    "steps": steps,
     "request_limit": request_count_estimate,
     "cost_estimate": {
       "request_count_estimate": request_count_estimate,
@@ -326,6 +367,19 @@ fn extract_keywords(intent_text: &str) -> Value {
   }
 
   Value::Array(Vec::new())
+}
+
+fn json_string_array(value: Option<&Value>) -> Vec<String> {
+  value
+    .and_then(Value::as_array)
+    .map(|values| {
+      values
+        .iter()
+        .filter_map(Value::as_str)
+        .map(ToString::to_string)
+        .collect()
+    })
+    .unwrap_or_default()
 }
 
 fn active_prompt_version(
@@ -480,7 +534,7 @@ struct ActivePromptVersion {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::tasks::{create_collection_task, CreateCollectionTaskInput};
+  use crate::tasks::{create_collection_task, get_task, CreateCollectionTaskInput};
   use crate::workspace::create_workspace;
 
   #[test]
@@ -515,12 +569,21 @@ mod tests {
     )
     .expect("runs should list");
 
-    assert!(result.ai_run.schema_valid);
+    assert!(!result.ai_run.schema_valid);
+    assert_eq!(result.ai_run.validation_status, "needs_review");
     assert_eq!(
       result.runtime_snapshot.output_schema_id,
       "collection_plan_v1"
     );
-    assert_eq!(result.collection_plan.validation_status, "valid");
+    assert_eq!(result.collection_plan.validation_status, "needs_review");
+    assert!(result
+      .collection_plan
+      .validation_errors_json
+      .as_array()
+      .is_some_and(|errors| errors
+        .iter()
+        .filter_map(Value::as_str)
+        .any(|error| error.contains("item_id"))));
     assert_eq!(runs.len(), 1);
 
     std::fs::remove_dir_all(root_path).ok();
@@ -564,6 +627,52 @@ mod tests {
 
     assert_eq!(generated["region"]["value"], "CN");
     assert_eq!(generated["missing_fields"], serde_json::json!([]));
+  }
+
+  #[test]
+  fn multi_platform_plan_updates_task_scope_and_builds_every_step() {
+    let root_path = unique_temp_workspace("ai-multi-plan");
+    create_workspace("AI 测试", &root_path).expect("workspace should be created");
+    let task = create_collection_task(
+      &root_path,
+      CreateCollectionTaskInput {
+        name: "多平台自然语言任务".to_string(),
+        source_type: "natural_language".to_string(),
+        platforms: vec!["xiaohongshu".to_string()],
+        data_types: vec!["comments".to_string()],
+      },
+    )
+    .expect("task should be created");
+
+    let result = generate_collection_plan_from_text(
+      &root_path,
+      GenerateCollectionPlanFromTextInput {
+        task_id: task.id.clone(),
+        intent_text: "同时采集美国 TikTok 和抖音的评论与关键词".to_string(),
+        provider_id: None,
+        model_id: None,
+      },
+    )
+    .expect("multi-platform plan should generate");
+    let updated_task = get_task(&root_path, &task.id).expect("task should reload");
+
+    assert_eq!(
+      updated_task.platforms_json,
+      serde_json::json!(["tiktok", "douyin"])
+    );
+    assert_eq!(
+      updated_task.data_types_json,
+      serde_json::json!(["comments", "keyword_search"])
+    );
+    assert_eq!(
+      result.collection_plan.plan_json["steps"]
+        .as_array()
+        .map(Vec::len),
+      Some(4)
+    );
+    assert_eq!(result.collection_plan.validation_status, "needs_review");
+
+    std::fs::remove_dir_all(root_path).ok();
   }
 
   fn unique_temp_workspace(label: &str) -> std::path::PathBuf {

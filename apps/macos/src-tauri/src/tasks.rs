@@ -212,9 +212,7 @@ pub fn save_collection_plan(
   let id = Uuid::new_v4().to_string();
   let now = Utc::now().to_rfc3339();
   let validation_errors = validate_plan_for_task(&task, &input.plan_json);
-  let validation_status = if validation_errors.is_empty()
-    || (source == "ai_generated" && input.validation_status == "valid")
-  {
+  let validation_status = if validation_errors.is_empty() {
     "valid"
   } else {
     "needs_review"
