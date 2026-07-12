@@ -52,7 +52,65 @@ export type ModelProviderView = {
   display_name: string
   enabled: boolean
   auth_type: string
+  secret_ref_id?: string | null
+  base_url?: string | null
+  api_format: string
+  region?: string | null
   default_model_id?: string | null
+  cost_policy_json: Record<string, unknown>
+  rate_limit_policy_json: Record<string, unknown>
+  health_check_json: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export type ModelProviderInput = {
+  provider_id: string
+  display_name: string
+  enabled?: boolean
+  auth_type: 'api_key' | 'none'
+  secret_ref_id?: string | null
+  base_url?: string | null
+  api_format: 'openai_compatible' | 'anthropic_messages' | 'gemini' | 'ollama'
+  region?: string | null
+  cost_policy_json?: Record<string, unknown> | null
+  rate_limit_policy_json?: Record<string, unknown> | null
+  health_check_json?: Record<string, unknown> | null
+}
+
+export type ModelProfileInput = {
+  provider_id: string
+  model_id: string
+  display_name: string
+  capabilities_json?: Record<string, unknown> | null
+  context_window?: number | null
+  supports_structured_output?: boolean
+  supports_streaming?: boolean
+  supports_tools?: boolean
+  supports_vision?: boolean
+  enabled?: boolean
+}
+
+export type ModelProfileView = {
+  id: string
+  provider_id: string
+  model_id: string
+  display_name: string
+  capabilities_json: Record<string, unknown>
+  context_window?: number | null
+  supports_structured_output: boolean
+  supports_streaming: boolean
+  supports_tools: boolean
+  supports_vision: boolean
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export type ProviderTestResult = {
+  provider_id: string
+  success: boolean
+  message: string
 }
 
 export type CollectionTaskView = {
@@ -208,6 +266,44 @@ export function testTikhubConnection(secretRefId: string, baseUrl: string) {
 export function listModelProviders(enabled?: boolean) {
   return invoke<ModelProviderView[]>('list_model_providers', {
     enabled: enabled ?? null,
+    rootPath: null,
+  })
+}
+
+export function createModelProvider(input: ModelProviderInput) {
+  return invoke<ModelProviderView>('create_model_provider', {
+    input,
+    rootPath: null,
+  })
+}
+
+export function updateModelProvider(providerId: string, input: ModelProviderInput) {
+  return invoke<ModelProviderView>('update_model_provider', {
+    providerId,
+    input,
+    rootPath: null,
+  })
+}
+
+export function upsertModelProfile(input: ModelProfileInput) {
+  return invoke<ModelProfileView>('upsert_model_profile', {
+    input,
+    rootPath: null,
+  })
+}
+
+export function setDefaultModel(providerId: string, modelId: string) {
+  return invoke<boolean>('set_default_model', {
+    providerId,
+    modelId,
+    rootPath: null,
+  })
+}
+
+export function testModelProvider(providerId: string, modelId?: string) {
+  return invoke<ProviderTestResult>('test_model_provider', {
+    providerId,
+    modelId: modelId ?? null,
     rootPath: null,
   })
 }

@@ -4,6 +4,7 @@ import {
   backendErrorMessage,
   buildReportModel,
   confirmCollectionPlan,
+  createModelProvider,
   createCollectionTask,
   createExportJob,
   enqueueTask,
@@ -16,15 +17,20 @@ import {
   listTasks,
   saveCollectionPlan,
   saveSecret,
+  setDefaultModel,
   type CollectionPlanView,
   type CollectionTaskView,
   type ExportJobView,
   type ModelProviderView,
+  type ProviderTestResult,
   type SecretRefView,
   type TikhubConnectionTestResult,
   type WorkspaceSummary,
   testSecretConnection,
   testTikhubConnection,
+  testModelProvider,
+  updateModelProvider,
+  upsertModelProfile,
 } from './backend-api'
 import {
   type ConnectionIcon,
@@ -46,6 +52,15 @@ export type CollectionFormPayload = {
   range: string
   maxRecords: number
   budget: number
+}
+
+export type ModelSettingsInput = {
+  providerId: string
+  displayName: string
+  apiFormat: 'openai_compatible' | 'anthropic_messages' | 'gemini' | 'ollama'
+  baseUrl: string
+  defaultModelId: string
+  apiKey: string
 }
 
 export type RuntimeCollectionPlan = CollectionFormPayload & {
@@ -85,6 +100,7 @@ export type WorkbenchRuntimeData = {
   }>
   records: SocialRecord[]
   promptRuns: Array<{ name: string; status: '通过' | '失败'; provider: string; diff: string }>
+  modelProviders: ModelProviderView[]
 }
 
 type BackendWorkbenchData = WorkbenchRuntimeData & {
@@ -93,6 +109,7 @@ type BackendWorkbenchData = WorkbenchRuntimeData & {
 
 const fallbackData: BackendWorkbenchData = {
   ...workspaceSnapshot,
+  modelProviders: [],
   workspace: {
     ...workspaceSnapshot.workspace,
     health: '浏览器预览',
@@ -106,6 +123,8 @@ export function useWorkbenchBackend() {
   const [actionMessage, setActionMessage] = useState('后端正在初始化本地工作区')
   const [latestExports, setLatestExports] = useState<ExportJobView[]>([])
   const [tikhubTestResult, setTikhubTestResult] = useState<TikhubConnectionTestResult>()
+  const [modelValidationResult, setModelValidationResult] = useState<ProviderTestResult>()
+  const [isModelSettingsPending, setIsModelSettingsPending] = useState(false)
 
   const dataQuery = useQuery({
     queryKey,
@@ -198,6 +217,71 @@ export function useWorkbenchBackend() {
     onError: (error) => setActionMessage(backendErrorMessage(error)),
   })
 
+  const saveAndValidateModelProvider = async (input: ModelSettingsInput) => {
+    assertTauriRuntime()
+    setIsModelSettingsPending(true)
+    setModelValidationResult(undefined)
+
+    try {
+      const providers = await listModelProviders()
+      const secret = await saveSecret({
+        provider_type: 'model_provider',
+        provider_id: input.providerId,
+        secret: input.apiKey,
+        alias: `${input.displayName} API Key`,
+      })
+      await testSecretConnection(secret.id)
+
+      const providerInput = {
+        provider_id: input.providerId,
+        display_name: input.displayName,
+        enabled: true,
+        auth_type: 'api_key' as const,
+        secret_ref_id: secret.id,
+        base_url: input.baseUrl.trim() || null,
+        api_format: input.apiFormat,
+        region: null,
+        cost_policy_json: null,
+        rate_limit_policy_json: null,
+        health_check_json: null,
+      }
+      const existingProvider = providers.find(
+        (provider) => provider.provider_id === input.providerId,
+      )
+
+      if (existingProvider) {
+        await updateModelProvider(input.providerId, providerInput)
+      } else {
+        await createModelProvider(providerInput)
+      }
+
+      await upsertModelProfile({
+        provider_id: input.providerId,
+        model_id: input.defaultModelId,
+        display_name: input.defaultModelId,
+        capabilities_json: null,
+        context_window: null,
+        supports_structured_output: false,
+        supports_streaming: false,
+        supports_tools: false,
+        supports_vision: false,
+        enabled: true,
+      })
+      await setDefaultModel(input.providerId, input.defaultModelId)
+
+      const result = await testModelProvider(input.providerId, input.defaultModelId)
+      setModelValidationResult(result)
+      setActionMessage(result.message)
+      await queryClient.invalidateQueries({ queryKey })
+      return result
+    } catch (error) {
+      setActionMessage(backendErrorMessage(error))
+      throw error
+    } finally {
+      setIsModelSettingsPending(false)
+    }
+  }
+
   return {
     data: dataQuery.data ?? fallbackData,
     activePlan,
@@ -209,13 +293,17 @@ export function useWorkbenchBackend() {
       generateNaturalPlanMutation.isPending ||
       confirmPlanMutation.isPending ||
       exportMutation.isPending ||
-      saveTikhubTokenMutation.isPending,
+      saveTikhubTokenMutation.isPending ||
+      isModelSettingsPending,
     generateFormPlan: generateFormPlanMutation.mutateAsync,
     generateNaturalPlan: generateNaturalPlanMutation.mutateAsync,
     confirmActivePlan: confirmPlanMutation.mutateAsync,
     exportLatestReport: exportMutation.mutateAsync,
     saveAndTestTikhubToken: saveTikhubTokenMutation.mutateAsync,
     tikhubTestResult,
+    saveAndValidateModelProvider,
+    modelValidationResult,
+    isModelSettingsPending,
     refresh: () => queryClient.invalidateQueries({ queryKey }),
   }
 }
@@ -325,6 +413,7 @@ export function mapBackendData(
     tasks: tasks.map(mapTaskRow),
     records: [],
     promptRuns: [],
+    modelProviders: providers,
     latestTaskId,
   }
 }
