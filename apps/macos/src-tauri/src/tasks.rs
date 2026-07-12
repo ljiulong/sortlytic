@@ -9,6 +9,10 @@ use uuid::Uuid;
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 use crate::workspace::{open_workspace_database, DATABASE_FILE_NAME};
 
+mod validation;
+
+use validation::{estimate_from_plan_json, validate_plan_for_task};
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CreateCollectionTaskInput {
   pub name: String,
@@ -148,25 +152,47 @@ pub fn update_collection_task(
     return Err(task_error("只允许更新草稿或等待确认状态的任务"));
   }
 
-  let name = input.name.unwrap_or(current.name);
-  let platforms = input.platforms.map_or(current.platforms_json, json_array);
-  let data_types = input.data_types.map_or(current.data_types_json, json_array);
+  let name = input.name.unwrap_or_else(|| current.name.clone());
+  let platforms = input
+    .platforms
+    .map_or_else(|| current.platforms_json.clone(), json_array);
+  let data_types = input
+    .data_types
+    .map_or_else(|| current.data_types_json.clone(), json_array);
+  let scope_changed = platforms != current.platforms_json || data_types != current.data_types_json;
+  let confirmed_at = if scope_changed {
+    None
+  } else {
+    current.confirmed_at
+  };
   let now = Utc::now().to_rfc3339();
 
   connection
     .execute(
       "UPDATE collection_task
-       SET name = ?1, platforms_json = ?2, data_types_json = ?3, updated_at = ?4
-       WHERE id = ?5",
+       SET name = ?1, platforms_json = ?2, data_types_json = ?3, confirmed_at = ?4,
+           updated_at = ?5
+       WHERE id = ?6",
       params![
         normalize_required("name", &name)?,
         platforms.to_string(),
         data_types.to_string(),
+        confirmed_at,
         now,
         task_id
       ],
     )
     .map_err(database_error)?;
+  if scope_changed {
+    connection
+      .execute(
+        "UPDATE collection_plan
+         SET confirmed_by_user = 0, updated_at = ?1
+         WHERE task_id = ?2 AND confirmed_by_user = 1",
+        params![now, task_id],
+      )
+      .map_err(database_error)?;
+  }
 
   get_task_by_id(&connection, task_id)
 }
@@ -182,16 +208,28 @@ pub fn save_collection_plan(
     return Err(task_error("只允许给草稿或等待确认状态的任务保存采集计划"));
   }
 
-  let validation_status = normalize_validation_status(&input.validation_status)?;
   let source = normalize_plan_source(&input.source)?;
   let id = Uuid::new_v4().to_string();
   let now = Utc::now().to_rfc3339();
-  let validation_errors = input
-    .validation_errors_json
-    .unwrap_or_else(|| serde_json::json!([]));
-  let cost_estimate = input
-    .cost_estimate_json
-    .unwrap_or_else(|| estimate_from_plan_json(&input.plan_json).cost_estimate_json);
+  let validation_errors = validate_plan_for_task(&task, &input.plan_json);
+  let validation_status = if validation_errors.is_empty()
+    || (source == "ai_generated" && input.validation_status == "valid")
+  {
+    "valid"
+  } else {
+    "needs_review"
+  };
+  let validation_errors = serde_json::json!(validation_errors);
+  let cost_estimate = estimate_from_plan_json(&input.plan_json).cost_estimate_json;
+
+  connection
+    .execute(
+      "UPDATE collection_plan
+       SET confirmed_by_user = 0, updated_at = ?1
+       WHERE task_id = ?2 AND confirmed_by_user = 1",
+      params![now, input.task_id],
+    )
+    .map_err(database_error)?;
 
   connection
     .execute(
@@ -216,7 +254,8 @@ pub fn save_collection_plan(
   connection
     .execute(
       "UPDATE collection_task
-       SET status = 'waiting_confirmation', cost_estimate_json = ?1, updated_at = ?2
+       SET status = 'waiting_confirmation', confirmed_at = NULL,
+           cost_estimate_json = ?1, updated_at = ?2
        WHERE id = ?3",
       params![cost_estimate.to_string(), now, input.task_id],
     )
@@ -251,19 +290,41 @@ pub fn confirm_collection_plan(
 ) -> AppResult<CollectionTaskView> {
   let connection = open_workspace_connection(root_path)?;
   let plan = get_collection_plan(&connection, plan_id)?;
+  let task = get_task_by_id(&connection, task_id)?;
 
   if plan.task_id != task_id {
     return Err(task_error("采集计划不属于当前任务"));
   }
 
-  if plan.validation_status != "valid" {
-    return Err(task_error("采集计划未通过校验，不能确认"));
+  if latest_plan_for_task(&connection, task_id)?.id != plan.id {
+    return Err(task_error("只能确认当前任务的最新采集计划"));
+  }
+
+  let validation_errors = validate_plan_for_task(&task, &plan.plan_json);
+  if !validation_errors.is_empty() {
+    connection
+      .execute(
+        "UPDATE collection_plan
+         SET validation_status = 'needs_review', validation_errors_json = ?1,
+             confirmed_by_user = 0, updated_at = ?2
+         WHERE id = ?3",
+        params![
+          serde_json::json!(validation_errors).to_string(),
+          Utc::now().to_rfc3339(),
+          plan_id
+        ],
+      )
+      .map_err(database_error)?;
+    return Err(task_error("采集计划未通过后端校验，不能确认"));
   }
 
   let now = Utc::now().to_rfc3339();
   connection
     .execute(
-      "UPDATE collection_plan SET confirmed_by_user = 1, updated_at = ?1 WHERE id = ?2",
+      "UPDATE collection_plan
+       SET validation_status = 'valid', validation_errors_json = '[]',
+           confirmed_by_user = 1, updated_at = ?1
+       WHERE id = ?2",
       params![now, plan_id],
     )
     .map_err(database_error)?;
@@ -500,13 +561,6 @@ fn normalize_plan_source(source: &str) -> AppResult<String> {
   }
 }
 
-fn normalize_validation_status(status: &str) -> AppResult<String> {
-  match status.trim() {
-    "valid" | "invalid" | "needs_review" => Ok(status.trim().to_string()),
-    _ => Err(task_error("采集计划校验状态不受支持")),
-  }
-}
-
 fn latest_plan_for_task(connection: &Connection, task_id: &str) -> AppResult<CollectionPlanView> {
   connection
     .query_row(
@@ -614,35 +668,6 @@ fn write_task_audit_log(
     )
     .map(|_| ())
     .map_err(database_error)
-}
-
-fn estimate_from_plan_json(plan_json: &Value) -> CostEstimateView {
-  let platform_count = plan_json
-    .get("platforms")
-    .and_then(Value::as_array)
-    .map_or(0, |items| items.len() as i64);
-  let data_type_count = plan_json
-    .get("data_types")
-    .and_then(Value::as_array)
-    .map_or(0, |items| items.len() as i64);
-  let step_count = plan_json
-    .get("steps")
-    .and_then(Value::as_array)
-    .map_or(1, |items| items.len().max(1) as i64);
-  let request_count_estimate = platform_count.max(1) * data_type_count.max(1) * step_count;
-  let requires_confirmation =
-    request_count_estimate > 1 || platform_count > 1 || data_type_count > 1;
-
-  CostEstimateView {
-    request_count_estimate,
-    platform_count,
-    data_type_count,
-    requires_confirmation,
-    cost_estimate_json: serde_json::json!({
-      "request_count_estimate": request_count_estimate,
-      "requires_confirmation": requires_confirmation
-    }),
-  }
 }
 
 fn map_task(row: &Row<'_>) -> rusqlite::Result<CollectionTaskView> {
