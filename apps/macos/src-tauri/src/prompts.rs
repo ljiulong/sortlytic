@@ -354,10 +354,16 @@ fn ensure_builtin_regression_cases(
   for (name, input_json) in cases {
     connection
       .execute(
-        "INSERT OR IGNORE INTO prompt_regression_case (
+        "INSERT INTO prompt_regression_case (
           id, template_id, name, input_json, expected_schema_id, expected_rules_json,
           enabled, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, '{}', 1, ?6, ?7)",
+        ) VALUES (?1, ?2, ?3, ?4, ?5, '{}', 1, ?6, ?7)
+        ON CONFLICT(template_id, name) DO UPDATE SET
+          input_json = excluded.input_json,
+          expected_schema_id = excluded.expected_schema_id,
+          expected_rules_json = excluded.expected_rules_json,
+          enabled = 1,
+          updated_at = excluded.updated_at",
         params![
           Uuid::new_v4().to_string(),
           template_id,
@@ -612,63 +618,5 @@ fn database_error(error: impl ToString) -> AppError {
 }
 
 #[cfg(test)]
-mod tests {
-  use super::*;
-  use crate::workspace::create_workspace;
-
-  #[test]
-  fn seed_builtin_prompts_creates_versions_and_cases() {
-    let root_path = unique_temp_workspace("prompts");
-    create_workspace("提示词测试", &root_path).expect("workspace should be created");
-
-    let templates = seed_builtin_prompts(&root_path).expect("builtins should seed");
-    let collection_template = templates
-      .iter()
-      .find(|template| template.template_key == "collection_plan_from_text")
-      .expect("collection template exists");
-    let versions =
-      list_prompt_versions(&root_path, &collection_template.id).expect("versions should list");
-    let cases =
-      list_prompt_regression_cases(&root_path, &collection_template.id).expect("cases should list");
-
-    assert_eq!(templates.len(), 3);
-    assert_eq!(versions[0].status, "active");
-    assert!(cases.len() >= 3);
-
-    std::fs::remove_dir_all(root_path).ok();
-  }
-
-  #[test]
-  fn activation_runs_regression_gate() {
-    let root_path = unique_temp_workspace("prompt-regression");
-    create_workspace("提示词测试", &root_path).expect("workspace should be created");
-    let templates = seed_builtin_prompts(&root_path).expect("builtins should seed");
-    let template = templates
-      .iter()
-      .find(|template| template.template_key == "collection_plan_from_text")
-      .expect("template exists");
-    let version = create_prompt_version(
-      &root_path,
-      CreatePromptVersionInput {
-        template_id: template.id.clone(),
-        content: "输出 JSON，包含 platforms 和 missing_fields".to_string(),
-        change_note: "测试版本".to_string(),
-      },
-    )
-    .expect("version created");
-
-    let activated =
-      activate_prompt_version(&root_path, &version.id).expect("version should activate");
-    let runs = list_prompt_regression_runs(&root_path, &version.id).expect("runs should list");
-
-    assert_eq!(activated.status, "active");
-    assert!(!runs.is_empty());
-    assert!(runs.iter().all(|run| run.status == "passed"));
-
-    std::fs::remove_dir_all(root_path).ok();
-  }
-
-  fn unique_temp_workspace(label: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("smart-data-workbench-{label}-{}", Uuid::new_v4()))
-  }
-}
+#[path = "prompts/tests.rs"]
+mod tests;

@@ -411,4 +411,39 @@ CREATE INDEX IF NOT EXISTS idx_field_provenance_ai_run_id ON field_provenance(ai
 CREATE INDEX IF NOT EXISTS idx_insight_task_id ON insight(task_id);
 CREATE INDEX IF NOT EXISTS idx_report_task_id ON report(task_id);
 CREATE INDEX IF NOT EXISTS idx_export_job_report_id ON export_job(report_id);
+
+-- 旧版本使用随机主键配合 INSERT OR IGNORE，同一模板下的同名回归用例会重复增长。
+-- 先把运行记录迁到最早创建的同名用例，再删除重复项并建立稳定业务唯一键。
+UPDATE prompt_regression_run
+SET case_id = (
+  SELECT canonical.id
+  FROM prompt_regression_case AS duplicate
+  JOIN prompt_regression_case AS canonical
+    ON canonical.template_id = duplicate.template_id
+   AND canonical.name = duplicate.name
+  WHERE duplicate.id = prompt_regression_run.case_id
+  ORDER BY canonical.rowid ASC
+  LIMIT 1
+)
+WHERE EXISTS (
+  SELECT 1
+  FROM prompt_regression_case AS duplicate
+  JOIN prompt_regression_case AS canonical
+    ON canonical.template_id = duplicate.template_id
+   AND canonical.name = duplicate.name
+   AND canonical.rowid < duplicate.rowid
+  WHERE duplicate.id = prompt_regression_run.case_id
+);
+
+DELETE FROM prompt_regression_case
+WHERE EXISTS (
+  SELECT 1
+  FROM prompt_regression_case AS canonical
+  WHERE canonical.template_id = prompt_regression_case.template_id
+    AND canonical.name = prompt_regression_case.name
+    AND canonical.rowid < prompt_regression_case.rowid
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_regression_case_template_name
+ON prompt_regression_case(template_id, name);
 "#;
