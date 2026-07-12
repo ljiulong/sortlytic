@@ -69,6 +69,12 @@ pub fn generate_collection_plan_from_text(
   root_path: impl AsRef<Path>,
   input: GenerateCollectionPlanFromTextInput,
 ) -> AppResult<GeneratedCollectionPlanView> {
+  if input.provider_id.is_some() || input.model_id.is_some() {
+    return Err(ai_error(
+      "当前自然语言计划仅支持本地规则解析，真实模型调用尚未接入",
+    ));
+  }
+
   let root_path = root_path.as_ref().to_path_buf();
   seed_builtin_prompts(&root_path)?;
   let connection = open_workspace_connection(&root_path)?;
@@ -87,12 +93,8 @@ pub fn generate_collection_plan_from_text(
   let now = Utc::now().to_rfc3339();
   let runtime_snapshot_id = Uuid::new_v4().to_string();
   let ai_run_id = Uuid::new_v4().to_string();
-  let provider_id = input
-    .provider_id
-    .unwrap_or_else(|| "local-rule-engine".to_string());
-  let model_id = input
-    .model_id
-    .unwrap_or_else(|| "rule-parser-v1".to_string());
+  let provider_id = "local-rule-engine";
+  let model_id = "rule-parser-v1";
 
   connection
     .execute(
@@ -520,6 +522,38 @@ mod tests {
     );
     assert_eq!(result.collection_plan.validation_status, "valid");
     assert_eq!(runs.len(), 1);
+
+    std::fs::remove_dir_all(root_path).ok();
+  }
+
+  #[test]
+  fn local_rule_generation_rejects_unimplemented_model_selection() {
+    let root_path = unique_temp_workspace("ai-model-selection");
+    create_workspace("AI 模型边界测试", &root_path).expect("workspace should be created");
+    let task = create_collection_task(
+      &root_path,
+      CreateCollectionTaskInput {
+        name: "不能伪装成真实模型调用".to_string(),
+        source_type: "natural_language".to_string(),
+        platforms: vec!["tiktok".to_string()],
+        data_types: vec!["comments".to_string()],
+      },
+    )
+    .expect("task should be created");
+
+    let error = generate_collection_plan_from_text(
+      &root_path,
+      GenerateCollectionPlanFromTextInput {
+        task_id: task.id,
+        intent_text: "采集美国 TikTok 汽车评论".to_string(),
+        provider_id: Some("provider-openai".to_string()),
+        model_id: Some("gpt-test".to_string()),
+      },
+    )
+    .expect_err("local rule path must reject unimplemented model selection");
+
+    assert_eq!(error.code, AppErrorCode::ValidationError);
+    assert!(error.message.contains("本地规则"));
 
     std::fs::remove_dir_all(root_path).ok();
   }

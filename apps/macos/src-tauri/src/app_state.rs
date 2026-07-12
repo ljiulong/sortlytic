@@ -88,7 +88,7 @@ mod tests {
     let status = state.backend_status();
 
     assert_eq!(status.service, "local-tauri-backend");
-    assert_eq!(status.backend_version, "0.1.0");
+    assert_eq!(status.backend_version, env!("CARGO_PKG_VERSION"));
     assert!(!status.has_active_workspace);
     assert!(status.uptime_ms < 1_000);
   }
