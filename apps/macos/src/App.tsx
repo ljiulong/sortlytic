@@ -506,13 +506,13 @@ function CollectionPlanPreview({
         <StatusPill tone={plan.status === '待人工确认' ? 'warning' : 'info'} label={plan.status} />
       </div>
       <div className="plan-grid">
-        <InfoLine label="平台" value={plan.platform} />
-        <InfoLine label="数据类型" value={plan.dataType} />
-        <InfoLine label="国家/地区" value={`${plan.regionCode}，来源：用户输入，置信度 1.00`} />
-        <InfoLine label="范围" value={`${plan.range}，最多 ${plan.maxRecords.toLocaleString()} 条`} />
+        <InfoLine label="平台" value={(plan.platforms?.length ? plan.platforms : [plan.platform]).join('、')} />
+        <InfoLine label="数据类型" value={(plan.dataTypes?.length ? plan.dataTypes : [plan.dataType]).join('、')} />
+        <InfoLine label="国家/地区" value={plan.regionCode ? `${plan.regionCode}，以后端计划为准` : '未提供'} />
+        <InfoLine label="范围" value={plan.maxRecords > 0 ? `${plan.range}，最多 ${plan.maxRecords.toLocaleString()} 条` : plan.range} />
         <InfoLine
           label="成本"
-          value={`${plan.costEstimate ?? `预计 $${(plan.budget * 0.72).toFixed(2)}`}，上限 $${plan.budget}`}
+          value={plan.budget > 0 ? `${plan.costEstimate ?? '尚无请求估算'}，金额上限 $${plan.budget}` : `${plan.costEstimate ?? '尚无请求估算'}，未设置金额上限`}
         />
         <InfoLine label="缺失条件" value={plan.missing.length ? plan.missing.join('、') : '无'} />
       </div>

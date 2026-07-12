@@ -64,6 +64,8 @@ export type ModelSettingsInput = {
 }
 
 export type RuntimeCollectionPlan = CollectionFormPayload & {
+  platforms?: Platform[]
+  dataTypes?: DataType[]
   status: TaskStatus
   missing: string[]
   taskId?: string
@@ -427,11 +429,11 @@ async function createNaturalPlan(intentText: string): Promise<RuntimeCollectionP
     {
       platform: toUiPlatform(hints.platform),
       dataType: toUiDataType(hints.dataType),
-      regionCode: inferRegionCode(intentText, hints.platform),
-      keyword: intentText.trim().slice(0, 36) || '自然语言采集',
-      range: '由自然语言解析',
-      maxRecords: 500,
-      budget: 35,
+      regionCode: '',
+      keyword: '',
+      range: '未提供时间范围',
+      maxRecords: 0,
+      budget: 0,
     },
     result.collection_plan,
   )
@@ -521,11 +523,25 @@ function mapTaskRow(task: CollectionTaskView): WorkbenchRuntimeData['tasks'][num
   }
 }
 
-function planFromBackend(values: CollectionFormPayload, plan: CollectionPlanView): RuntimeCollectionPlan {
+export function planFromBackend(values: CollectionFormPayload, plan: CollectionPlanView): RuntimeCollectionPlan {
   const missing = stringArrayFromJson(plan.validation_errors_json)
+  const platforms = stringArrayFromJson(plan.plan_json.platforms).map(toUiPlatform)
+  const dataTypes = stringArrayFromJson(plan.plan_json.data_types).map(toUiDataType)
+  const recordLimit = positiveNumber(plan.plan_json.record_limit)
+  const budgetLimit = positiveNumber(plan.plan_json.budget_limit)
+  const useSubmittedLimits = plan.source === 'form_generated'
 
   return {
     ...values,
+    platforms,
+    dataTypes,
+    platform: platforms[0] ?? values.platform,
+    dataType: dataTypes[0] ?? values.dataType,
+    regionCode: regionFromPlan(plan.plan_json.region),
+    keyword: targetFromPlan(plan.plan_json) || '未提供采集对象',
+    range: nonEmptyString(plan.plan_json.time_range) ?? '未提供时间范围',
+    maxRecords: recordLimit ?? (useSubmittedLimits ? values.maxRecords : 0),
+    budget: budgetLimit ?? (useSubmittedLimits ? values.budget : 0),
     status: plan.validation_status === 'valid' ? '等待确认' : '待人工确认',
     missing,
     taskId: plan.task_id,
@@ -562,14 +578,6 @@ function inferNaturalPlanHints(intentText: string) {
   const dataType = intentText.includes('关键词') || lower.includes('keyword') ? 'keyword_search' : 'comments'
 
   return { platform, dataType }
-}
-
-function inferRegionCode(intentText: string, platform: string) {
-  const lower = intentText.toLocaleLowerCase()
-  if (intentText.includes('美国') || lower.includes(' usa') || lower.includes(' us ')) return 'US'
-  if (intentText.includes('中国') || lower.includes(' china') || lower.includes(' cn ')) return 'CN'
-  if (platform === 'douyin' || platform === 'xiaohongshu') return 'CN'
-  return 'US'
 }
 
 function toBackendPlatform(platform: Platform) {
@@ -616,6 +624,40 @@ function progressForTaskStatus(status: string) {
 function numberFromJson(value: Record<string, unknown>) {
   const estimate = value.request_count_estimate
   return typeof estimate === 'number' ? estimate : 0
+}
+
+function positiveNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined
+}
+
+function nonEmptyString(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function regionFromPlan(value: unknown) {
+  if (typeof value === 'string') return value.trim()
+  if (value && typeof value === 'object' && 'value' in value) {
+    return nonEmptyString(value.value) ?? ''
+  }
+  return ''
+}
+
+function targetFromPlan(planJson: Record<string, unknown>) {
+  const keyword = stringArrayFromJson(planJson.keywords)[0]
+  if (keyword) return keyword
+  if (!Array.isArray(planJson.steps)) return ''
+  for (const step of planJson.steps) {
+    if (!step || typeof step !== 'object' || !('params' in step)) continue
+    const params = step.params
+    if (!params || typeof params !== 'object') continue
+    for (const key of ['keyword', 'item_id', 'account_id']) {
+      if (key in params) {
+        const target = nonEmptyString(params[key as keyof typeof params])
+        if (target) return target
+      }
+    }
+  }
+  return ''
 }
 
 function stringArrayFromJson(value: unknown) {

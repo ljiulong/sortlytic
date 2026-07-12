@@ -3,10 +3,11 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   backendErrorMessage,
+  type CollectionPlanView,
   type CollectionTaskView,
   type WorkspaceSummary,
 } from './backend-api'
-import { mapBackendData, useWorkbenchBackend } from './use-workbench-backend'
+import { mapBackendData, planFromBackend, useWorkbenchBackend } from './use-workbench-backend'
 import { workspaceSnapshot } from './workbench-data'
 
 const queryMock = vi.hoisted(() => ({
@@ -107,6 +108,58 @@ describe('mapBackendData', () => {
 
     expect(result.tasks[0]?.status).toBe('已排队')
     expect(result.tasks[0]?.progress).toBe(0)
+  })
+})
+
+describe('planFromBackend', () => {
+  it('确认视图使用后端多平台计划且不虚构记录数和金额预算', () => {
+    const plan: CollectionPlanView = {
+      id: 'plan-1',
+      task_id: 'task-1',
+      source: 'ai_generated',
+      schema_version: 1,
+      plan_json: {
+        platforms: ['tiktok', 'douyin'],
+        data_types: ['comments', 'keyword_search'],
+        region: {
+          value: 'US',
+          source: 'natural_language',
+          validation_status: 'unverified',
+        },
+        keywords: ['electric-car'],
+        time_range: null,
+        steps: [],
+        request_limit: 4,
+      },
+      validation_status: 'needs_review',
+      validation_errors_json: ['region 尚未验证', 'time_range 不能为空'],
+      cost_estimate_json: { request_count_estimate: 4 },
+      confirmed_by_user: false,
+      created_at: '2026-07-12T00:00:00Z',
+      updated_at: '2026-07-12T00:00:00Z',
+    }
+
+    const result = planFromBackend(
+      {
+        platform: '小红书',
+        dataType: '评论采集',
+        regionCode: 'CN',
+        keyword: '前端启发式占位值',
+        range: '由自然语言解析',
+        maxRecords: 500,
+        budget: 35,
+      },
+      plan,
+    )
+
+    expect(result.platforms).toEqual(['TikTok', '抖音'])
+    expect(result.dataTypes).toEqual(['评论采集', '关键词搜索'])
+    expect(result.regionCode).toBe('US')
+    expect(result.keyword).toBe('electric-car')
+    expect(result.range).toBe('未提供时间范围')
+    expect(result.maxRecords).toBe(0)
+    expect(result.budget).toBe(0)
+    expect(result.missing).toEqual(['region 尚未验证', 'time_range 不能为空'])
   })
 })
 
