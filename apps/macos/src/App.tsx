@@ -11,33 +11,22 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   Activity,
   AlertTriangle,
-  Archive,
   BadgeCheck,
   Bot,
   BookOpen,
   CheckCircle2,
-  ChevronRight,
-  Clock3,
-  Database,
-  Download,
   Gauge,
   KeyRound,
   Layers3,
-  ListChecks,
   MessageSquareText,
   MonitorCheck,
-  Pause,
-  Play,
   RefreshCcw,
-  Search,
   Settings,
   Share2,
   Sparkles,
-  Table2,
   Wrench,
 } from 'lucide-react'
 import { useForm } from 'react-hook-form'
-import { create } from 'zustand'
 import { z } from 'zod'
 import './App.css'
 import './App.responsive.css'
@@ -59,20 +48,6 @@ import {
 
 const queryClient = new QueryClient()
 
-type WorkbenchStore = {
-  activeNav: NavKey
-  selectedRecordId: string
-  setActiveNav: (activeNav: NavKey) => void
-  setSelectedRecordId: (selectedRecordId: string) => void
-}
-
-const useWorkbenchStore = create<WorkbenchStore>((set) => ({
-  activeNav: 'overview',
-  selectedRecordId: 'rec-104',
-  setActiveNav: (activeNav) => set({ activeNav }),
-  setSelectedRecordId: (selectedRecordId) => set({ selectedRecordId }),
-}))
-
 const collectionFormSchema = z.object({
   platform: z.enum(platformOptions),
   dataType: z.enum(dataTypeOptions),
@@ -87,12 +62,8 @@ type CollectionFormInput = z.input<typeof collectionFormSchema>
 type CollectionFormValues = z.output<typeof collectionFormSchema>
 
 const navItems = [
-  { key: 'overview', label: '概览', icon: MonitorCheck },
+  { key: 'overview', label: '工作台', icon: MonitorCheck },
   { key: 'guide', label: '指南', icon: BookOpen },
-  { key: 'tasks', label: '任务', icon: ListChecks },
-  { key: 'data', label: '数据', icon: Database },
-  { key: 'prompts', label: '提示词', icon: Sparkles },
-  { key: 'exports', label: '导出', icon: Download },
   { key: 'settings', label: '设置', icon: Settings },
 ] satisfies Array<{ key: NavKey; label: string; icon: typeof MonitorCheck }>
 
@@ -113,8 +84,8 @@ function App() {
 function Workbench() {
   const backend = useWorkbenchBackend()
   const data = backend.data
-  const activeNav = useWorkbenchStore((state) => state.activeNav)
-  const setActiveNav = useWorkbenchStore((state) => state.setActiveNav)
+  const [activeNav, setActiveNav] = useState<NavKey>('overview')
+  const [selectedRecordId, setSelectedRecordId] = useState('rec-104')
 
   return (
     <div className="app-shell" lang="zh-CN">
@@ -161,6 +132,21 @@ function Workbench() {
         />
         {activeNav === 'guide' ? (
           <GuidePage onOpenSettings={() => setActiveNav('settings')} />
+        ) : activeNav === 'settings' ? (
+          <section className="main-grid" aria-label="连接与本地设置">
+            <div className="main-column">
+              <ConnectionStrip
+                connections={data.connections}
+                isBusy={backend.isBusy}
+                onRefresh={backend.refresh}
+              />
+              <TikhubSettingsPanel
+                isBusy={backend.isBusy}
+                result={backend.tikhubTestResult}
+                onSaveAndTest={backend.saveAndTestTikhubToken}
+              />
+            </div>
+          </section>
         ) : (
           <>
             <section className="metric-grid" aria-label="工作区指标">
@@ -185,16 +171,15 @@ function Workbench() {
                   onGenerateNaturalPlan={backend.generateNaturalPlan}
                 />
                 <TaskQueue tasks={data.tasks} />
-                <RecordTable records={data.records} />
+                <RecordTable
+                  records={data.records}
+                  selectedRecordId={selectedRecordId}
+                  onSelectRecord={setSelectedRecordId}
+                />
               </div>
               <aside className="inspector" aria-label="详情与证据">
-                <EvidencePanel records={data.records} />
+                <EvidencePanel records={data.records} selectedRecordId={selectedRecordId} />
                 <PromptRegressionPanel runs={data.promptRuns} />
-                <TikhubSettingsPanel
-                  isBusy={backend.isBusy}
-                  result={backend.tikhubTestResult}
-                  onSaveAndTest={backend.saveAndTestTikhubToken}
-                />
                 <ExportPanel
                   isBusy={backend.isBusy}
                   latestExports={backend.latestExports}
@@ -225,20 +210,12 @@ function TopBar({
         <h1>{workspace.name}</h1>
         <p className="muted-text">{isInitializing ? '正在连接本地后端' : actionMessage}</p>
       </div>
-      <div className="topbar-actions">
-        <label className="search-box">
-          <Search size={16} aria-hidden="true" />
-          <span className="sr-only">全局搜索</span>
-          <input placeholder="搜索任务、记录或报告" type="search" />
-        </label>
-        <button className="ghost-button" type="button">
-          <Archive size={16} aria-hidden="true" />
-          <span>{workspace.storage}</span>
-        </button>
-        <button className="primary-button" type="button">
-          <Play size={16} aria-hidden="true" />
-          <span>新建任务</span>
-        </button>
+      <div className="workspace-meta" aria-label="当前工作区状态">
+        <span>{workspace.storage}</span>
+        <StatusPill
+          tone={isInitializing ? 'info' : workspace.health === '浏览器预览' ? 'warning' : 'success'}
+          label={workspace.health}
+        />
       </div>
     </header>
   )
@@ -535,10 +512,6 @@ function CollectionPlanPreview({
           <CheckCircle2 size={16} aria-hidden="true" />
           {confirmLabel}
         </button>
-        <button className="ghost-button" disabled={!plan.planId || isBusy} type="button">
-          <Pause size={16} aria-hidden="true" />
-          已保存草稿
-        </button>
       </div>
     </div>
   )
@@ -565,15 +538,11 @@ function TaskQueue({
           <p className="eyebrow">任务队列</p>
           <h2>运行、失败与待确认边界</h2>
         </div>
-        <button className="ghost-button" type="button">
-          <Clock3 size={16} aria-hidden="true" />
-          <span>运行日志</span>
-        </button>
       </div>
       <div className="task-list">
         {tasks.length === 0 ? <p className="muted-text">暂无任务，生成采集计划后会出现在这里。</p> : null}
         {tasks.map((task) => (
-          <article className="task-row" key={task.name}>
+          <article className="task-row" key={task.id}>
             <div>
               <h3>{task.name}</h3>
               <p>
@@ -587,10 +556,6 @@ function TaskQueue({
               </div>
               <strong>{task.cost}</strong>
             </div>
-            <button className="icon-text-button" type="button">
-              详情
-              <ChevronRight size={15} aria-hidden="true" />
-            </button>
           </article>
         ))}
       </div>
@@ -598,10 +563,15 @@ function TaskQueue({
   )
 }
 
-function RecordTable({ records }: { records: SocialRecord[] }) {
-  const setSelectedRecordId = useWorkbenchStore((state) => state.setSelectedRecordId)
-  const selectedRecordId = useWorkbenchStore((state) => state.selectedRecordId)
-
+function RecordTable({
+  records,
+  selectedRecordId,
+  onSelectRecord,
+}: {
+  records: SocialRecord[]
+  selectedRecordId: string
+  onSelectRecord: (recordId: string) => void
+}) {
   const columns = useMemo<ColumnDef<SocialRecord>[]>(
     () => [
       {
@@ -653,10 +623,6 @@ function RecordTable({ records }: { records: SocialRecord[] }) {
           <p className="eyebrow">数据资产</p>
           <h2>原始数据、AI 结果与来源联动</h2>
         </div>
-        <button className="ghost-button" type="button">
-          <Table2 size={16} aria-hidden="true" />
-          <span>字段设置</span>
-        </button>
       </div>
       <div className="table-shell" role="region" aria-label="标准化记录表">
         <table>
@@ -676,7 +642,7 @@ function RecordTable({ records }: { records: SocialRecord[] }) {
               <tr
                 data-active={selectedRecordId === row.original.id}
                 key={row.id}
-                onClick={() => setSelectedRecordId(row.original.id)}
+                onClick={() => onSelectRecord(row.original.id)}
               >
                 {row.getVisibleCells().map((cell) => (
                   <td key={cell.id}>
@@ -692,9 +658,29 @@ function RecordTable({ records }: { records: SocialRecord[] }) {
   )
 }
 
-function EvidencePanel({ records }: { records: SocialRecord[] }) {
-  const selectedRecordId = useWorkbenchStore((state) => state.selectedRecordId)
+function EvidencePanel({
+  records,
+  selectedRecordId,
+}: {
+  records: SocialRecord[]
+  selectedRecordId: string
+}) {
   const selectedRecord = records.find((record) => record.id === selectedRecordId) ?? records[0]
+
+  if (!selectedRecord) {
+    return (
+      <section className="glass-panel compact-panel">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">来源追溯</p>
+            <h2>暂无真实记录</h2>
+          </div>
+          <StatusPill tone="info" label="等待采集" />
+        </div>
+        <p className="muted-text">完成真实采集并入库后，这里会显示来源、模型运行和转换理由。</p>
+      </section>
+    )
+  }
 
   return (
     <section className="glass-panel compact-panel">
@@ -733,6 +719,7 @@ function PromptRegressionPanel({
   runs: WorkbenchRuntimeData['promptRuns']
 }) {
   const failedCount = runs.filter((run) => run.status === '失败').length
+  const hasRuns = runs.length > 0
 
   return (
     <section className="glass-panel compact-panel">
@@ -741,9 +728,13 @@ function PromptRegressionPanel({
           <p className="eyebrow">提示词回归</p>
           <h2>版本与 Schema</h2>
         </div>
-        <StatusPill tone={failedCount ? 'warning' : 'success'} label={`${failedCount} 项失败`} />
+        <StatusPill
+          tone={!hasRuns ? 'info' : failedCount ? 'warning' : 'success'}
+          label={!hasRuns ? '未运行' : `${failedCount} 项失败`}
+        />
       </div>
       <div className="regression-list">
+        {!hasRuns ? <p className="muted-text">尚无真实回归执行结果。</p> : null}
         {runs.map((run) => (
           <article className="regression-row" key={run.name}>
             <div>
