@@ -1,12 +1,75 @@
 :root {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
     "Noto Sans SC", "Microsoft YaHei", sans-serif;
-  color: #f5f7fa;
-  background: #0b0f14;
+  color: oklch(0.18 0.004 260);
+  background: oklch(0.982 0.002 260);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  color-scheme: light;
+
+  --canvas: oklch(0.982 0.002 260);
+  --sidebar: oklch(0.958 0.003 260);
+  --surface: oklch(1 0 0);
+  --surface-raised: oklch(0.972 0.003 260);
+  --surface-hover: oklch(0.94 0.004 260);
+  --surface-active: oklch(0.92 0.005 260);
+  --text-strong: oklch(0.14 0.004 260);
+  --text: oklch(0.27 0.005 260);
+  --text-muted: oklch(0.49 0.008 260);
+  --text-faint: oklch(0.61 0.006 260);
+  --border-subtle: oklch(0.91 0.004 260);
+  --border: oklch(0.86 0.005 260);
+  --border-strong: oklch(0.76 0.006 260);
+  --primary: oklch(0.14 0.004 260);
+  --primary-ink: oklch(0.985 0.002 260);
+  --focus: oklch(0.57 0.17 251);
+  --success: oklch(0.49 0.14 149);
+  --success-surface: oklch(0.95 0.035 149);
+  --warning: oklch(0.58 0.14 73);
+  --warning-surface: oklch(0.96 0.04 83);
+  --danger: oklch(0.54 0.18 25);
+  --danger-surface: oklch(0.95 0.035 25);
+  --info: oklch(0.52 0.15 251);
+  --info-surface: oklch(0.95 0.035 251);
+  --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.05);
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-pill: 999px;
+}
+
+:root[data-theme='dark'] {
+  color: oklch(0.92 0.003 260);
+  background: oklch(0.115 0.004 260);
+  color-scheme: dark;
+
+  --canvas: oklch(0.115 0.004 260);
+  --sidebar: oklch(0.14 0.004 260);
+  --surface: oklch(0.165 0.004 260);
+  --surface-raised: oklch(0.19 0.004 260);
+  --surface-hover: oklch(0.225 0.005 260);
+  --surface-active: oklch(0.255 0.005 260);
+  --text-strong: oklch(0.94 0.003 260);
+  --text: oklch(0.84 0.004 260);
+  --text-muted: oklch(0.65 0.008 260);
+  --text-faint: oklch(0.53 0.008 260);
+  --border-subtle: oklch(0.225 0.005 260);
+  --border: oklch(0.27 0.006 260);
+  --border-strong: oklch(0.36 0.007 260);
+  --primary: oklch(0.94 0.003 260);
+  --primary-ink: oklch(0.14 0.004 260);
+  --focus: oklch(0.72 0.14 251);
+  --success: oklch(0.72 0.15 149);
+  --success-surface: oklch(0.24 0.045 149);
+  --warning: oklch(0.79 0.13 83);
+  --warning-surface: oklch(0.25 0.04 83);
+  --danger: oklch(0.72 0.16 25);
+  --danger-surface: oklch(0.24 0.045 25);
+  --info: oklch(0.75 0.12 251);
+  --info-surface: oklch(0.235 0.045 251);
+  --shadow-panel: none;
 }
 
 * {
@@ -15,14 +78,15 @@
 
 html {
   min-width: 320px;
-  background: #0b0f14;
+  background: var(--canvas);
 }
 
 body {
   min-width: 320px;
   min-height: 100vh;
   margin: 0;
-  background: #0b0f14;
+  color: var(--text);
+  background: var(--canvas);
 }
 
 #root {
