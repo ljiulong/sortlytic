@@ -1,3 +1,4 @@
+use std::io::Read;
 use std::path::Path;
 use std::time::Duration;
 
@@ -8,8 +9,16 @@ use serde_json::Value;
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 use crate::secrets::read_secret_for_backend;
 
+mod collection;
+
+pub use collection::{
+  build_collection_request, parse_collection_page, send_collection_request, CollectionPage,
+  RequestMethod, TikHubCollectionRequest,
+};
+
 const DEFAULT_BASE_URL: &str = "https://api.tikhub.io";
 const CHINA_BASE_URL: &str = "https://api.tikhub.dev";
+const MAX_TIKHUB_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TikhubConnectionTestResult {
@@ -34,7 +43,7 @@ pub fn test_tikhub_connection(
   let client = reqwest::blocking::Client::builder()
     .timeout(Duration::from_secs(20))
     .build()
-    .map_err(tikhub_request_error)?;
+    .map_err(reqwest_request_error)?;
   let user_info = get_tikhub_json(
     &client,
     &base_url,
@@ -92,9 +101,9 @@ fn get_tikhub_json(
     .get(url)
     .bearer_auth(token)
     .send()
-    .map_err(tikhub_request_error)?;
+    .map_err(reqwest_request_error)?;
   let status = response.status();
-  let body = response.text().map_err(tikhub_request_error)?;
+  let body = read_limited_response_body(response)?;
 
   if !status.is_success() {
     return Err(error_for_status(status, safe_body_summary(&body)));
@@ -130,6 +139,7 @@ fn error_for_status(status: StatusCode, message: String) -> AppError {
     StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => (AppErrorCode::TikhubAuthError, false),
     StatusCode::PAYMENT_REQUIRED => (AppErrorCode::CostLimitError, false),
     StatusCode::TOO_MANY_REQUESTS => (AppErrorCode::TikhubRateLimit, true),
+    StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_EARLY => (AppErrorCode::TikhubRequestError, true),
     _ => (AppErrorCode::TikhubRequestError, status.is_server_error()),
   };
 
@@ -150,12 +160,63 @@ fn tikhub_request_error(error: impl ToString) -> AppError {
   )
 }
 
+fn reqwest_request_error(error: reqwest::Error) -> AppError {
+  if let Some(status) = error.status() {
+    return error_for_status(status, "响应正文已隐藏".to_string());
+  }
+  let retryable = error.is_timeout() || error.is_connect() || error.is_body();
+  let message = if error.is_timeout() {
+    "TikHub 请求超时"
+  } else if error.is_connect() {
+    "TikHub 连接失败"
+  } else if error.is_body() {
+    "TikHub 响应读取失败"
+  } else if error.is_builder() {
+    "TikHub 请求构造失败"
+  } else if error.is_redirect() {
+    "TikHub 重定向被拒绝"
+  } else {
+    "TikHub 请求失败"
+  };
+  let sanitized_error = error.without_url().to_string();
+  AppError::new(
+    AppErrorCode::TikhubRequestError,
+    message,
+    AppErrorStage::Collection,
+    retryable,
+  )
+  .with_safe_detail("transport_error", sanitized_error)
+}
+
+fn read_limited_response_body(reader: impl Read) -> AppResult<String> {
+  let mut reader = reader.take(MAX_TIKHUB_RESPONSE_BYTES + 1);
+  let mut body = Vec::new();
+  reader
+    .read_to_end(&mut body)
+    .map_err(tikhub_request_error)?;
+  if body.len() as u64 > MAX_TIKHUB_RESPONSE_BYTES {
+    return Err(AppError::new(
+      AppErrorCode::TikhubRequestError,
+      format!(
+        "TikHub 响应体超过 {} MiB 安全上限",
+        MAX_TIKHUB_RESPONSE_BYTES / 1024 / 1024
+      ),
+      AppErrorStage::Collection,
+      false,
+    ));
+  }
+  String::from_utf8(body).map_err(|error| {
+    AppError::new(
+      AppErrorCode::TikhubRequestError,
+      format!("TikHub 响应体不是合法 UTF-8：{error}"),
+      AppErrorStage::Collection,
+      false,
+    )
+  })
+}
+
 fn safe_body_summary(body: &str) -> String {
-  body
-    .chars()
-    .take(240)
-    .collect::<String>()
-    .replace('\n', " ")
+  format!("响应正文已隐藏（{} 字节）", body.len())
 }
 
 fn number_field(value: &Value, key: &str) -> Option<f64> {
@@ -200,4 +261,35 @@ mod tests {
     assert_eq!(mask_email("example@example.com"), "e***e@example.com");
     assert_eq!(mask_email("ab@example.com"), "a***@example.com");
   }
+
+  #[test]
+  fn response_body_reader_enforces_hard_size_limit() {
+    let valid = read_limited_response_body(std::io::Cursor::new(b"{\"code\":200}"))
+      .expect("small response should be accepted");
+    assert_eq!(valid, "{\"code\":200}");
+
+    let error = read_limited_response_body(std::io::repeat(b'x'))
+      .expect_err("unbounded response must stop at the configured limit");
+    assert_eq!(error.code, AppErrorCode::TikhubRequestError);
+    assert!(error.message.contains("响应体超过"));
+  }
+
+  #[test]
+  fn response_error_summary_never_echoes_untrusted_body() {
+    let summary = safe_body_summary("token-without-a-label private keyword");
+
+    assert!(!summary.contains("token-without-a-label"));
+    assert!(!summary.contains("private keyword"));
+    assert!(summary.contains("字节"));
+  }
+
+  #[test]
+  fn transient_http_statuses_are_retryable() {
+    assert!(error_for_status(StatusCode::REQUEST_TIMEOUT, "已隐藏".to_string()).retryable);
+    assert!(error_for_status(StatusCode::TOO_EARLY, "已隐藏".to_string()).retryable);
+  }
 }
+
+#[cfg(test)]
+#[path = "tikhub/collection_tests.rs"]
+mod collection_tests;
