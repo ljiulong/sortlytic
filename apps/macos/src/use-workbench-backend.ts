@@ -12,7 +12,6 @@ import {
   generateFormCollectionPlan,
   getBackendStatus,
   listModelProviders,
-  listPromptTemplates,
   listSecretRefs,
   listTasks,
   saveCollectionPlan,
@@ -21,7 +20,6 @@ import {
   type CollectionTaskView,
   type ExportJobView,
   type ModelProviderView,
-  type PromptTemplateView,
   type SecretRefView,
   type TikhubConnectionTestResult,
   type WorkspaceSummary,
@@ -76,6 +74,7 @@ export type WorkbenchRuntimeData = {
   }>
   metrics: Array<{ label: string; value: string; delta: string; tone: Tone }>
   tasks: Array<{
+    id: string
     name: string
     platform: Platform
     status: TaskStatus
@@ -227,15 +226,14 @@ async function loadBackendWorkbench(): Promise<BackendWorkbenchData> {
   }
 
   const workspace = await ensureDefaultWorkspace()
-  const [status, tasks, secretRefs, providers, templates] = await Promise.all([
+  const [status, tasks, secretRefs, providers] = await Promise.all([
     getBackendStatus(),
     listTasks(),
     listSecretRefs(),
     listModelProviders(),
-    listPromptTemplates(),
   ])
 
-  return mapBackendData(workspace, tasks, secretRefs, providers, templates, status.uptime_ms)
+  return mapBackendData(workspace, tasks, secretRefs, providers, status.uptime_ms)
 }
 
 async function createFormPlan(values: CollectionFormPayload): Promise<RuntimeCollectionPlan> {
@@ -298,12 +296,11 @@ async function createNaturalPlan(intentText: string): Promise<RuntimeCollectionP
   )
 }
 
-function mapBackendData(
+export function mapBackendData(
   workspace: WorkspaceSummary,
   tasks: CollectionTaskView[],
   secretRefs: SecretRefView[],
   providers: ModelProviderView[],
-  templates: PromptTemplateView[],
   uptimeMs: number,
 ): BackendWorkbenchData {
   const latestTaskId = tasks[0]?.id
@@ -321,13 +318,13 @@ function mapBackendData(
     connections: buildConnections(secretRefs, providers),
     metrics: [
       { label: '本地任务', value: String(tasks.length), delta: `${pendingCount} 个待确认`, tone: 'info' },
-      { label: '入库记录', value: String(workspaceSnapshot.records.length), delta: '示例数据待真实采集填充', tone: 'success' },
+      { label: '入库记录', value: '0', delta: '真实记录读取尚未接入', tone: 'info' },
       { label: '预计请求', value: String(requestCount), delta: `${queuedCount} 个已入队`, tone: 'warning' },
-      { label: '证据覆盖', value: '100%', delta: '导出前执行敏感信息检查', tone: 'success' },
+      { label: '证据覆盖', value: '未计算', delta: '暂无真实记录', tone: 'info' },
     ],
     tasks: tasks.map(mapTaskRow),
-    records: workspaceSnapshot.records,
-    promptRuns: buildPromptRuns(templates),
+    records: [],
+    promptRuns: [],
     latestTaskId,
   }
 }
@@ -364,30 +361,20 @@ function buildConnections(secretRefs: SecretRefView[], providers: ModelProviderV
   ] satisfies WorkbenchRuntimeData['connections']
 }
 
-function buildPromptRuns(templates: PromptTemplateView[]) {
-  if (!templates.length) return workspaceSnapshot.promptRuns
-
-  return templates.slice(0, 4).map((template) => ({
-    name: template.name,
-    status: '通过' as const,
-    provider: template.is_builtin ? '内置模板' : '用户模板',
-    diff: template.output_schema_id ? `${template.output_schema_id} 已激活` : 'Schema 待配置',
-  }))
-}
-
 function mapTaskRow(task: CollectionTaskView): WorkbenchRuntimeData['tasks'][number] {
   const platforms = stringArrayFromJson(task.platforms_json)
   const dataTypes = stringArrayFromJson(task.data_types_json)
   const requestCount = numberFromJson(task.cost_estimate_json)
 
   return {
+    id: task.id,
     name: task.name,
     platform: toUiPlatform(platforms[0] ?? 'xiaohongshu'),
     status: toUiTaskStatus(task.status),
     source: task.source_type === 'natural_language' ? '自然语言' : '表单式',
     progress: progressForTaskStatus(task.status),
-    records: requestCount * 50,
-    cost: `$${(requestCount * 0.06).toFixed(2)} · ${toUiDataType(dataTypes[0] ?? 'comments')}`,
+    records: 0,
+    cost: `${requestCount ? `预计 ${requestCount} 次请求` : '尚无请求估算'} · ${toUiDataType(dataTypes[0] ?? 'comments')}`,
   }
 }
 
@@ -479,10 +466,7 @@ function toUiTaskStatus(status: string): TaskStatus {
 
 function progressForTaskStatus(status: string) {
   if (status === 'success') return 100
-  if (status === 'waiting_confirmation') return 45
-  if (status === 'queued') return 68
-  if (status === 'failed' || status === 'cancelled') return 20
-  return 12
+  return 0
 }
 
 function numberFromJson(value: Record<string, unknown>) {

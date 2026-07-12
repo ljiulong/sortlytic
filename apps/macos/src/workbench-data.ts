@@ -4,7 +4,7 @@ export const dataTypeOptions = ['关键词搜索', '账号公开信息', '评论
 export type Platform = (typeof platformOptions)[number]
 export type DataType = (typeof dataTypeOptions)[number]
 export type TaskStatus = '运行中' | '等待确认' | '部分成功' | '成功' | '待人工确认' | '失败'
-export type NavKey = 'overview' | 'guide' | 'tasks' | 'data' | 'prompts' | 'exports' | 'settings'
+export type NavKey = 'overview' | 'guide' | 'settings'
 export type Tone = 'success' | 'warning' | 'danger' | 'info'
 export type ConnectionIcon = 'key' | 'bot' | 'share'
 
@@ -78,6 +78,7 @@ export const workspaceSnapshot = {
   ],
   tasks: [
     {
+      id: 'demo-task-xhs-ev-comments',
       name: '小红书新能源汽车评论洞察',
       platform: '小红书',
       status: '运行中',
@@ -87,6 +88,7 @@ export const workspaceSnapshot = {
       cost: '$12.40',
     },
     {
+      id: 'demo-task-tiktok-camping',
       name: 'TikTok camping gear trend',
       platform: 'TikTok',
       status: '等待确认',
@@ -96,6 +98,7 @@ export const workspaceSnapshot = {
       cost: '$7.20',
     },
     {
+      id: 'demo-task-douyin-live-accounts',
       name: '抖音直播候选账号校验',
       platform: '抖音',
       status: '部分成功',
@@ -200,6 +203,7 @@ export const workspaceSnapshot = {
   }>
   metrics: Array<{ label: string; value: string; delta: string; tone: Tone }>
   tasks: Array<{
+    id: string
     name: string
     platform: Platform
     status: TaskStatus
