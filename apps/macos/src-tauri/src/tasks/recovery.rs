@@ -97,6 +97,30 @@ pub fn recover_interrupted_runs(root_path: impl AsRef<Path>) -> AppResult<i64> {
   let mut recoverable = Vec::new();
 
   for (run_id, task_id, plan_id) in interrupted {
+    if checkpoint_status_exists(&transaction, &run_id, "requesting")? {
+      mark_requesting_uncertain(&transaction, &run_id)?;
+      stop_run(
+        &transaction,
+        &run_id,
+        &task_id,
+        "请求状态不确定",
+        UNCERTAIN_REQUEST_CODE,
+        "进程在 TikHub 请求完成前中断，无法确认远端是否已计费或返回，禁止自动重发",
+      )?;
+      continue;
+    }
+    if checkpoint_status_exists(&transaction, &run_id, "uncertain")? {
+      stop_run(
+        &transaction,
+        &run_id,
+        &task_id,
+        "请求状态不确定",
+        UNCERTAIN_REQUEST_CODE,
+        "任务包含状态不确定的 TikHub 请求，必须人工确认后再处理",
+      )?;
+      continue;
+    }
+
     let plan_validation = plan_id.as_deref().map_or_else(
       || Err(task_error("运行中的任务缺少采集计划，不能恢复")),
       |plan_id| require_executable_plan(&transaction, &task_id, plan_id),
@@ -187,6 +211,13 @@ fn classify_recovery(
       stage: "请求状态不确定",
       code: UNCERTAIN_REQUEST_CODE,
       message: "任务包含状态不确定的 TikHub 请求，必须人工确认后再处理",
+    });
+  }
+  if !run_step_snapshot_is_complete(connection, plan_id, &run_step_statuses, &checkpoints)? {
+    return Ok(RecoveryAction::Stop {
+      stage: "运行快照不完整",
+      code: "CHECKPOINT_EVIDENCE_INCOMPLETE",
+      message: "运行步骤快照不完整，或运行中步骤缺少检查点，禁止自动重发",
     });
   }
   if has_checkpoint_state_conflict(&checkpoints) {
@@ -322,6 +353,51 @@ fn classify_recovery(
     stage: "恢复等待",
     message: "未发现已发送请求的检查点，任务已重新排队",
   })
+}
+
+fn checkpoint_status_exists(
+  connection: &Connection,
+  run_id: &str,
+  status: &str,
+) -> AppResult<bool> {
+  connection
+    .query_row(
+      "SELECT EXISTS(
+         SELECT 1 FROM collection_page_checkpoint AS checkpoint
+         JOIN task_run_step AS run_step ON run_step.id = checkpoint.task_run_step_id
+         WHERE run_step.task_run_id = ?1 AND checkpoint.status = ?2
+       )",
+      params![run_id, status],
+      |row| row.get::<_, i64>(0),
+    )
+    .map(|exists| exists != 0)
+    .map_err(database_error)
+}
+
+fn run_step_snapshot_is_complete(
+  connection: &Connection,
+  plan_id: &str,
+  run_steps: &[RunStepState],
+  checkpoints: &[CheckpointState],
+) -> AppResult<bool> {
+  let expected_step_count = connection
+    .query_row(
+      "SELECT COUNT(*) FROM api_call_step WHERE plan_id = ?1",
+      params![plan_id],
+      |row| row.get::<_, i64>(0),
+    )
+    .map_err(database_error)?;
+  let actual_step_count =
+    i64::try_from(run_steps.len()).map_err(|_| task_error("运行步骤数量超出可恢复范围"))?;
+  if expected_step_count == 0 || actual_step_count != expected_step_count {
+    return Ok(false);
+  }
+  Ok(!run_steps.iter().any(|step| {
+    step.status == "running"
+      && !checkpoints
+        .iter()
+        .any(|checkpoint| checkpoint.step_id == step.id)
+  }))
 }
 
 fn next_eligible_pending_step(run_steps: &[RunStepState]) -> Option<&RunStepState> {

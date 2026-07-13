@@ -109,18 +109,19 @@ pub fn claim_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRunV
     }
 
     let now = Utc::now().to_rfc3339();
+    let stage = claim_stage(queued.current_stage.as_deref());
     let changed = transaction
       .execute(
         "UPDATE task_run
-         SET status = 'running', current_stage = '执行采集', error_code = NULL,
-             error_message = NULL, retryable = 0, claimed_at = ?1
-         WHERE id = ?2 AND status = 'queued' AND plan_id IS NOT NULL
+         SET status = 'running', current_stage = ?1, error_code = NULL,
+             error_message = NULL, retryable = 0, claimed_at = ?2
+         WHERE id = ?3 AND status = 'queued' AND plan_id IS NOT NULL
            AND EXISTS (
              SELECT 1 FROM collection_plan AS plan
              WHERE plan.id = task_run.plan_id AND plan.task_id = task_run.task_id
                AND plan.schema_version = 2 AND plan.validation_status = 'valid'
            )",
-        params![now, queued.id],
+        params![stage, now, queued.id],
       )
       .map_err(database_error)?;
     if changed != 1 {
@@ -135,9 +136,13 @@ pub fn claim_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRunV
     append_task_log(
       &transaction,
       &queued.id,
-      "执行采集",
+      stage,
       "info",
-      "本地执行器已领取任务",
+      if stage == "执行采集" {
+        "本地执行器已领取任务"
+      } else {
+        "本地执行器已领取恢复任务"
+      },
     )?;
     transaction.commit().map_err(database_error)?;
 
@@ -267,16 +272,19 @@ pub fn retry_task(
   if task.status != "failed" {
     return Err(task_error("只有失败任务可以重试"));
   }
-  let plan_id = latest_failed_plan_id(&transaction, task_id)?;
-  require_executable_plan(&transaction, task_id, &plan_id)?;
-  let attempt_number = next_attempt_number(&transaction, task_id, &plan_id)?;
-  let run_id = Uuid::new_v4().to_string();
-  let now = Utc::now().to_rfc3339();
   let stage = stage
     .as_deref()
     .map(|value| normalize_required("重试阶段", value))
     .transpose()?
     .unwrap_or_else(|| "等待执行".to_string());
+  if recovery_stage(Some(&stage)).is_some() {
+    return Err(task_error("普通重试不能使用保留恢复阶段"));
+  }
+  let plan_id = latest_retryable_failed_plan_id(&transaction, task_id)?;
+  require_executable_plan(&transaction, task_id, &plan_id)?;
+  let attempt_number = next_attempt_number(&transaction, task_id, &plan_id)?;
+  let run_id = Uuid::new_v4().to_string();
+  let now = Utc::now().to_rfc3339();
   transaction
     .execute(
       "INSERT INTO task_run (
@@ -298,6 +306,23 @@ pub fn retry_task(
 
 fn immediate_transaction(connection: &mut Connection) -> AppResult<Transaction<'_>> {
   Transaction::new(connection, TransactionBehavior::Immediate).map_err(database_error)
+}
+
+fn claim_stage(current_stage: Option<&str>) -> &'static str {
+  recovery_stage(current_stage).unwrap_or("执行采集")
+}
+
+fn recovery_stage(current_stage: Option<&str>) -> Option<&'static str> {
+  match current_stage {
+    Some("恢复响应入库") => "恢复响应入库",
+    Some("恢复重试") => "恢复重试",
+    Some("恢复待发送") => "恢复待发送",
+    Some("恢复续页") => "恢复续页",
+    Some("恢复收尾") => "恢复收尾",
+    Some("恢复等待") => "恢复等待",
+    _ => return None,
+  }
+  .into()
 }
 
 fn confirmed_plan_id(connection: &Connection, task_id: &str) -> AppResult<String> {
@@ -487,6 +512,15 @@ pub(super) fn quarantine_run_for_reconfirmation(
   if changed != 1 {
     return Err(task_error("活动任务状态已变化，无法隔离无效采集计划"));
   }
+  connection
+    .execute(
+      "UPDATE task_run_step
+       SET status = 'failed', stop_reason = 'terminal_error',
+           completed_at = COALESCE(completed_at, ?1), updated_at = ?1
+       WHERE task_run_id = ?2 AND status IN ('pending', 'running')",
+      params![now, run_id],
+    )
+    .map_err(database_error)?;
 
   if let Some(plan_id) = plan_id {
     connection
@@ -542,20 +576,26 @@ pub(super) fn quarantine_run_for_reconfirmation(
   Ok(())
 }
 
-fn latest_failed_plan_id(connection: &Connection, task_id: &str) -> AppResult<String> {
-  let plan_id = connection
+fn latest_retryable_failed_plan_id(connection: &Connection, task_id: &str) -> AppResult<String> {
+  let (plan_id, retryable) = connection
     .query_row(
-      "SELECT plan_id
+      "SELECT plan_id, retryable
        FROM task_run
        WHERE task_id = ?1 AND status = 'failed'
        ORDER BY started_at DESC, id DESC
        LIMIT 1",
       params![task_id],
-      |row| row.get::<_, Option<String>>(0),
+      |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)? != 0)),
     )
     .optional()
     .map_err(database_error)?
     .ok_or_else(|| task_error("任务没有可重试的失败运行记录"))?;
+
+  if !retryable {
+    return Err(task_error(
+      "最近失败运行不可直接重试，请先完成明确的人工处理或重新确认流程",
+    ));
+  }
 
   plan_id.ok_or_else(|| task_error("历史任务运行缺少已确认计划，请重新确认采集计划后再运行"))
 }

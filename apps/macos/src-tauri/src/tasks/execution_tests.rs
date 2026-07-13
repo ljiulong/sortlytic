@@ -54,13 +54,13 @@ fn failed_run_can_create_a_new_retry_run() {
     &running.id,
     "TIKHUB_REQUEST_ERROR",
     "网络超时",
-    false,
+    true,
   )
   .expect("running task should fail");
   let failed_task = get_task(&root_path, &task.id).expect("task should load");
 
   assert_eq!(failed.status, "failed");
-  assert!(!failed.retryable);
+  assert!(failed.retryable);
   assert_eq!(failed.plan_id.as_deref(), Some(plan.id.as_str()));
   assert_eq!(failed.attempt_number, 1);
   assert!(failed.claimed_at.is_some());
@@ -77,7 +77,65 @@ fn failed_run_can_create_a_new_retry_run() {
 }
 
 #[test]
-fn interrupted_running_task_is_requeued_and_claimable_again() {
+fn non_retryable_failure_cannot_use_the_ordinary_retry_command() {
+  let (root_path, task, _) = prepared_task_workspace("execution-non-retryable");
+  enqueue_task(&root_path, &task.id).expect("task should enqueue");
+  let running = claim_next_task(&root_path)
+    .expect("claim should succeed")
+    .expect("queued task should be claimed");
+  fail_task_run(
+    &root_path,
+    &running.id,
+    "UNCERTAIN_REQUEST_AFTER_CRASH",
+    "远端请求状态不确定",
+    false,
+  )
+  .expect("running task should fail");
+
+  let error = retry_task(&root_path, &task.id, None)
+    .expect_err("non-retryable failure must require an explicit override flow");
+  assert!(error.message.contains("不可直接重试"));
+  assert_eq!(task_run_count_and_state(&root_path, &task.id).0, 1);
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn ordinary_retry_cannot_forge_an_internal_recovery_directive() {
+  for reserved_stage in [
+    "恢复响应入库",
+    "恢复重试",
+    "恢复待发送",
+    "恢复续页",
+    "恢复收尾",
+    "恢复等待",
+  ] {
+    let (root_path, task, _) =
+      prepared_task_workspace(&format!("execution-forged-{}", Uuid::new_v4()));
+    enqueue_task(&root_path, &task.id).expect("task should enqueue");
+    let running = claim_next_task(&root_path)
+      .expect("claim should succeed")
+      .expect("queued task should be claimed");
+    fail_task_run(
+      &root_path,
+      &running.id,
+      "TIKHUB_REQUEST_ERROR",
+      "网络超时",
+      true,
+    )
+    .expect("running task should fail");
+
+    let error = retry_task(&root_path, &task.id, Some(format!(" {reserved_stage} ")))
+      .expect_err("ordinary retry must not forge a recovery directive");
+    assert!(error.message.contains("保留恢复阶段"));
+    assert_eq!(task_run_count_and_state(&root_path, &task.id).0, 1);
+
+    std::fs::remove_dir_all(root_path).ok();
+  }
+}
+
+#[test]
+fn interrupted_running_task_without_step_snapshot_fails_closed() {
   let (root_path, task, plan) = prepared_task_workspace("execution-recovery");
   enqueue_task(&root_path, &task.id).expect("task should enqueue");
   let first_claim = claim_next_task(&root_path)
@@ -92,18 +150,67 @@ fn interrupted_running_task_is_requeued_and_claimable_again() {
   .expect("run should reload");
   let recovered_task = get_task(&root_path, &task.id).expect("task should load");
 
-  assert_eq!(recovered, 1);
-  assert_eq!(recovered_run.status, "queued");
+  assert_eq!(recovered, 0);
+  assert_eq!(recovered_run.status, "failed");
   assert_eq!(recovered_run.plan_id.as_deref(), Some(plan.id.as_str()));
   assert_eq!(recovered_run.attempt_number, 1);
   assert!(recovered_run.claimed_at.is_none());
-  assert_eq!(recovered_task.status, "queued");
+  assert_eq!(
+    recovered_run.error_code.as_deref(),
+    Some("CHECKPOINT_EVIDENCE_INCOMPLETE")
+  );
+  assert_eq!(recovered_task.status, "failed");
 
-  let second_claim = claim_next_task(&root_path)
-    .expect("second claim should succeed")
-    .expect("recovered run should be claimable");
-  assert_eq!(second_claim.id, first_claim.id);
-  assert!(second_claim.claimed_at.is_some());
+  assert!(claim_next_task(&root_path)
+    .expect("failed recovery should not break queue scanning")
+    .is_none());
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn claim_preserves_a_recovery_directive() {
+  let (root_path, task, _) = prepared_task_workspace("execution-recovery-directive");
+  let queued = enqueue_task(&root_path, &task.id).expect("task should enqueue");
+  open_workspace_connection(&root_path)
+    .expect("database should open")
+    .execute(
+      "UPDATE task_run SET current_stage = '恢复响应入库' WHERE id = ?1",
+      params![queued.id],
+    )
+    .expect("recovery directive should persist");
+
+  let claimed = claim_next_task(&root_path)
+    .expect("claim should succeed")
+    .expect("recovered run should be claimed");
+  assert_eq!(claimed.current_stage.as_deref(), Some("恢复响应入库"));
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn running_step_without_a_checkpoint_fails_closed() {
+  let (root_path, task, plan) = prepared_task_workspace("execution-running-step-no-checkpoint");
+  enqueue_task(&root_path, &task.id).expect("task should enqueue");
+  let running = claim_next_task(&root_path)
+    .expect("claim should succeed")
+    .expect("queued task should be claimed");
+  insert_run_step(&root_path, &running.id, &plan.id, "running");
+
+  assert_eq!(
+    recover_interrupted_runs(&root_path).expect("recovery should fail closed"),
+    0
+  );
+  let recovered = get_task_run(
+    &open_workspace_connection(&root_path).expect("database should open"),
+    &running.id,
+  )
+  .expect("run should load");
+  assert_eq!(recovered.status, "failed");
+  assert_eq!(
+    recovered.error_code.as_deref(),
+    Some("CHECKPOINT_EVIDENCE_INCOMPLETE")
+  );
 
   std::fs::remove_dir_all(root_path).ok();
 }
@@ -370,6 +477,7 @@ fn recovery_quarantines_non_executable_running_runs() {
     let running = claim_next_task(&root_path)
       .expect("claim should succeed")
       .expect("task should be claimed");
+    let run_step_id = insert_run_step(&root_path, &running.id, &plan.id, "running");
     forge_plan_execution_contract(&root_path, &plan, schema_version, corrupt_budget);
 
     assert_eq!(
@@ -377,9 +485,77 @@ fn recovery_quarantines_non_executable_running_runs() {
       0
     );
     assert_reconfirmation_quarantine(&root_path, &running.id, &task.id, &plan.id);
+    let run_step = open_workspace_connection(&root_path)
+      .expect("database should reopen")
+      .query_row(
+        "SELECT status, stop_reason, completed_at
+         FROM task_run_step WHERE id = ?1",
+        params![run_step_id],
+        |row| {
+          Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+          ))
+        },
+      )
+      .expect("run step should load");
+    assert_eq!(run_step.0, "failed");
+    assert_eq!(run_step.1.as_deref(), Some("terminal_error"));
+    assert!(run_step.2.is_some());
 
     std::fs::remove_dir_all(root_path).ok();
   }
+}
+
+#[test]
+fn requesting_checkpoint_becomes_uncertain_before_invalid_plan_quarantine() {
+  let (root_path, task, plan) = prepared_task_workspace("execution-invalid-plan-requesting");
+  enqueue_task(&root_path, &task.id).expect("task should enqueue");
+  let running = claim_next_task(&root_path)
+    .expect("claim should succeed")
+    .expect("queued task should be claimed");
+  let run_step_id = insert_run_step(&root_path, &running.id, &plan.id, "running");
+  let checkpoint_id = insert_requesting_checkpoint(&root_path, &run_step_id);
+  forge_plan_execution_contract(&root_path, &plan, 2, true);
+
+  assert_eq!(
+    recover_interrupted_runs(&root_path).expect("recovery should preserve uncertain evidence"),
+    0
+  );
+  let connection = open_workspace_connection(&root_path).expect("database should reopen");
+  let recovered = get_task_run(&connection, &running.id).expect("run should load");
+  let checkpoint = connection
+    .query_row(
+      "SELECT status, last_error_code FROM collection_page_checkpoint WHERE id = ?1",
+      params![checkpoint_id],
+      |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+    )
+    .expect("checkpoint should load");
+  let run_step = connection
+    .query_row(
+      "SELECT status, stop_reason FROM task_run_step WHERE id = ?1",
+      params![run_step_id],
+      |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+    )
+    .expect("run step should load");
+
+  assert_eq!(recovered.status, "failed");
+  assert_eq!(
+    recovered.error_code.as_deref(),
+    Some("UNCERTAIN_REQUEST_AFTER_CRASH")
+  );
+  assert_eq!(checkpoint.0, "uncertain");
+  assert_eq!(
+    checkpoint.1.as_deref(),
+    Some("UNCERTAIN_REQUEST_AFTER_CRASH")
+  );
+  assert_eq!(
+    run_step,
+    ("failed".to_string(), Some("uncertain_request".to_string()))
+  );
+
+  std::fs::remove_dir_all(root_path).ok();
 }
 
 #[test]
@@ -730,6 +906,48 @@ fn execution_plan_input(task_id: &str) -> SaveCollectionPlanInput {
     validation_errors_json: None,
     cost_estimate_json: None,
   }
+}
+
+fn insert_run_step(root_path: &Path, run_id: &str, plan_id: &str, status: &str) -> String {
+  let connection = open_workspace_connection(root_path).expect("database should open");
+  let api_call_step_id = connection
+    .query_row(
+      "SELECT id FROM api_call_step WHERE plan_id = ?1 ORDER BY step_order LIMIT 1",
+      params![plan_id],
+      |row| row.get::<_, String>(0),
+    )
+    .expect("API step should load");
+  let run_step_id = Uuid::new_v4().to_string();
+  connection
+    .execute(
+      "INSERT INTO task_run_step (
+         id, task_run_id, api_call_step_id, status, started_at, created_at, updated_at
+       ) VALUES (?1, ?2, ?3, ?4, '2026-07-13T08:00:00+00:00',
+                 '2026-07-13T08:00:00+00:00', '2026-07-13T08:00:00+00:00')",
+      params![run_step_id, run_id, api_call_step_id, status],
+    )
+    .expect("run step should insert");
+  run_step_id
+}
+
+fn insert_requesting_checkpoint(root_path: &Path, run_step_id: &str) -> String {
+  let checkpoint_id = Uuid::new_v4().to_string();
+  open_workspace_connection(root_path)
+    .expect("database should open")
+    .execute(
+      "INSERT INTO collection_page_checkpoint (
+         id, task_run_step_id, page_index, idempotency_key, status,
+         request_attempt_count, cost_actual_json, requested_at, created_at, updated_at
+       ) VALUES (
+         ?1, ?2, 0, ?3, 'requesting', 1,
+         '{\"currency\":\"USD\",\"amount_micros\":100}',
+         '2026-07-13T08:01:00+00:00', '2026-07-13T08:01:00+00:00',
+         '2026-07-13T08:01:00+00:00'
+       )",
+      params![checkpoint_id, run_step_id, Uuid::new_v4().to_string()],
+    )
+    .expect("requesting checkpoint should insert");
+  checkpoint_id
 }
 
 fn forge_plan_execution_contract(
