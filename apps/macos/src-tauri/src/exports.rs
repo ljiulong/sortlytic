@@ -1,7 +1,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
@@ -382,13 +382,35 @@ fn write_pdf(path: &Path, report: &ReportView) -> AppResult<()> {
 }
 
 fn write_report_snapshot(root_path: impl AsRef<Path>, report: &ReportView) -> AppResult<()> {
-  let report_dir = root_path.as_ref().join("reports").join(&report.id);
-  fs::create_dir_all(&report_dir).map_err(export_error)?;
-  fs::write(
-    report_dir.join("report_model.json"),
-    serde_json::to_vec_pretty(&report.report_model_json).map_err(export_error)?,
-  )
-  .map_err(export_error)
+  let reports_dir = root_path.as_ref().join("reports");
+  ensure_real_directory(&reports_dir)?;
+  let report_dir = reports_dir.join(&report.id);
+  let mut builder = fs::DirBuilder::new();
+  #[cfg(unix)]
+  builder.mode(0o700);
+  builder.create(&report_dir).map_err(export_error)?;
+  let result = (|| -> AppResult<()> {
+    #[cfg(unix)]
+    fs::set_permissions(&report_dir, fs::Permissions::from_mode(0o700)).map_err(export_error)?;
+    #[cfg(unix)]
+    if fs::symlink_metadata(&report_dir)
+      .map_err(export_error)?
+      .permissions()
+      .mode()
+      & 0o7777
+      != 0o700
+    {
+      return Err(export_error("导出文件系统无法保证 0700 私有目录权限"));
+    }
+    write_new_export_file(
+      &report_dir.join("report_model.json"),
+      &serde_json::to_vec_pretty(&report.report_model_json).map_err(export_error)?,
+    )
+  })();
+  if result.is_err() {
+    fs::remove_dir(&report_dir).ok();
+  }
+  result
 }
 
 fn resolve_export_path(
@@ -458,6 +480,15 @@ fn write_new_export_file(path: &Path, bytes: &[u8]) -> AppResult<()> {
   options.mode(0o600);
   let mut file = options.open(path).map_err(export_error)?;
   let result = (|| -> AppResult<()> {
+    #[cfg(unix)]
+    {
+      file
+        .set_permissions(fs::Permissions::from_mode(0o600))
+        .map_err(export_error)?;
+      if file.metadata().map_err(export_error)?.permissions().mode() & 0o7777 != 0o600 {
+        return Err(export_error("导出文件系统无法保证 0600 私有权限"));
+      }
+    }
     file.write_all(bytes).map_err(export_error)?;
     file.sync_all().map_err(export_error)?;
     let parent = path
@@ -634,111 +665,5 @@ fn database_error(error: impl ToString) -> AppError {
 }
 
 #[cfg(test)]
-mod tests {
-  use super::*;
-  use crate::tasks::{create_collection_task, CreateCollectionTaskInput};
-  use crate::workspace::create_workspace;
-
-  #[test]
-  fn report_exports_xlsx_and_pdf_files() {
-    let root_path = unique_temp_workspace("exports");
-    create_workspace("导出测试", &root_path).expect("workspace should be created");
-    let task = create_collection_task(
-      &root_path,
-      CreateCollectionTaskInput {
-        name: "导出任务".to_string(),
-        source_type: "form".to_string(),
-        platforms: vec!["tiktok".to_string()],
-        data_types: vec!["comments".to_string()],
-      },
-    )
-    .expect("task should be created");
-    let report = build_report_model(&root_path, &task.id, "summary").expect("report built");
-    let xlsx = create_export_job(&root_path, &report.id, "xlsx", None).expect("xlsx exported");
-    let pdf = create_export_job(&root_path, &report.id, "pdf", None).expect("pdf exported");
-
-    assert_eq!(xlsx.status, "success");
-    assert_eq!(pdf.status, "success");
-    assert!(xlsx.file_path.expect("xlsx path").is_file());
-    assert!(pdf.file_path.expect("pdf path").is_file());
-    assert!(xlsx.file_hash.is_some());
-    assert!(pdf.file_size.unwrap_or_default() > 0);
-
-    std::fs::remove_dir_all(root_path).ok();
-  }
-
-  #[test]
-  fn custom_export_target_must_be_new_and_match_the_export_type() {
-    let (root_path, report) = test_report("custom-target");
-    let existing = root_path.join("existing.pdf");
-    fs::write(&existing, b"user content").expect("sentinel should be written");
-
-    let existing_result = create_export_job(
-      &root_path,
-      &report.id,
-      "pdf",
-      Some(existing.to_string_lossy().to_string()),
-    );
-    let wrong_extension = create_export_job(
-      &root_path,
-      &report.id,
-      "pdf",
-      Some(root_path.join("wrong.txt").to_string_lossy().to_string()),
-    );
-
-    assert!(existing_result.is_err());
-    assert_eq!(
-      fs::read(&existing).expect("sentinel should remain"),
-      b"user content"
-    );
-    assert!(wrong_extension.is_err());
-    std::fs::remove_dir_all(root_path).ok();
-  }
-
-  #[cfg(unix)]
-  #[test]
-  fn custom_export_target_rejects_symbolic_links() {
-    use std::os::unix::fs::symlink;
-
-    let (root_path, report) = test_report("target-symlink");
-    let sentinel = root_path.join("sentinel.pdf");
-    let target = root_path.join("linked.pdf");
-    fs::write(&sentinel, b"user content").expect("sentinel should be written");
-    symlink(&sentinel, &target).expect("target symlink should be created");
-
-    let result = create_export_job(
-      &root_path,
-      &report.id,
-      "pdf",
-      Some(target.to_string_lossy().to_string()),
-    );
-
-    assert!(result.is_err());
-    assert_eq!(
-      fs::read(&sentinel).expect("sentinel should remain"),
-      b"user content"
-    );
-    std::fs::remove_dir_all(root_path).ok();
-  }
-
-  fn test_report(label: &str) -> (std::path::PathBuf, ReportView) {
-    let root_path = unique_temp_workspace(label);
-    create_workspace("导出测试", &root_path).expect("workspace should be created");
-    let task = create_collection_task(
-      &root_path,
-      CreateCollectionTaskInput {
-        name: "导出任务".to_string(),
-        source_type: "form".to_string(),
-        platforms: vec!["tiktok".to_string()],
-        data_types: vec!["comments".to_string()],
-      },
-    )
-    .expect("task should be created");
-    let report = build_report_model(&root_path, &task.id, "summary").expect("report built");
-    (root_path, report)
-  }
-
-  fn unique_temp_workspace(label: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("smart-data-workbench-{label}-{}", Uuid::new_v4()))
-  }
-}
+#[path = "exports_tests.rs"]
+mod tests;
