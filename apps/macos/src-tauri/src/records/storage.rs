@@ -540,3 +540,7 @@ fn ensure_regular_file(path: &Path, label: &str) -> AppResult<()> {
   }
   Ok(())
 }
+
+#[cfg(test)]
+#[path = "storage_tests.rs"]
+mod tests;
