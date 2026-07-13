@@ -229,7 +229,7 @@ fn new_workspace_creates_tikhub_connector_schema_and_marker() {
   let (migration_name, checksum) = migration_marker(&connection, 3);
   assert_eq!(migration_name, "tikhub_connector");
   assert_eq!(checksum, TIKHUB_CONNECTOR_MIGRATION_CHECKSUM);
-  assert_eq!(workspace.schema_version, 3);
+  assert_eq!(workspace.schema_version, 4);
   fs::remove_dir_all(root_path).ok();
 }
 
@@ -324,7 +324,7 @@ fn opening_v2_workspace_migrates_connector_schema_without_data_loss() {
   let migrated =
     open_workspace_database(root_path.join(DATABASE_FILE_NAME)).expect("database should reopen");
 
-  assert_eq!(summary.schema_version, 3);
+  assert_eq!(summary.schema_version, 4);
   assert_eq!(object_count(&migrated, "table", "tikhub_connector"), 1);
   assert_eq!(
     migrated
@@ -532,7 +532,7 @@ fn opening_v1_workspace_migrates_record_observations_without_data_loss() {
     )
     .expect("legacy raw row should survive migration");
 
-  assert_eq!(summary.schema_version, 3);
+  assert_eq!(summary.schema_version, 4);
   assert_eq!(migrated_raw.0.as_deref(), Some(run_id.as_str()));
   assert_eq!(migrated_raw.1, "keyword_search");
   assert_eq!(object_count(&migrated, "table", "raw_record"), 1);
