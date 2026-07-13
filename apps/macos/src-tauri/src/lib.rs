@@ -6,6 +6,7 @@ pub mod exports;
 mod planning;
 pub mod prompts;
 pub mod providers;
+pub mod records;
 pub mod secrets;
 pub mod tasks;
 pub mod tikhub;
