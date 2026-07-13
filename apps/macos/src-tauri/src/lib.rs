@@ -12,7 +12,7 @@ pub mod tasks;
 pub mod tikhub;
 pub mod workspace;
 
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 
 use ai::{AiRunView, GenerateCollectionPlanFromTextInput, GeneratedCollectionPlanView};
 use app_state::{AppState, BackendStatus, WorkspaceContext};
@@ -572,14 +572,33 @@ fn list_export_jobs(
 }
 
 fn resolve_workspace_root(root_path: Option<String>, state: &AppState) -> AppResult<PathBuf> {
-  if let Some(root_path) = root_path {
-    return Ok(PathBuf::from(root_path));
-  }
-
-  state
+  let active = state
     .active_workspace()
-    .map(|workspace| workspace.root_path)
-    .ok_or_else(|| AppError::validation("当前没有打开的工作区", AppErrorStage::Workspace))
+    .ok_or_else(|| AppError::validation("当前没有打开的工作区", AppErrorStage::Workspace))?;
+  if let Some(requested_root) = root_path {
+    let requested_root = canonical_command_root(PathBuf::from(requested_root))?;
+    let active_root = canonical_command_root(&active.root_path)?;
+    if requested_root != active_root {
+      return Err(AppError::new(
+        domain::AppErrorCode::PermissionError,
+        "命令指定的工作区与当前活动工作区不一致",
+        AppErrorStage::Workspace,
+        false,
+      ));
+    }
+  }
+  Ok(active.root_path)
+}
+
+fn canonical_command_root(root_path: impl AsRef<std::path::Path>) -> AppResult<PathBuf> {
+  fs::canonicalize(root_path).map_err(|_| {
+    AppError::new(
+      domain::AppErrorCode::WorkspaceError,
+      "工作区根目录不存在或无法访问",
+      AppErrorStage::Workspace,
+      false,
+    )
+  })
 }
 
 fn workspace_context_from_summary(summary: &WorkspaceSummary) -> WorkspaceContext {
@@ -663,4 +682,44 @@ pub fn run() {
     })
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod command_tests {
+  use super::*;
+
+  #[test]
+  fn command_root_must_match_the_active_workspace() {
+    let active_root = std::env::temp_dir().join(format!("active-root-{}", uuid::Uuid::new_v4()));
+    let other_root = std::env::temp_dir().join(format!("other-root-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&active_root).expect("active root should exist");
+    std::fs::create_dir_all(&other_root).expect("other root should exist");
+    let state = AppState::new();
+    state.set_active_workspace(WorkspaceContext {
+      id: "active-workspace".to_string(),
+      name: "活动工作区".to_string(),
+      root_path: active_root.clone(),
+      schema_version: workspace::CURRENT_SCHEMA_VERSION,
+    });
+
+    let matching = resolve_workspace_root(Some(active_root.to_string_lossy().to_string()), &state);
+    let mismatched = resolve_workspace_root(Some(other_root.to_string_lossy().to_string()), &state);
+
+    assert_eq!(matching.expect("matching root should pass"), active_root);
+    assert_eq!(
+      mismatched.expect_err("other root must be rejected").code,
+      domain::AppErrorCode::PermissionError
+    );
+    std::fs::remove_dir_all(active_root).ok();
+    std::fs::remove_dir_all(other_root).ok();
+  }
+
+  #[test]
+  fn command_root_cannot_replace_a_missing_active_workspace() {
+    let state = AppState::new();
+    let error = resolve_workspace_root(Some("/tmp/arbitrary-workspace".to_string()), &state)
+      .expect_err("commands require an active workspace");
+
+    assert_eq!(error.code, domain::AppErrorCode::ValidationError);
+  }
 }
