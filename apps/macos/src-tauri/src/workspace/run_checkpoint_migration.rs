@@ -294,7 +294,7 @@ mod tests {
   fn fresh_workspace_has_v4_schema_marker_and_checkpoint_constraints() {
     let (root, schema_version, connection) = fresh_workspace("v4-fresh");
 
-    assert_eq!(schema_version, 4);
+    assert_eq!(schema_version, CURRENT_SCHEMA_VERSION);
     assert_eq!(marker(&connection, 4).0, "run_checkpoint");
     assert_eq!(
       marker(&connection, 4).1,
@@ -408,7 +408,7 @@ mod tests {
       )
       .expect("migrated run should load");
 
-    assert_eq!(summary.schema_version, 4);
+    assert_eq!(summary.schema_version, CURRENT_SCHEMA_VERSION);
     assert_eq!(
       migrated,
       (Some("plan-new".to_string()), 1, "queued".to_string())
