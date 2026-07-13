@@ -8,8 +8,8 @@ use uuid::Uuid;
 use crate::domain::{redact_sensitive_text, AppResult};
 
 use super::{
-  database_error, get_task_by_id, get_task_run, map_task_run, normalize_required,
-  open_workspace_connection, task_error, CollectionTaskView, TaskRunView,
+  database_error, get_task_by_id, get_task_run, latest_plan_for_task, map_task_run,
+  normalize_required, open_workspace_connection, task_error, CollectionTaskView, TaskRunView,
 };
 
 pub fn enqueue_task(root_path: impl AsRef<Path>, task_id: &str) -> AppResult<TaskRunView> {
@@ -320,15 +320,25 @@ fn confirmed_plan_id(connection: &Connection, task_id: &str) -> AppResult<String
     )
     .map_err(database_error)?;
 
-  match (count, plan_id) {
-    (1, Some(plan_id)) => Ok(plan_id),
-    (0, _) => Err(task_error(
-      "任务没有唯一且有效的已确认采集计划，请重新确认后再运行",
-    )),
-    _ => Err(task_error(
-      "任务存在多个已确认采集计划，无法确定唯一执行计划",
-    )),
+  let plan_id = match (count, plan_id) {
+    (1, Some(plan_id)) => plan_id,
+    (0, _) => {
+      return Err(task_error(
+        "任务没有唯一且有效的已确认采集计划，请重新确认后再运行",
+      ))
+    }
+    _ => {
+      return Err(task_error(
+        "任务存在多个已确认采集计划，无法确定唯一执行计划",
+      ))
+    }
+  };
+  if latest_plan_for_task(connection, task_id)?.id != plan_id {
+    return Err(task_error(
+      "当前确认的采集计划不是最新计划，请重新确认最新采集计划",
+    ));
   }
+  Ok(plan_id)
 }
 
 fn latest_failed_plan_id(connection: &Connection, task_id: &str) -> AppResult<String> {

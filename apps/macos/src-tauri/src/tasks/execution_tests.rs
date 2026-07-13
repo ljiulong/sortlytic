@@ -293,6 +293,191 @@ fn enqueue_rejects_ambiguous_confirmed_plans_without_mutation() {
 }
 
 #[test]
+fn enqueue_rejects_a_stale_confirmation_when_a_newer_plan_exists() {
+  let (root_path, task, first_plan) = prepared_task_workspace("execution-stale-confirmation");
+  let mut replacement_input = execution_plan_input(&task.id);
+  replacement_input.source = "user_edited".to_string();
+  replacement_input.plan_json["steps"][0]["params"]["item_id"] = serde_json::json!("video-2");
+  let replacement =
+    save_collection_plan(&root_path, replacement_input).expect("replacement plan should save");
+
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  connection
+    .execute(
+      "UPDATE collection_plan
+       SET confirmed_by_user = 1, validation_status = 'valid',
+           created_at = '2026-07-13T08:00:00+00:00'
+       WHERE id = ?1",
+      params![first_plan.id],
+    )
+    .expect("late confirmation should restore the stale plan marker");
+  connection
+    .execute(
+      "UPDATE collection_plan
+       SET confirmed_by_user = 0, created_at = '2026-07-13T08:00:01+00:00'
+       WHERE id = ?1",
+      params![replacement.id],
+    )
+    .expect("replacement should remain the latest unconfirmed plan");
+  connection
+    .execute(
+      "UPDATE collection_task
+       SET status = 'waiting_confirmation', confirmed_at = '2026-07-13T08:00:02+00:00'
+       WHERE id = ?1",
+      params![task.id],
+    )
+    .expect("late confirmation should restore the task marker");
+  let fixture = connection
+    .query_row(
+      "SELECT
+         (SELECT id FROM collection_plan WHERE task_id = ?1
+          ORDER BY created_at DESC, id DESC LIMIT 1),
+         (SELECT id FROM collection_plan WHERE task_id = ?1
+          AND confirmed_by_user = 1 AND validation_status = 'valid'),
+         (SELECT confirmed_at FROM collection_task WHERE id = ?1)",
+      params![task.id],
+      |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, String>(1)?,
+          row.get::<_, Option<String>>(2)?,
+        ))
+      },
+    )
+    .expect("race fixture should be readable");
+  assert_eq!(fixture.0, replacement.id);
+  assert_eq!(fixture.1, first_plan.id);
+  assert!(fixture.2.is_some());
+  drop(connection);
+
+  let error = enqueue_task(&root_path, &task.id)
+    .expect_err("stale confirmation must not enqueue an older plan");
+  assert!(error.message.contains("最新") && error.message.contains("重新确认"));
+
+  let connection = open_workspace_connection(&root_path).expect("database should reopen");
+  let run_count = connection
+    .query_row(
+      "SELECT COUNT(*) FROM task_run WHERE task_id = ?1",
+      params![task.id],
+      |row| row.get::<_, i64>(0),
+    )
+    .expect("run count should load");
+  let task_state = connection
+    .query_row(
+      "SELECT status, confirmed_at FROM collection_task WHERE id = ?1",
+      params![task.id],
+      |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+    )
+    .expect("task state should load");
+  assert_eq!(run_count, 0);
+  assert_eq!(task_state.0, "waiting_confirmation");
+  assert!(task_state.1.is_some());
+  drop(connection);
+
+  confirm_collection_plan(&root_path, &task.id, &replacement.id)
+    .expect("latest replacement should be confirmable after rejecting stale state");
+  let run = enqueue_task(&root_path, &task.id).expect("latest confirmed plan should enqueue");
+  assert_eq!(run.plan_id.as_deref(), Some(replacement.id.as_str()));
+  let connection = open_workspace_connection(&root_path).expect("database should reopen");
+  let confirmed_ids = {
+    let mut statement = connection
+      .prepare(
+        "SELECT id FROM collection_plan
+         WHERE task_id = ?1 AND confirmed_by_user = 1
+         ORDER BY created_at DESC, id DESC",
+      )
+      .expect("confirmed plan query should prepare");
+    let rows = statement
+      .query_map(params![task.id], |row| row.get::<_, String>(0))
+      .expect("confirmed plans should query");
+    rows
+      .collect::<rusqlite::Result<Vec<_>>>()
+      .expect("confirmed plans should load")
+  };
+  assert_eq!(confirmed_ids, vec![replacement.id]);
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn failed_confirmation_persists_needs_review_before_returning_error() {
+  let (root_path, task, plan) = prepared_task_workspace("execution-invalid-confirmation");
+  let mut invalid_plan = execution_plan_input(&task.id).plan_json;
+  invalid_plan["time_range"] = Value::Null;
+  invalid_plan["steps"][0]["params"]["time_range"] = Value::Null;
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  connection
+    .execute(
+      "UPDATE collection_plan
+       SET plan_json = ?1, validation_status = 'valid', validation_errors_json = '[]',
+           confirmed_by_user = 1
+       WHERE id = ?2",
+      params![invalid_plan.to_string(), plan.id],
+    )
+    .expect("test fixture should invalidate the persisted plan");
+  drop(connection);
+
+  let error = confirm_collection_plan(&root_path, &task.id, &plan.id)
+    .expect_err("invalid persisted plan must fail confirmation");
+  assert!(error.message.contains("未通过后端校验"));
+
+  let connection = open_workspace_connection(&root_path).expect("database should reopen");
+  let persisted = connection
+    .query_row(
+      "SELECT validation_status, validation_errors_json, confirmed_by_user,
+              (SELECT confirmed_at FROM collection_task WHERE id = ?2)
+       FROM collection_plan WHERE id = ?1",
+      params![plan.id, task.id],
+      |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, String>(1)?,
+          row.get::<_, i64>(2)?,
+          row.get::<_, Option<String>>(3)?,
+        ))
+      },
+    )
+    .expect("failed validation state should load");
+  assert_eq!(persisted.0, "needs_review");
+  assert!(serde_json::from_str::<Vec<String>>(&persisted.1).is_ok_and(|errors| !errors.is_empty()));
+  assert_eq!(persisted.2, 0);
+  assert!(persisted.3.is_none());
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn latest_plan_order_breaks_timestamp_ties_by_id() {
+  let (root_path, task, first_plan) = prepared_task_workspace("execution-plan-order-tie");
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  connection
+    .execute(
+      "INSERT INTO collection_plan (
+        id, task_id, source, schema_version, plan_json, validation_status,
+        validation_errors_json, cost_estimate_json, confirmed_by_user, created_at, updated_at
+      )
+      SELECT 'zz-tiebreak-plan', task_id, source, schema_version, plan_json,
+             validation_status, validation_errors_json, cost_estimate_json, 0,
+             '2026-07-13T08:00:00+00:00', updated_at
+      FROM collection_plan WHERE id = ?1",
+      params![first_plan.id],
+    )
+    .expect("tie-break plan should insert");
+  connection
+    .execute(
+      "UPDATE collection_plan SET created_at = '2026-07-13T08:00:00+00:00'
+       WHERE id = ?1",
+      params![first_plan.id],
+    )
+    .expect("first plan timestamp should match");
+
+  let latest = latest_plan_for_task(&connection, &task.id).expect("latest plan should load");
+  assert_eq!(latest.id, "zz-tiebreak-plan");
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn cancelling_a_running_task_preserves_claim_audit_time() {
   let (root_path, task, _) = prepared_task_workspace("execution-cancel-claim");
   enqueue_task(&root_path, &task.id).expect("task should enqueue");

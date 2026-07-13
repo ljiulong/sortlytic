@@ -361,21 +361,25 @@ pub fn confirm_collection_plan(
   task_id: &str,
   plan_id: &str,
 ) -> AppResult<CollectionTaskView> {
-  let connection = open_workspace_connection(root_path)?;
-  let plan = get_collection_plan(&connection, plan_id)?;
-  let task = get_task_by_id(&connection, task_id)?;
+  let mut connection = open_workspace_connection(root_path)?;
+  let transaction = connection
+    .transaction_with_behavior(TransactionBehavior::Immediate)
+    .map_err(database_error)?;
+  let plan = get_collection_plan(&transaction, plan_id)?;
+  let task = get_task_by_id(&transaction, task_id)?;
 
   if plan.task_id != task_id {
     return Err(task_error("采集计划不属于当前任务"));
   }
 
-  if latest_plan_for_task(&connection, task_id)?.id != plan.id {
+  if latest_plan_for_task(&transaction, task_id)?.id != plan.id {
     return Err(task_error("只能确认当前任务的最新采集计划"));
   }
 
   let validation_errors = validate_plan_for_task(&task, &plan.plan_json);
   if !validation_errors.is_empty() {
-    connection
+    let now = Utc::now().to_rfc3339();
+    transaction
       .execute(
         "UPDATE collection_plan
          SET validation_status = 'needs_review', validation_errors_json = ?1,
@@ -383,30 +387,55 @@ pub fn confirm_collection_plan(
          WHERE id = ?3",
         params![
           serde_json::json!(validation_errors).to_string(),
-          Utc::now().to_rfc3339(),
+          now,
           plan_id
         ],
       )
       .map_err(database_error)?;
+    transaction
+      .execute(
+        "UPDATE collection_task SET confirmed_at = NULL, updated_at = ?1 WHERE id = ?2",
+        params![now, task_id],
+      )
+      .map_err(database_error)?;
+    transaction.commit().map_err(database_error)?;
     return Err(task_error("采集计划未通过后端校验，不能确认"));
   }
 
   let now = Utc::now().to_rfc3339();
-  connection
+  transaction
+    .execute(
+      "UPDATE collection_plan
+       SET confirmed_by_user = 0, updated_at = ?1
+       WHERE task_id = ?2 AND id <> ?3 AND confirmed_by_user = 1",
+      params![now, task_id, plan_id],
+    )
+    .map_err(database_error)?;
+  let confirmed = transaction
     .execute(
       "UPDATE collection_plan
        SET validation_status = 'valid', validation_errors_json = '[]',
            confirmed_by_user = 1, updated_at = ?1
-       WHERE id = ?2",
-      params![now, plan_id],
+       WHERE id = ?2 AND task_id = ?3
+         AND id = (
+           SELECT id FROM collection_plan
+           WHERE task_id = ?3
+           ORDER BY created_at DESC, id DESC
+           LIMIT 1
+         )",
+      params![now, plan_id, task_id],
     )
     .map_err(database_error)?;
-  connection
+  if confirmed != 1 {
+    return Err(task_error("采集计划状态已变化，请重新确认最新采集计划"));
+  }
+  transaction
     .execute(
       "UPDATE collection_task SET confirmed_at = ?1, updated_at = ?1 WHERE id = ?2",
       params![now, task_id],
     )
     .map_err(database_error)?;
+  transaction.commit().map_err(database_error)?;
 
   get_task_by_id(&connection, task_id)
 }
@@ -544,7 +573,7 @@ fn latest_plan_for_task(connection: &Connection, task_id: &str) -> AppResult<Col
               validation_errors_json, cost_estimate_json, confirmed_by_user, created_at, updated_at
        FROM collection_plan
        WHERE task_id = ?1
-       ORDER BY created_at DESC
+       ORDER BY created_at DESC, id DESC
        LIMIT 1",
       params![task_id],
       map_collection_plan,
