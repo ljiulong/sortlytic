@@ -17,9 +17,12 @@ use schema::{
   TIKHUB_CONNECTOR_MIGRATION_SQL,
 };
 use security::{
-  canonicalize_database_file, canonicalize_workspace_root, ensure_database_path_available,
-  validate_workspace_database, validate_workspace_directory, validate_workspace_directory_entries,
-  validate_workspace_identity, validate_workspace_root_for_creation,
+  canonicalize_database_file, canonicalize_workspace_root, create_private_database_file,
+  create_private_workspace_directories, create_private_workspace_root,
+  ensure_database_path_available, secure_existing_workspace_permissions,
+  validate_private_database_files, validate_private_workspace_permissions,
+  validate_workspace_database, validate_workspace_directory_entries, validate_workspace_identity,
+  validate_workspace_root_for_creation,
 };
 
 mod run_checkpoint_migration;
@@ -69,21 +72,16 @@ pub fn create_workspace(name: &str, root_path: impl AsRef<Path>) -> AppResult<Wo
   ensure_database_path_available(&root_path.join(DATABASE_FILE_NAME))?;
   validate_workspace_directory_entries(&root_path)?;
 
-  fs::create_dir_all(&root_path).map_err(|error| {
-    workspace_error(format!(
-      "无法创建工作区目录 {}：{}",
-      root_path.display(),
-      error
-    ))
-  })?;
+  create_private_workspace_root(&root_path)?;
 
   let root_path = canonicalize_workspace_root(&root_path)?;
   let database_path = root_path.join(DATABASE_FILE_NAME);
   ensure_database_path_available(&database_path)?;
   validate_workspace_directory_entries(&root_path)?;
-  create_workspace_directories(&root_path)?;
+  create_private_workspace_directories(&root_path)?;
+  create_private_database_file(&database_path)?;
 
-  let mut connection = create_workspace_database(&database_path)?;
+  let mut connection = open_workspace_database(&database_path)?;
   apply_schema(&mut connection)?;
 
   let now = Utc::now().to_rfc3339();
@@ -119,7 +117,9 @@ pub fn create_workspace(name: &str, root_path: impl AsRef<Path>) -> AppResult<Wo
     )
     .map_err(database_error)?;
 
-  get_workspace_summary(&connection, &root_path, &database_path)
+  let summary = get_workspace_summary(&connection, &root_path, &database_path)?;
+  validate_private_workspace_permissions(&root_path, &database_path)?;
+  Ok(summary)
 }
 
 pub fn ensure_workspace(name: &str, root_path: impl AsRef<Path>) -> AppResult<WorkspaceSummary> {
@@ -143,11 +143,12 @@ pub fn open_workspace(root_path: impl AsRef<Path>) -> AppResult<WorkspaceSummary
   let database_path = validate_workspace_database(&root_path)?;
   validate_workspace_directory_entries(&root_path)?;
   validate_workspace_identity(&root_path, &database_path)?;
+  secure_existing_workspace_permissions(&root_path, &database_path)?;
 
   let mut connection = open_workspace_database(&database_path)?;
   apply_schema(&mut connection)?;
   let mut summary = get_workspace_summary(&connection, &root_path, &database_path)?;
-  create_workspace_directories(&root_path)?;
+  create_private_workspace_directories(&root_path)?;
   let now = Utc::now().to_rfc3339();
 
   connection
@@ -159,6 +160,7 @@ pub fn open_workspace(root_path: impl AsRef<Path>) -> AppResult<WorkspaceSummary
 
   summary.last_opened_at = now.clone();
   summary.updated_at = now;
+  validate_private_workspace_permissions(&root_path, &database_path)?;
   Ok(summary)
 }
 
@@ -168,6 +170,7 @@ pub fn run_workspace_health_check(root_path: impl AsRef<Path>) -> AppResult<Work
   let database_path = validate_workspace_database(&root_path)?;
   validate_workspace_directory_entries(&root_path)?;
   validate_workspace_identity(&root_path, &database_path)?;
+  secure_existing_workspace_permissions(&root_path, &database_path)?;
   let connection = open_workspace_database(&database_path)?;
   let summary = get_workspace_summary(&connection, &root_path, &database_path)?;
 
@@ -194,39 +197,33 @@ pub fn run_workspace_health_check(root_path: impl AsRef<Path>) -> AppResult<Work
     .map(|rows| rows == 1)
     .map_err(database_error)?;
 
-  Ok(WorkspaceHealthCheck {
+  let health = WorkspaceHealthCheck {
     workspace_id: summary.id,
     database_quick_check,
     foreign_keys_enabled,
     journal_mode,
     missing_directories,
     database_writable,
-  })
+  };
+  validate_private_database_files(&database_path)?;
+  Ok(health)
 }
 
 pub fn open_workspace_database(database_path: impl AsRef<Path>) -> AppResult<Connection> {
   let database_path = canonicalize_database_file(database_path.as_ref())?;
+  validate_private_database_files(&database_path)?;
   let connection = Connection::open_with_flags(
-    database_path,
+    &database_path,
     OpenFlags::SQLITE_OPEN_READ_WRITE
       | OpenFlags::SQLITE_OPEN_URI
       | OpenFlags::SQLITE_OPEN_NOFOLLOW,
   )
   .map_err(database_error)?;
   apply_connection_pragmas(&connection)?;
-  Ok(connection)
-}
-
-fn create_workspace_database(database_path: &Path) -> AppResult<Connection> {
-  let connection = Connection::open_with_flags(
-    database_path,
-    OpenFlags::SQLITE_OPEN_READ_WRITE
-      | OpenFlags::SQLITE_OPEN_CREATE
-      | OpenFlags::SQLITE_OPEN_URI
-      | OpenFlags::SQLITE_OPEN_NOFOLLOW,
-  )
-  .map_err(database_error)?;
-  apply_connection_pragmas(&connection)?;
+  connection
+    .execute_batch("BEGIN IMMEDIATE; ROLLBACK;")
+    .map_err(database_error)?;
+  validate_private_database_files(&database_path)?;
   Ok(connection)
 }
 
@@ -254,30 +251,6 @@ fn normalize_workspace_path(root_path: impl AsRef<Path>) -> AppResult<PathBuf> {
   }
 
   Ok(root_path.to_path_buf())
-}
-
-fn create_workspace_directories(root_path: &Path) -> AppResult<()> {
-  for directory in WORKSPACE_DIRS {
-    let mut path = root_path.to_path_buf();
-    for component in directory.split('/') {
-      path.push(component);
-      match fs::create_dir(&path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
-          validate_workspace_directory(&path)?
-        }
-        Err(error) => {
-          return Err(workspace_error(format!(
-            "无法创建工作区子目录 {}：{}",
-            path.display(),
-            error
-          )))
-        }
-      }
-    }
-  }
-
-  Ok(())
 }
 
 fn apply_connection_pragmas(connection: &Connection) -> AppResult<()> {
@@ -748,3 +721,7 @@ mod tests {
 #[cfg(test)]
 #[path = "workspace/migration_tests.rs"]
 mod migration_tests;
+
+#[cfg(all(test, unix))]
+#[path = "workspace/permission_tests.rs"]
+mod permission_tests;
