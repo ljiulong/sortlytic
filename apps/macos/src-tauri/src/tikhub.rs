@@ -39,7 +39,7 @@ pub fn test_tikhub_connection(
   base_url: Option<String>,
 ) -> AppResult<TikhubConnectionTestResult> {
   let base_url = normalize_tikhub_base_url(base_url)?;
-  let token = read_secret_for_backend(root_path, secret_ref_id)?;
+  let token = read_secret_for_backend(root_path, secret_ref_id, "tikhub")?;
   let client = reqwest::blocking::Client::builder()
     .timeout(Duration::from_secs(20))
     .build()
@@ -245,6 +245,32 @@ fn mask_email(email: &str) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn rejects_non_tikhub_secret_reference_before_reading_the_keychain() {
+    let root = std::env::temp_dir().join(format!("tikhub-secret-type-{}", uuid::Uuid::new_v4()));
+    crate::workspace::create_workspace("TikHub 密钥类型测试", &root)
+      .expect("workspace should be created");
+    let connection =
+      crate::workspace::open_workspace_database(root.join(crate::workspace::DATABASE_FILE_NAME))
+        .expect("database should open");
+    let secret_id = uuid::Uuid::new_v4().to_string();
+    connection
+      .execute(
+        "INSERT INTO secret_ref (
+          id, provider_type, provider_id, secret_store_key, masked_hint, created_at, updated_at
+        ) VALUES (?1, 'model_provider', 'openai', 'missing-test-key', '[REDACTED]', ?2, ?2)",
+        rusqlite::params![secret_id, "2026-07-13T00:00:00+00:00"],
+      )
+      .expect("wrong-type secret metadata should insert");
+
+    let error = test_tikhub_connection(&root, &secret_id, None)
+      .expect_err("a model provider secret must never be sent to TikHub");
+
+    assert_eq!(error.code, AppErrorCode::PermissionError);
+    assert!(error.message.contains("密钥类型"));
+    std::fs::remove_dir_all(root).ok();
+  }
 
   #[test]
   fn base_url_is_limited_to_official_tikhub_domains() {

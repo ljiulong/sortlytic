@@ -224,9 +224,19 @@ pub fn test_secret_connection(
 pub fn read_secret_for_backend(
   root_path: impl AsRef<Path>,
   secret_ref_id: &str,
+  expected_provider_type: &str,
 ) -> AppResult<String> {
+  let expected_provider_type = normalize_provider_type(expected_provider_type)?;
   let connection = open_workspace_connection(root_path)?;
   let metadata = get_secret_metadata(&connection, secret_ref_id)?;
+  if metadata.provider_type != expected_provider_type {
+    return Err(AppError::new(
+      AppErrorCode::PermissionError,
+      "密钥类型与当前调用目标不匹配",
+      AppErrorStage::SecretStore,
+      false,
+    ));
+  }
   keychain_entry(&metadata.secret_store_key)?
     .get_password()
     .map_err(secret_store_error)
