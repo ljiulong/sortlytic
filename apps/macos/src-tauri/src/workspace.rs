@@ -1,8 +1,9 @@
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -11,8 +12,14 @@ use schema::{
   record_observation_migration_checksum, schema_checksum, RECORD_OBSERVATION_INDEX_SQL,
   RECORD_OBSERVATION_MIGRATION_SQL, SCHEMA_SQL,
 };
+use security::{
+  canonicalize_database_file, canonicalize_workspace_root, ensure_database_path_available,
+  validate_workspace_database, validate_workspace_directory, validate_workspace_directory_entries,
+  validate_workspace_identity, validate_workspace_root_for_creation,
+};
 
 mod schema;
+mod security;
 
 pub const CURRENT_SCHEMA_VERSION: i64 = 2;
 pub const DATABASE_FILE_NAME: &str = "app.sqlite";
@@ -53,7 +60,9 @@ pub struct WorkspaceHealthCheck {
 pub fn create_workspace(name: &str, root_path: impl AsRef<Path>) -> AppResult<WorkspaceSummary> {
   let name = normalize_workspace_name(name)?;
   let root_path = normalize_workspace_path(root_path)?;
-  let database_path = root_path.join(DATABASE_FILE_NAME);
+  validate_workspace_root_for_creation(&root_path)?;
+  ensure_database_path_available(&root_path.join(DATABASE_FILE_NAME))?;
+  validate_workspace_directory_entries(&root_path)?;
 
   fs::create_dir_all(&root_path).map_err(|error| {
     workspace_error(format!(
@@ -63,17 +72,14 @@ pub fn create_workspace(name: &str, root_path: impl AsRef<Path>) -> AppResult<Wo
     ))
   })?;
 
+  let root_path = canonicalize_workspace_root(&root_path)?;
+  let database_path = root_path.join(DATABASE_FILE_NAME);
+  ensure_database_path_available(&database_path)?;
+  validate_workspace_directory_entries(&root_path)?;
   create_workspace_directories(&root_path)?;
 
-  let mut connection = open_workspace_database(&database_path)?;
+  let mut connection = create_workspace_database(&database_path)?;
   apply_schema(&mut connection)?;
-
-  if existing_workspace(&connection)?.is_some() {
-    return Err(AppError::validation(
-      "该目录已经是工作区，请改用打开工作区",
-      AppErrorStage::Workspace,
-    ));
-  }
 
   let now = Utc::now().to_rfc3339();
   let workspace_id = Uuid::new_v4().to_string();
@@ -108,35 +114,35 @@ pub fn create_workspace(name: &str, root_path: impl AsRef<Path>) -> AppResult<Wo
     )
     .map_err(database_error)?;
 
-  get_workspace_summary(&connection, &database_path)
+  get_workspace_summary(&connection, &root_path, &database_path)
 }
 
 pub fn ensure_workspace(name: &str, root_path: impl AsRef<Path>) -> AppResult<WorkspaceSummary> {
   let root_path = normalize_workspace_path(root_path)?;
+  let database_path = root_path.join(DATABASE_FILE_NAME);
 
-  if root_path.join(DATABASE_FILE_NAME).exists() {
-    open_workspace(root_path)
-  } else {
-    create_workspace(name, root_path)
+  match fs::symlink_metadata(&database_path) {
+    Ok(_) => open_workspace(root_path),
+    Err(error) if error.kind() == ErrorKind::NotFound => create_workspace(name, root_path),
+    Err(error) => Err(workspace_error(format!(
+      "无法检查工作区数据库 {}：{}",
+      database_path.display(),
+      error
+    ))),
   }
 }
 
 pub fn open_workspace(root_path: impl AsRef<Path>) -> AppResult<WorkspaceSummary> {
   let root_path = normalize_workspace_path(root_path)?;
-  let database_path = root_path.join(DATABASE_FILE_NAME);
-
-  if !database_path.exists() {
-    return Err(workspace_error(format!(
-      "工作区数据库不存在：{}",
-      database_path.display()
-    )));
-  }
-
-  create_workspace_directories(&root_path)?;
+  let root_path = canonicalize_workspace_root(&root_path)?;
+  let database_path = validate_workspace_database(&root_path)?;
+  validate_workspace_directory_entries(&root_path)?;
+  validate_workspace_identity(&root_path, &database_path)?;
 
   let mut connection = open_workspace_database(&database_path)?;
   apply_schema(&mut connection)?;
-  let mut summary = get_workspace_summary(&connection, &database_path)?;
+  let mut summary = get_workspace_summary(&connection, &root_path, &database_path)?;
+  create_workspace_directories(&root_path)?;
   let now = Utc::now().to_rfc3339();
 
   connection
@@ -153,9 +159,12 @@ pub fn open_workspace(root_path: impl AsRef<Path>) -> AppResult<WorkspaceSummary
 
 pub fn run_workspace_health_check(root_path: impl AsRef<Path>) -> AppResult<WorkspaceHealthCheck> {
   let root_path = normalize_workspace_path(root_path)?;
-  let database_path = root_path.join(DATABASE_FILE_NAME);
+  let root_path = canonicalize_workspace_root(&root_path)?;
+  let database_path = validate_workspace_database(&root_path)?;
+  validate_workspace_directory_entries(&root_path)?;
+  validate_workspace_identity(&root_path, &database_path)?;
   let connection = open_workspace_database(&database_path)?;
-  let summary = get_workspace_summary(&connection, &database_path)?;
+  let summary = get_workspace_summary(&connection, &root_path, &database_path)?;
 
   let database_quick_check = connection
     .query_row("PRAGMA quick_check", [], |row| row.get::<_, String>(0))
@@ -191,7 +200,27 @@ pub fn run_workspace_health_check(root_path: impl AsRef<Path>) -> AppResult<Work
 }
 
 pub fn open_workspace_database(database_path: impl AsRef<Path>) -> AppResult<Connection> {
-  let connection = Connection::open(database_path).map_err(database_error)?;
+  let database_path = canonicalize_database_file(database_path.as_ref())?;
+  let connection = Connection::open_with_flags(
+    database_path,
+    OpenFlags::SQLITE_OPEN_READ_WRITE
+      | OpenFlags::SQLITE_OPEN_URI
+      | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+  )
+  .map_err(database_error)?;
+  apply_connection_pragmas(&connection)?;
+  Ok(connection)
+}
+
+fn create_workspace_database(database_path: &Path) -> AppResult<Connection> {
+  let connection = Connection::open_with_flags(
+    database_path,
+    OpenFlags::SQLITE_OPEN_READ_WRITE
+      | OpenFlags::SQLITE_OPEN_CREATE
+      | OpenFlags::SQLITE_OPEN_URI
+      | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+  )
+  .map_err(database_error)?;
   apply_connection_pragmas(&connection)?;
   Ok(connection)
 }
@@ -224,14 +253,23 @@ fn normalize_workspace_path(root_path: impl AsRef<Path>) -> AppResult<PathBuf> {
 
 fn create_workspace_directories(root_path: &Path) -> AppResult<()> {
   for directory in WORKSPACE_DIRS {
-    let path = root_path.join(directory);
-    fs::create_dir_all(&path).map_err(|error| {
-      workspace_error(format!(
-        "无法创建工作区子目录 {}：{}",
-        path.display(),
-        error
-      ))
-    })?;
+    let mut path = root_path.to_path_buf();
+    for component in directory.split('/') {
+      path.push(component);
+      match fs::create_dir(&path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+          validate_workspace_directory(&path)?
+        }
+        Err(error) => {
+          return Err(workspace_error(format!(
+            "无法创建工作区子目录 {}：{}",
+            path.display(),
+            error
+          )))
+        }
+      }
+    }
   }
 
   Ok(())
@@ -376,39 +414,14 @@ fn ensure_foreign_key_integrity(connection: &Connection) -> AppResult<()> {
   }
 }
 
-fn existing_workspace(connection: &Connection) -> AppResult<Option<WorkspaceSummary>> {
-  connection
-    .query_row(
-      "SELECT id, name, root_path, created_at, updated_at, schema_version, last_opened_at
-       FROM workspace
-       ORDER BY created_at
-       LIMIT 1",
-      [],
-      |row| {
-        let root_path = PathBuf::from(row.get::<_, String>(2)?);
-        Ok(WorkspaceSummary {
-          id: row.get(0)?,
-          name: row.get(1)?,
-          database_path: root_path.join(DATABASE_FILE_NAME),
-          root_path,
-          created_at: row.get(3)?,
-          updated_at: row.get(4)?,
-          schema_version: row.get(5)?,
-          last_opened_at: row.get(6)?,
-        })
-      },
-    )
-    .optional()
-    .map_err(database_error)
-}
-
 fn get_workspace_summary(
   connection: &Connection,
+  root_path: &Path,
   database_path: &Path,
 ) -> AppResult<WorkspaceSummary> {
   connection
     .query_row(
-      "SELECT id, name, root_path, created_at, updated_at, schema_version, last_opened_at
+      "SELECT id, name, created_at, updated_at, schema_version, last_opened_at
        FROM workspace
        ORDER BY created_at
        LIMIT 1",
@@ -417,12 +430,12 @@ fn get_workspace_summary(
         Ok(WorkspaceSummary {
           id: row.get(0)?,
           name: row.get(1)?,
-          root_path: PathBuf::from(row.get::<_, String>(2)?),
+          root_path: root_path.to_path_buf(),
           database_path: database_path.to_path_buf(),
-          created_at: row.get(3)?,
-          updated_at: row.get(4)?,
-          schema_version: row.get(5)?,
-          last_opened_at: row.get(6)?,
+          created_at: row.get(2)?,
+          updated_at: row.get(3)?,
+          schema_version: row.get(4)?,
+          last_opened_at: row.get(5)?,
         })
       },
     )
