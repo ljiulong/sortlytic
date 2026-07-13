@@ -17,6 +17,21 @@ pub struct PlatformCapabilityView {
   pub data_types: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PaginationMode {
+  Single,
+  Cursor,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FilterExecution {
+  Provider,
+  Local,
+  Unsupported,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DataTypeCapabilityView {
   pub platform: String,
@@ -25,7 +40,9 @@ pub struct DataTypeCapabilityView {
   pub endpoint_key: String,
   pub required_params: Vec<String>,
   pub optional_params: Vec<String>,
-  pub supports_region: bool,
+  pub pagination_mode: PaginationMode,
+  pub region_filter: FilterExecution,
+  pub time_range_filter: FilterExecution,
   pub max_page_size: i64,
   pub max_request_count: i64,
 }
@@ -92,13 +109,15 @@ pub fn validate_collection_params(
     }
   }
 
-  if normalized_params.get("region").is_some() && !endpoint.supports_region {
-    errors.push("该数据类型不支持国家/地区筛选".to_string());
-  }
-
-  if let Some(page_size) = normalized_params.get("page_size").and_then(Value::as_i64) {
-    if page_size > endpoint.max_page_size {
-      errors.push(format!("page_size 不能超过 {}", endpoint.max_page_size));
+  if let Some(value) = normalized_params.get("page_size") {
+    match value.as_i64() {
+      Some(page_size) if page_size > 0 && page_size <= endpoint.max_page_size => {}
+      _ => {
+        errors.push(format!(
+          "page_size 必须是大于 0 且不超过 {} 的整数",
+          endpoint.max_page_size
+        ));
+      }
     }
   }
 
@@ -110,7 +129,10 @@ pub fn validate_collection_params(
     .collect::<Vec<_>>();
   if let Some(object) = normalized_params.as_object() {
     for key in object.keys() {
-      if !allowed_params.contains(&key.as_str()) {
+      let legacy_readable_region = key == "region"
+        && matches!(endpoint.data_type, "account_profile" | "item_detail")
+        && endpoint.region_filter == FilterExecution::Unsupported;
+      if !allowed_params.contains(&key.as_str()) && !legacy_readable_region {
         errors.push(format!("参数 {key} 不在 endpoint 白名单内"));
       }
     }
@@ -138,7 +160,17 @@ pub fn validate_collection_plan(plan_json: &Value) -> CollectionPlanValidationRe
   let requires_time_range = data_types
     .iter()
     .any(|data_type| matches!(data_type.as_str(), "keyword_search" | "comments"));
-  let top_level_region = normalized_plan_region(plan_json.get("region"), &mut errors);
+  let requires_region = platforms.iter().any(|platform| {
+    data_types.iter().any(|data_type| {
+      find_endpoint(platform, data_type)
+        .is_some_and(|endpoint| endpoint.region_filter != FilterExecution::Unsupported)
+    })
+  });
+  let top_level_region = if requires_region {
+    normalized_plan_region(plan_json.get("region"), &mut errors)
+  } else {
+    None
+  };
   if requires_time_range
     && plan_json
       .get("time_range")
@@ -243,7 +275,7 @@ pub fn validate_collection_plan(plan_json: &Value) -> CollectionPlanValidationRe
       }
       Err(error) => errors.push(format!("{prefix}：{}", error.message)),
     }
-    if endpoint.supports_region {
+    if endpoint.region_filter != FilterExecution::Unsupported {
       let params_region = params
         .get("region")
         .and_then(Value::as_str)
@@ -285,6 +317,194 @@ pub fn validate_collection_plan(plan_json: &Value) -> CollectionPlanValidationRe
     valid: errors.is_empty(),
     errors,
   }
+}
+
+pub fn validate_collection_plan_v2(plan_json: &Value) -> CollectionPlanValidationResult {
+  let mut errors = validate_collection_plan(plan_json).errors;
+  let record_limit = positive_integer_field(plan_json, "record_limit");
+  if record_limit.is_none() {
+    errors.push("record_limit 必须是大于 0 的整数".to_string());
+  }
+  let request_limit = positive_integer_field(plan_json, "request_limit");
+  if request_limit.is_none() {
+    errors.push("request_limit 必须是大于 0 的整数".to_string());
+  }
+
+  match plan_json.get("budget_limit").and_then(Value::as_object) {
+    Some(budget_limit) => {
+      if budget_limit.get("currency").and_then(Value::as_str) != Some("USD") {
+        errors.push("budget_limit.currency 只能为 USD".to_string());
+      }
+      if budget_limit
+        .get("amount_micros")
+        .and_then(Value::as_i64)
+        .filter(|amount| *amount > 0)
+        .is_none()
+      {
+        errors.push("budget_limit.amount_micros 必须是大于 0 的整数微美元".to_string());
+      }
+    }
+    None => errors.push("budget_limit 必须是对象".to_string()),
+  }
+
+  let top_level_region = filter_constraint(plan_json.get("region"));
+  let top_level_time_range = filter_constraint(plan_json.get("time_range"));
+  if let Some(steps) = plan_json.get("steps").and_then(Value::as_array) {
+    for (index, step) in steps.iter().enumerate() {
+      let prefix = format!("steps[{index}]");
+      let Some(step_object) = step.as_object() else {
+        continue;
+      };
+      let Some(platform) = step_object.get("platform").and_then(Value::as_str) else {
+        continue;
+      };
+      let Some(data_type) = step_object.get("data_type").and_then(Value::as_str) else {
+        continue;
+      };
+      let Some(endpoint) = find_endpoint(platform.trim(), data_type.trim()) else {
+        continue;
+      };
+
+      if endpoint.pagination_mode == PaginationMode::Single && request_limit != Some(1) {
+        errors.push(format!(
+          "{prefix} 的 pagination_mode=single，request_limit 必须为 1"
+        ));
+      }
+
+      let params = step_object.get("params").and_then(Value::as_object);
+      let step_region = params
+        .and_then(|params| params.get("region"))
+        .and_then(|value| filter_constraint(Some(value)));
+      validate_filter_constraint(
+        &prefix,
+        "region",
+        endpoint.region_filter,
+        step_region.or(top_level_region),
+        &[],
+        &mut errors,
+      );
+
+      let step_time_range = params
+        .and_then(|params| params.get("time_range"))
+        .and_then(|value| filter_constraint(Some(value)));
+      validate_filter_constraint(
+        &prefix,
+        "time_range",
+        endpoint.time_range_filter,
+        step_time_range.or(top_level_time_range),
+        endpoint.provider_time_ranges,
+        &mut errors,
+      );
+
+      if endpoint.time_range_filter == FilterExecution::Provider {
+        validate_filter_values_match(
+          &prefix,
+          "time_range",
+          top_level_time_range,
+          step_time_range,
+          &mut errors,
+        );
+      }
+    }
+  }
+
+  errors.sort();
+  errors.dedup();
+  CollectionPlanValidationResult {
+    valid: errors.is_empty(),
+    errors,
+  }
+}
+
+fn positive_integer_field(plan_json: &Value, field: &str) -> Option<i64> {
+  plan_json
+    .get(field)
+    .and_then(Value::as_i64)
+    .filter(|value| *value > 0)
+}
+
+fn filter_constraint(value: Option<&Value>) -> Option<&Value> {
+  value.filter(|value| match value {
+    Value::Null => false,
+    Value::String(text) => !text.trim().is_empty(),
+    _ => true,
+  })
+}
+
+fn validate_filter_constraint(
+  prefix: &str,
+  field: &str,
+  execution: FilterExecution,
+  value: Option<&Value>,
+  provider_time_ranges: &[&str],
+  errors: &mut Vec<String>,
+) {
+  let Some(value) = value else {
+    return;
+  };
+
+  match execution {
+    FilterExecution::Provider => {
+      let Some(text) = value
+        .as_str()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+      else {
+        errors.push(format!("{prefix}.{field} 必须是非空字符串"));
+        return;
+      };
+      if field == "time_range"
+        && normalized_relative_days(text)
+          .filter(|days| provider_time_ranges.contains(&days.as_str()))
+          .is_none()
+      {
+        errors.push(format!(
+          "{prefix}.time_range 仅支持 {} 天（也可使用近N天表示）",
+          provider_time_ranges.join("/")
+        ));
+      }
+    }
+    FilterExecution::Local => errors.push(format!(
+      "{prefix}.{field} 需要本地过滤，但本地过滤器尚未接通"
+    )),
+    FilterExecution::Unsupported => {
+      errors.push(format!("{prefix} 的数据类型不支持 {field} 筛选"));
+    }
+  }
+}
+
+fn validate_filter_values_match(
+  prefix: &str,
+  field: &str,
+  top_level: Option<&Value>,
+  step_value: Option<&Value>,
+  errors: &mut Vec<String>,
+) {
+  let Some(top_level) = top_level.and_then(compact_filter_text) else {
+    return;
+  };
+  let Some(step_value) = step_value.and_then(compact_filter_text) else {
+    return;
+  };
+  if top_level != step_value {
+    errors.push(format!("{prefix}.params.{field} 与顶层 {field} 不一致"));
+  }
+}
+
+fn compact_filter_text(value: &Value) -> Option<String> {
+  value.as_str().and_then(normalized_relative_days)
+}
+
+fn normalized_relative_days(value: &str) -> Option<String> {
+  let compact = value
+    .chars()
+    .filter(|character| !character.is_whitespace())
+    .collect::<String>();
+  let days = compact
+    .strip_prefix('近')
+    .and_then(|value| value.strip_suffix('天'))
+    .unwrap_or(&compact);
+  (!days.is_empty()).then(|| days.to_string())
 }
 
 pub fn generate_form_collection_plan(
