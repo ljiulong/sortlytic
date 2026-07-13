@@ -46,6 +46,25 @@ export type TikhubConnectionTestResult = {
   message: string
 }
 
+export type TikhubConnectorInput = {
+  secret_ref_id?: string | null
+  base_url: string
+  enabled: boolean
+}
+
+export type TikhubConnectorView = {
+  id: string
+  workspace_id: string
+  secret_ref_id?: string | null
+  base_url: string
+  enabled: boolean
+  config_version: number
+  last_tested_at?: string | null
+  last_test_status?: string | null
+  created_at: string
+  updated_at: string
+}
+
 export type ModelProviderView = {
   id: string
   provider_id: string
@@ -248,6 +267,14 @@ export function saveSecret(input: {
   })
 }
 
+export function updateSecret(secretRefId: string, secret: string) {
+  return invoke<SecretRefView>('update_secret', {
+    secretRefId,
+    secret,
+    rootPath: null,
+  })
+}
+
 export function testSecretConnection(secretRefId: string) {
   return invoke<SecretConnectionTestResult>('test_secret_connection', {
     secretRefId,
@@ -259,6 +286,25 @@ export function testTikhubConnection(secretRefId: string, baseUrl: string) {
   return invoke<TikhubConnectionTestResult>('test_tikhub_connection', {
     secretRefId,
     baseUrl,
+    rootPath: null,
+  })
+}
+
+export function getTikhubConnector() {
+  return invoke<TikhubConnectorView | null>('get_tikhub_connector', {
+    rootPath: null,
+  })
+}
+
+export function saveTikhubConnector(input: TikhubConnectorInput) {
+  return invoke<TikhubConnectorView>('save_tikhub_connector', {
+    input,
+    rootPath: null,
+  })
+}
+
+export function testTikhubConnector() {
+  return invoke<TikhubConnectionTestResult>('test_tikhub_connector', {
     rootPath: null,
   })
 }

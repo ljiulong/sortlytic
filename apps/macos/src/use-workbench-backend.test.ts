@@ -5,11 +5,23 @@ import {
   backendErrorMessage,
   type CollectionPlanView,
   type CollectionTaskView,
+  getTikhubConnector,
+  saveTikhubConnector,
+  type SecretRefView,
+  testTikhubConnector,
+  type TikhubConnectorView,
+  updateSecret,
   type WorkspaceSummary,
 } from './backend-api'
-import { mapBackendData, planFromBackend, useWorkbenchBackend } from './use-workbench-backend'
+import {
+  mapBackendData,
+  planFromBackend,
+  saveAndTestTikhubToken,
+  useWorkbenchBackend,
+} from './use-workbench-backend'
 import { workspaceSnapshot } from './workbench-data'
 
+const invokeMock = vi.hoisted(() => vi.fn())
 const queryMock = vi.hoisted(() => ({
   current: {
     data: undefined as unknown,
@@ -18,6 +30,8 @@ const queryMock = vi.hoisted(() => ({
     isSuccess: false,
   },
 }))
+
+vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }))
 
 vi.mock('@tanstack/react-query', () => ({
   useMutation: () => ({
@@ -54,6 +68,31 @@ const task: CollectionTaskView = {
   actual_cost_json: {},
 }
 
+const tikhubSecret: SecretRefView = {
+  id: 'secret-tikhub-1',
+  provider_type: 'tikhub',
+  provider_id: 'default',
+  masked_hint: 'tikh...[REDACTED]...1234',
+}
+
+function connectorFixture(
+  overrides: Partial<TikhubConnectorView> = {},
+): TikhubConnectorView {
+  return {
+    id: 'default',
+    workspace_id: workspace.id,
+    secret_ref_id: tikhubSecret.id,
+    base_url: 'https://api.tikhub.io',
+    enabled: true,
+    config_version: 1,
+    last_tested_at: null,
+    last_test_status: null,
+    created_at: '2026-07-13T00:00:00Z',
+    updated_at: '2026-07-13T00:00:00Z',
+    ...overrides,
+  }
+}
+
 function renderWorkbenchHook() {
   let result: ReturnType<typeof useWorkbenchBackend> | undefined
 
@@ -72,12 +111,117 @@ function renderWorkbenchHook() {
 }
 
 beforeEach(() => {
+  invokeMock.mockReset()
   queryMock.current = {
     data: undefined,
     error: null,
     isLoading: true,
     isSuccess: false,
   }
+})
+
+describe('TikHub connector 后端 API', () => {
+  it('使用固定 command 和 camelCase 外层参数读写并测试 connector', async () => {
+    const input = {
+      secret_ref_id: tikhubSecret.id,
+      base_url: 'https://api.tikhub.io',
+      enabled: true,
+    }
+    invokeMock.mockResolvedValue(undefined)
+
+    await getTikhubConnector()
+    await saveTikhubConnector(input)
+    await testTikhubConnector()
+
+    expect(invokeMock).toHaveBeenNthCalledWith(1, 'get_tikhub_connector', {
+      rootPath: null,
+    })
+    expect(invokeMock).toHaveBeenNthCalledWith(2, 'save_tikhub_connector', {
+      input,
+      rootPath: null,
+    })
+    expect(invokeMock).toHaveBeenNthCalledWith(3, 'test_tikhub_connector', {
+      rootPath: null,
+    })
+  })
+
+  it('更新密钥时使用既有 secretRefId 且不创建新引用', async () => {
+    invokeMock.mockResolvedValue(undefined)
+
+    await updateSecret(tikhubSecret.id, 'replacement-token')
+
+    expect(invokeMock).toHaveBeenCalledWith('update_secret', {
+      secretRefId: tikhubSecret.id,
+      secret: 'replacement-token',
+      rootPath: null,
+    })
+  })
+
+  it('保存流程复用 connector 已绑定且仍存在的密钥引用', async () => {
+    const connector = connectorFixture()
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'get_tikhub_connector') return connector
+      if (command === 'list_secret_refs') return [tikhubSecret]
+      if (command === 'update_secret') return tikhubSecret
+      if (command === 'save_tikhub_connector') return connector
+      if (command === 'test_tikhub_connector') {
+        return {
+          success: true,
+          base_url: connector.base_url,
+          daily_usage_json: {},
+          message: 'TikHub Token 可用',
+        }
+      }
+      throw new Error(`意外命令：${command}`)
+    })
+
+    const result = await saveAndTestTikhubToken({
+      token: 'replacement-token',
+      baseUrl: connector.base_url,
+    })
+
+    expect(result.success).toBe(true)
+    expect(invokeMock.mock.calls.map(([command]) => command)).toEqual([
+      'get_tikhub_connector',
+      'list_secret_refs',
+      'update_secret',
+      'save_tikhub_connector',
+      'test_tikhub_connector',
+    ])
+    expect(invokeMock).not.toHaveBeenCalledWith('test_tikhub_connection', expect.anything())
+  })
+
+  it('connector 的密钥引用已丢失时创建新引用并重新绑定', async () => {
+    const connector = connectorFixture({ secret_ref_id: 'deleted-secret' })
+    const replacement = { ...tikhubSecret, id: 'replacement-secret' }
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'get_tikhub_connector') return connector
+      if (command === 'list_secret_refs') return [tikhubSecret]
+      if (command === 'save_secret') return replacement
+      if (command === 'save_tikhub_connector') return connector
+      if (command === 'test_tikhub_connector') {
+        return {
+          success: true,
+          base_url: connector.base_url,
+          daily_usage_json: {},
+          message: 'TikHub Token 可用',
+        }
+      }
+      throw new Error(`意外命令：${command}`)
+    })
+
+    await saveAndTestTikhubToken({ token: 'new-token', baseUrl: connector.base_url })
+
+    expect(invokeMock).toHaveBeenCalledWith('save_tikhub_connector', {
+      input: {
+        secret_ref_id: replacement.id,
+        base_url: connector.base_url,
+        enabled: true,
+      },
+      rootPath: null,
+    })
+    expect(invokeMock.mock.calls.map(([command]) => command)).not.toContain('update_secret')
+  })
 })
 
 describe('backendErrorMessage', () => {
@@ -88,7 +232,7 @@ describe('backendErrorMessage', () => {
 
 describe('mapBackendData', () => {
   it('不会把浏览器演示数据伪装成真实工作区结果', () => {
-    const result = mapBackendData(workspace, [task], [], [], 1_000)
+    const result = mapBackendData(workspace, [task], [], null, [], 1_000)
 
     expect(result.records).toEqual([])
     expect(result.promptRuns).toEqual([])
@@ -104,10 +248,43 @@ describe('mapBackendData', () => {
   })
 
   it('把 queued 明确映射为已排队，而不是运行中', () => {
-    const result = mapBackendData(workspace, [task], [], [], 1_000)
+    const result = mapBackendData(workspace, [task], [], null, [], 1_000)
 
     expect(result.tasks[0]?.status).toBe('已排队')
     expect(result.tasks[0]?.progress).toBe(0)
+  })
+
+  it('孤立 TikHub 密钥不会被当成已配置 connector', () => {
+    const result = mapBackendData(workspace, [], [tikhubSecret], null, [], 1_000)
+    const connection = result.connections[0]
+
+    expect(connection?.status).toBe('未配置')
+    expect(connection?.meta).not.toContain(tikhubSecret.masked_hint)
+  })
+
+  it.each([
+    ['待测试', connectorFixture()],
+    ['已验证', connectorFixture({ last_test_status: 'success' })],
+    ['测试失败', connectorFixture({ last_test_status: 'failed' })],
+    ['已禁用', connectorFixture({ enabled: false })],
+    ['需重新绑定', connectorFixture({ secret_ref_id: null })],
+  ])('把 connector 状态映射为“%s”', (expected, connector) => {
+    const result = mapBackendData(workspace, [], [tikhubSecret], connector, [], 1_000)
+    const connection = result.connections[0]
+
+    expect(connection?.status).toBe(expected)
+    expect(connection?.meta).toContain(connector.base_url)
+    if (connector.secret_ref_id) {
+      expect(connection?.meta).toContain(tikhubSecret.masked_hint)
+    }
+  })
+
+  it('连接卡片不会显示非官方 Base URL', () => {
+    const connector = connectorFixture({ base_url: 'https://untrusted.example/api' })
+    const result = mapBackendData(workspace, [], [tikhubSecret], connector, [], 1_000)
+
+    expect(result.connections[0]?.meta).not.toContain('untrusted.example')
+    expect(result.connections[0]?.meta).toContain(tikhubSecret.masked_hint)
   })
 })
 

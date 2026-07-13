@@ -12,11 +12,13 @@ import {
   generateCollectionPlanFromText,
   generateFormCollectionPlan,
   getBackendStatus,
+  getTikhubConnector,
   listModelProviders,
   listSecretRefs,
   listTasks,
   saveCollectionPlan,
   saveSecret,
+  saveTikhubConnector,
   setDefaultModel,
   type CollectionPlanView,
   type CollectionTaskView,
@@ -25,11 +27,13 @@ import {
   type ProviderTestResult,
   type SecretRefView,
   type TikhubConnectionTestResult,
+  type TikhubConnectorView,
   type WorkspaceSummary,
   testSecretConnection,
-  testTikhubConnection,
+  testTikhubConnector,
   testModelProvider,
   updateModelProvider,
+  updateSecret,
   upsertModelProfile,
 } from './backend-api'
 import {
@@ -245,20 +249,12 @@ export function useWorkbenchBackend() {
   const saveTikhubTokenMutation = useMutation({
     mutationFn: async (input: { token: string; baseUrl: string }) => {
       assertTauriRuntime()
-      const secret = await saveSecret({
-        provider_type: 'tikhub',
-        provider_id: 'default',
-        secret: input.token,
-        alias: input.baseUrl.includes('tikhub.dev') ? 'TikHub 中国大陆域名' : 'TikHub 国际域名',
-      })
-      await testSecretConnection(secret.id)
-      const result = await testTikhubConnection(secret.id, input.baseUrl)
-      return result
+      return saveAndTestTikhubToken(input)
     },
-    onSuccess: (result) => {
+    onSuccess: async (result) => {
       setTikhubTestResult(result)
       setActionMessage(result.message)
-      void queryClient.invalidateQueries({ queryKey })
+      await queryClient.invalidateQueries({ queryKey })
     },
     onError: (error) => setActionMessage(backendErrorMessage(error)),
   })
@@ -369,14 +365,41 @@ async function loadBackendWorkbench(): Promise<BackendWorkbenchData> {
   }
 
   const workspace = await ensureDefaultWorkspace()
-  const [status, tasks, secretRefs, providers] = await Promise.all([
+  const [status, tasks, secretRefs, connector, providers] = await Promise.all([
     getBackendStatus(),
     listTasks(),
     listSecretRefs(),
+    getTikhubConnector(),
     listModelProviders(),
   ])
 
-  return mapBackendData(workspace, tasks, secretRefs, providers, status.uptime_ms)
+  return mapBackendData(workspace, tasks, secretRefs, connector, providers, status.uptime_ms)
+}
+
+export async function saveAndTestTikhubToken(input: { token: string; baseUrl: string }) {
+  const connector = await getTikhubConnector()
+  const secretRefs = await listSecretRefs('tikhub')
+  const boundSecret = connector?.secret_ref_id
+    ? secretRefs.find(
+        (secret) => secret.id === connector.secret_ref_id && secret.provider_type === 'tikhub',
+      )
+    : undefined
+  const secret = boundSecret
+    ? await updateSecret(boundSecret.id, input.token)
+    : await saveSecret({
+        provider_type: 'tikhub',
+        provider_id: 'default',
+        secret: input.token,
+        alias: input.baseUrl.includes('tikhub.dev')
+          ? 'TikHub 中国大陆域名'
+          : 'TikHub 国际域名',
+      })
+  await saveTikhubConnector({
+    secret_ref_id: secret.id,
+    base_url: input.baseUrl,
+    enabled: true,
+  })
+  return testTikhubConnector()
 }
 
 async function createFormPlan(values: CollectionFormPayload): Promise<RuntimeCollectionPlan> {
@@ -443,6 +466,7 @@ export function mapBackendData(
   workspace: WorkspaceSummary,
   tasks: CollectionTaskView[],
   secretRefs: SecretRefView[],
+  connector: TikhubConnectorView | null,
   providers: ModelProviderView[],
   uptimeMs: number,
 ): BackendWorkbenchData {
@@ -458,7 +482,7 @@ export function mapBackendData(
       lastBackup: '未创建备份',
       health: `可用，运行 ${Math.max(1, Math.round(uptimeMs / 1000))} 秒`,
     },
-    connections: buildConnections(secretRefs, providers),
+    connections: buildConnections(secretRefs, connector, providers),
     metrics: [
       { label: '本地任务', value: String(tasks.length), delta: `${pendingCount} 个待确认`, tone: 'info' },
       { label: '入库记录', value: '0', delta: '真实记录读取尚未接入', tone: 'info' },
@@ -474,18 +498,50 @@ export function mapBackendData(
   }
 }
 
-function buildConnections(secretRefs: SecretRefView[], providers: ModelProviderView[]) {
-  const tikhubSecret = secretRefs.find((secret) => secret.provider_type === 'tikhub')
+function buildConnections(
+  secretRefs: SecretRefView[],
+  connector: TikhubConnectorView | null,
+  providers: ModelProviderView[],
+) {
+  const tikhubSecret = connector?.secret_ref_id
+    ? secretRefs.find(
+        (secret) => secret.id === connector.secret_ref_id && secret.provider_type === 'tikhub',
+      )
+    : undefined
+  const officialBaseUrl = isOfficialTikhubBaseUrl(connector?.base_url)
+    ? connector?.base_url
+    : undefined
+  const tikhubMeta = [officialBaseUrl, tikhubSecret?.masked_hint].filter(Boolean).join(' · ')
+  let tikhubStatus = '未配置'
+  let tikhubTone: Tone = 'warning'
+
+  if (connector) {
+    if (!connector.enabled) {
+      tikhubStatus = '已禁用'
+    } else if (!tikhubSecret) {
+      tikhubStatus = '需重新绑定'
+      tikhubTone = 'danger'
+    } else if (connector.last_test_status === 'success') {
+      tikhubStatus = '已验证'
+      tikhubTone = 'success'
+    } else if (connector.last_test_status === 'failed') {
+      tikhubStatus = '测试失败'
+      tikhubTone = 'danger'
+    } else {
+      tikhubStatus = '待测试'
+      tikhubTone = 'info'
+    }
+  }
   const enabledProviders = providers.filter((provider) => provider.enabled)
 
   return [
     {
       name: 'TikHub',
       detail: 'REST API',
-      status: tikhubSecret ? '已配置' : '未配置',
-      tone: tikhubSecret ? 'success' : 'warning',
+      status: tikhubStatus,
+      tone: tikhubTone,
       icon: 'key',
-      meta: tikhubSecret?.masked_hint ?? '等待 API Key',
+      meta: tikhubMeta || '等待配置连接器',
     },
     {
       name: '模型供应商',
@@ -504,6 +560,10 @@ function buildConnections(secretRefs: SecretRefView[], providers: ModelProviderV
       meta: '仅发送摘要',
     },
   ] satisfies WorkbenchRuntimeData['connections']
+}
+
+function isOfficialTikhubBaseUrl(baseUrl?: string | null) {
+  return baseUrl === 'https://api.tikhub.io' || baseUrl === 'https://api.tikhub.dev'
 }
 
 function mapTaskRow(task: CollectionTaskView): WorkbenchRuntimeData['tasks'][number] {
