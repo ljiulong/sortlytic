@@ -9,8 +9,9 @@ use uuid::Uuid;
 
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 use schema::{
-  record_observation_migration_checksum, schema_checksum, RECORD_OBSERVATION_INDEX_SQL,
-  RECORD_OBSERVATION_MIGRATION_SQL, SCHEMA_SQL,
+  record_observation_migration_checksum, schema_checksum, tikhub_connector_migration_checksum,
+  RECORD_OBSERVATION_INDEX_SQL, RECORD_OBSERVATION_MIGRATION_SQL, SCHEMA_SQL,
+  TIKHUB_CONNECTOR_MIGRATION_SQL,
 };
 use security::{
   canonicalize_database_file, canonicalize_workspace_root, ensure_database_path_available,
@@ -21,7 +22,7 @@ use security::{
 mod schema;
 mod security;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 2;
+pub const CURRENT_SCHEMA_VERSION: i64 = 3;
 pub const DATABASE_FILE_NAME: &str = "app.sqlite";
 
 const WORKSPACE_DIRS: &[&str] = &[
@@ -290,6 +291,7 @@ fn apply_connection_pragmas(connection: &Connection) -> AppResult<()> {
 }
 
 fn apply_schema(connection: &mut Connection) -> AppResult<()> {
+  validate_existing_tikhub_connector_migration(connection)?;
   connection
     .execute_batch(SCHEMA_SQL)
     .map_err(database_error)?;
@@ -302,7 +304,8 @@ fn apply_schema(connection: &mut Connection) -> AppResult<()> {
     )
     .map_err(database_error)?;
 
-  apply_record_observation_migration(connection)
+  apply_record_observation_migration(connection)?;
+  apply_tikhub_connector_migration(connection)
 }
 
 fn apply_record_observation_migration(connection: &mut Connection) -> AppResult<()> {
@@ -327,7 +330,7 @@ fn apply_record_observation_migration(connection: &mut Connection) -> AppResult<
     connection
       .execute_batch(RECORD_OBSERVATION_INDEX_SQL)
       .map_err(database_error)?;
-    update_workspace_schema_version(connection)?;
+    update_workspace_schema_version(connection, 2)?;
     return ensure_foreign_key_integrity(connection);
   }
 
@@ -376,20 +379,163 @@ fn record_v2_migration(connection: &Connection, checksum: &str) -> AppResult<()>
       params![Utc::now().to_rfc3339(), checksum],
     )
     .map_err(database_error)?;
-  update_workspace_schema_version(connection)
+  update_workspace_schema_version(connection, 2)
 }
 
-fn update_workspace_schema_version(connection: &Connection) -> AppResult<()> {
+fn apply_tikhub_connector_migration(connection: &mut Connection) -> AppResult<()> {
+  let expected_checksum = tikhub_connector_migration_checksum();
+  let applied_marker = tikhub_connector_migration_marker(connection)?;
+
+  if let Some((name, checksum)) = applied_marker {
+    validate_tikhub_connector_marker_and_schema(connection, &name, &checksum)?;
+    update_workspace_schema_version(connection, 3)?;
+    return ensure_foreign_key_integrity(connection);
+  }
+
+  let schema_is_current = tikhub_connector_schema_is_current(connection)?;
+  if !schema_is_current {
+    return Err(workspace_error(
+      "数据库迁移 v3 结构校验失败，连接器表结构无效",
+    ));
+  }
+
+  let transaction = connection
+    .transaction_with_behavior(TransactionBehavior::Immediate)
+    .map_err(database_error)?;
+  transaction
+    .execute_batch(TIKHUB_CONNECTOR_MIGRATION_SQL)
+    .map_err(database_error)?;
+  record_v3_migration(&transaction, &expected_checksum)?;
+  transaction.commit().map_err(database_error)?;
+
+  if !tikhub_connector_schema_is_current(connection)? {
+    return Err(workspace_error("数据库迁移 v3 后连接器表结构校验失败"));
+  }
+  ensure_foreign_key_integrity(connection)
+}
+
+fn validate_existing_tikhub_connector_migration(connection: &Connection) -> AppResult<()> {
+  if table_columns(connection, "schema_migrations")?.is_empty() {
+    return Ok(());
+  }
+  if let Some((name, checksum)) = tikhub_connector_migration_marker(connection)? {
+    validate_tikhub_connector_marker_and_schema(connection, &name, &checksum)?;
+  }
+  Ok(())
+}
+
+fn tikhub_connector_migration_marker(
+  connection: &Connection,
+) -> AppResult<Option<(String, String)>> {
+  connection
+    .query_row(
+      "SELECT name, checksum FROM schema_migrations WHERE version = 3",
+      [],
+      |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    )
+    .optional()
+    .map_err(database_error)
+}
+
+fn validate_tikhub_connector_marker_and_schema(
+  connection: &Connection,
+  name: &str,
+  checksum: &str,
+) -> AppResult<()> {
+  if name != "tikhub_connector" || checksum != tikhub_connector_migration_checksum() {
+    return Err(workspace_error(
+      "数据库迁移 v3 校验失败，连接器迁移标记或 checksum 不一致",
+    ));
+  }
+  if !tikhub_connector_schema_is_current(connection)? {
+    return Err(workspace_error(
+      "数据库迁移 v3 结构校验失败，连接器表与迁移标记不一致",
+    ));
+  }
+  Ok(())
+}
+
+fn record_v3_migration(connection: &Connection, checksum: &str) -> AppResult<()> {
+  connection
+    .execute(
+      "INSERT INTO schema_migrations (version, name, applied_at, checksum)
+       VALUES (3, 'tikhub_connector', ?1, ?2)",
+      params![Utc::now().to_rfc3339(), checksum],
+    )
+    .map_err(database_error)?;
+  update_workspace_schema_version(connection, 3)
+}
+
+fn tikhub_connector_schema_is_current(connection: &Connection) -> AppResult<bool> {
+  let columns = table_columns(connection, "tikhub_connector")?;
+  let expected_columns = [
+    "id",
+    "workspace_id",
+    "secret_ref_id",
+    "base_url",
+    "enabled",
+    "config_version",
+    "last_tested_at",
+    "last_test_status",
+    "created_at",
+    "updated_at",
+  ];
+  if !columns.iter().map(String::as_str).eq(expected_columns) {
+    return Ok(false);
+  }
+
+  let table_sql = connection
+    .query_row(
+      "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'tikhub_connector'",
+      [],
+      |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(database_error)?;
+  let Some(table_sql) = table_sql else {
+    return Ok(false);
+  };
+  let normalized = table_sql
+    .split_whitespace()
+    .collect::<Vec<_>>()
+    .join(" ")
+    .to_ascii_lowercase();
+  Ok(
+    [
+      "id text primary key not null default 'default' check (id = 'default')",
+      "workspace_id text not null unique",
+      "base_url text not null",
+      "enabled integer not null default 1 check (enabled in (0, 1))",
+      "config_version integer not null default 1 check (config_version > 0)",
+      "created_at text not null",
+      "updated_at text not null",
+      "foreign key (workspace_id) references workspace(id) on delete cascade",
+      "foreign key (secret_ref_id) references secret_ref(id) on delete set null",
+    ]
+    .iter()
+    .all(|fragment| normalized.contains(fragment)),
+  )
+}
+
+fn update_workspace_schema_version(connection: &Connection, version: i64) -> AppResult<()> {
   connection
     .execute(
       "UPDATE workspace SET schema_version = ?1 WHERE schema_version < ?1",
-      params![CURRENT_SCHEMA_VERSION],
+      params![version],
     )
     .map(|_| ())
     .map_err(database_error)
 }
 
 fn table_has_column(connection: &Connection, table: &str, column: &str) -> AppResult<bool> {
+  Ok(
+    table_columns(connection, table)?
+      .iter()
+      .any(|value| value == column),
+  )
+}
+
+fn table_columns(connection: &Connection, table: &str) -> AppResult<Vec<String>> {
   let mut statement = connection
     .prepare(&format!("PRAGMA table_info({table})"))
     .map_err(database_error)?;
@@ -399,7 +545,7 @@ fn table_has_column(connection: &Connection, table: &str, column: &str) -> AppRe
   let columns = rows
     .collect::<rusqlite::Result<Vec<_>>>()
     .map_err(database_error)?;
-  Ok(columns.iter().any(|value| value == column))
+  Ok(columns)
 }
 
 fn ensure_foreign_key_integrity(connection: &Connection) -> AppResult<()> {

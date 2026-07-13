@@ -8,6 +8,9 @@ use uuid::Uuid;
 
 use super::*;
 
+const TIKHUB_CONNECTOR_MIGRATION_CHECKSUM: &str =
+  "c5cf7126f50164158b02c8e72c23d5acae16f05a9d76e7c6e546fab1eb7df069";
+
 #[cfg(unix)]
 #[test]
 fn opening_rejects_symlinked_database_without_modifying_its_target() {
@@ -181,6 +184,224 @@ fn opening_does_not_update_timestamp_when_directory_creation_fails() {
 }
 
 #[test]
+fn new_workspace_creates_tikhub_connector_schema_and_marker() {
+  let root_path = unique_temp_workspace("tikhub-connector-schema");
+  let workspace = create_workspace("连接器结构", &root_path).expect("workspace should be created");
+  let connection =
+    open_workspace_database(root_path.join(DATABASE_FILE_NAME)).expect("database should open");
+
+  assert_eq!(object_count(&connection, "table", "tikhub_connector"), 1);
+  let columns = table_columns(&connection, "tikhub_connector");
+  assert_eq!(
+    columns,
+    [
+      "id",
+      "workspace_id",
+      "secret_ref_id",
+      "base_url",
+      "enabled",
+      "config_version",
+      "last_tested_at",
+      "last_test_status",
+      "created_at",
+      "updated_at",
+    ]
+  );
+  assert!(!columns.iter().any(|column| {
+    let column = column.to_ascii_lowercase();
+    column.contains("token") || column.contains("api_key")
+  }));
+
+  let table_sql = connection
+    .query_row(
+      "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'tikhub_connector'",
+      [],
+      |row| row.get::<_, String>(0),
+    )
+    .expect("connector table SQL should load");
+  assert!(table_sql.contains("CHECK (id = 'default')"));
+  assert!(table_sql.contains("workspace_id TEXT NOT NULL UNIQUE"));
+  assert!(table_sql.contains("CHECK (enabled IN (0, 1))"));
+  assert!(table_sql.contains("CHECK (config_version > 0)"));
+  assert!(table_sql.contains("REFERENCES workspace(id)"));
+  assert!(table_sql.contains("REFERENCES secret_ref(id)"));
+
+  let (migration_name, checksum) = migration_marker(&connection, 3);
+  assert_eq!(migration_name, "tikhub_connector");
+  assert_eq!(checksum, TIKHUB_CONNECTOR_MIGRATION_CHECKSUM);
+  assert_eq!(workspace.schema_version, 3);
+  fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn tikhub_connector_enforces_singleton_foreign_keys_and_value_constraints() {
+  let root_path = unique_temp_workspace("tikhub-connector-constraints");
+  let workspace = create_workspace("连接器约束", &root_path).expect("workspace should be created");
+  let connection =
+    open_workspace_database(root_path.join(DATABASE_FILE_NAME)).expect("database should open");
+  let now = "2026-07-13T08:00:00+00:00";
+
+  connection
+    .execute(
+      "INSERT INTO tikhub_connector (
+        workspace_id, base_url, created_at, updated_at
+      ) VALUES (?1, 'https://api.tikhub.io', ?2, ?2)",
+      params![workspace.id, now],
+    )
+    .expect("valid singleton connector should insert");
+  let (id, enabled, config_version) = connection
+    .query_row(
+      "SELECT id, enabled, config_version FROM tikhub_connector",
+      [],
+      |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, i64>(1)?,
+          row.get::<_, i64>(2)?,
+        ))
+      },
+    )
+    .expect("connector defaults should load");
+  assert_eq!((id.as_str(), enabled, config_version), ("default", 1, 1));
+
+  assert!(connection
+    .execute(
+      "INSERT INTO tikhub_connector (
+        workspace_id, base_url, created_at, updated_at
+      ) VALUES (?1, 'https://api.tikhub.io', ?2, ?2)",
+      params![workspace.id, now],
+    )
+    .is_err());
+  assert!(connection
+    .execute("UPDATE tikhub_connector SET id = 'secondary'", [])
+    .is_err());
+  assert!(connection
+    .execute("UPDATE tikhub_connector SET enabled = 2", [])
+    .is_err());
+  assert!(connection
+    .execute("UPDATE tikhub_connector SET config_version = 0", [])
+    .is_err());
+  assert!(connection
+    .execute(
+      "UPDATE tikhub_connector SET workspace_id = 'missing-workspace'",
+      [],
+    )
+    .is_err());
+  assert!(connection
+    .execute(
+      "UPDATE tikhub_connector SET secret_ref_id = 'missing-secret'",
+      [],
+    )
+    .is_err());
+
+  fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn opening_v2_workspace_migrates_connector_schema_without_data_loss() {
+  let root_path = unique_temp_workspace("tikhub-connector-v2-migration");
+  create_workspace("连接器迁移", &root_path).expect("workspace should be created");
+  let connection =
+    open_workspace_database(root_path.join(DATABASE_FILE_NAME)).expect("database should open");
+  connection
+    .execute(
+      "INSERT INTO audit_log (
+        id, entity_type, action, safe_details_json, created_at
+      ) VALUES ('connector-migration-sentinel', 'test', 'preserve', '{}', ?1)",
+      params!["2026-07-13T08:00:00+00:00"],
+    )
+    .expect("sentinel should insert");
+  connection
+    .execute_batch(
+      "DROP TABLE IF EXISTS tikhub_connector;
+       DELETE FROM schema_migrations WHERE version >= 3;
+       UPDATE workspace SET schema_version = 2;",
+    )
+    .expect("workspace should be downgraded to v2");
+  drop(connection);
+
+  let summary = open_workspace(&root_path).expect("v2 workspace should migrate");
+  let migrated =
+    open_workspace_database(root_path.join(DATABASE_FILE_NAME)).expect("database should reopen");
+
+  assert_eq!(summary.schema_version, 3);
+  assert_eq!(object_count(&migrated, "table", "tikhub_connector"), 1);
+  assert_eq!(
+    migrated
+      .query_row(
+        "SELECT COUNT(*) FROM audit_log WHERE id = 'connector-migration-sentinel'",
+        [],
+        |row| row.get::<_, i64>(0),
+      )
+      .expect("sentinel count should load"),
+    1
+  );
+  let (migration_name, checksum) = migration_marker(&migrated, 3);
+  assert_eq!(migration_name, "tikhub_connector");
+  assert_eq!(checksum, TIKHUB_CONNECTOR_MIGRATION_CHECKSUM);
+  assert_eq!(foreign_key_violation_count(&migrated), 0);
+  fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn opening_rejects_invalid_tikhub_connector_marker_or_schema() {
+  let checksum_root = unique_temp_workspace("tikhub-connector-bad-checksum");
+  create_workspace("连接器校验", &checksum_root).expect("workspace should be created");
+  let connection = Connection::open(checksum_root.join(DATABASE_FILE_NAME))
+    .expect("workspace database should open");
+  connection
+    .execute(
+      "INSERT OR REPLACE INTO schema_migrations (version, name, applied_at, checksum)
+       VALUES (3, 'tikhub_connector', ?1, 'tampered')",
+      params!["2026-07-13T08:00:00+00:00"],
+    )
+    .expect("v3 marker should be corrupted");
+  connection
+    .execute("UPDATE workspace SET schema_version = 3", [])
+    .expect("workspace version should be set to v3");
+  drop(connection);
+
+  let checksum_error =
+    open_workspace(&checksum_root).expect_err("invalid v3 checksum must be rejected");
+  assert!(checksum_error.message.contains("v3") && checksum_error.message.contains("校验"));
+  fs::remove_dir_all(checksum_root).ok();
+
+  let schema_root = unique_temp_workspace("tikhub-connector-bad-schema");
+  create_workspace("连接器结构校验", &schema_root).expect("workspace should be created");
+  let connection =
+    Connection::open(schema_root.join(DATABASE_FILE_NAME)).expect("workspace database should open");
+  connection
+    .execute_batch(
+      "DROP TABLE IF EXISTS tikhub_connector;
+       CREATE TABLE tikhub_connector (id TEXT PRIMARY KEY);",
+    )
+    .expect("connector table should be replaced with an invalid shape");
+  drop(connection);
+
+  let schema_error =
+    open_workspace(&schema_root).expect_err("invalid marked v3 schema must be rejected");
+  assert!(schema_error.message.contains("v3") && schema_error.message.contains("结构"));
+  fs::remove_dir_all(schema_root).ok();
+
+  let missing_root = unique_temp_workspace("tikhub-connector-missing-schema");
+  create_workspace("连接器缺表校验", &missing_root).expect("workspace should be created");
+  let connection = Connection::open(missing_root.join(DATABASE_FILE_NAME))
+    .expect("workspace database should open");
+  connection
+    .execute("DROP TABLE tikhub_connector", [])
+    .expect("marked connector table should be removed for the test");
+  drop(connection);
+
+  let missing_error =
+    open_workspace(&missing_root).expect_err("missing marked v3 schema must be rejected");
+  assert!(missing_error.message.contains("v3") && missing_error.message.contains("结构"));
+  let connection =
+    Connection::open(missing_root.join(DATABASE_FILE_NAME)).expect("database should reopen");
+  assert_eq!(object_count(&connection, "table", "tikhub_connector"), 0);
+  fs::remove_dir_all(missing_root).ok();
+}
+
+#[test]
 fn record_schema_scopes_observations_to_run_and_data_type() {
   let root_path = unique_temp_workspace("record-observation-schema");
   create_workspace("记录观察结构", &root_path).expect("workspace should be created");
@@ -311,11 +532,13 @@ fn opening_v1_workspace_migrates_record_observations_without_data_loss() {
     )
     .expect("legacy raw row should survive migration");
 
-  assert_eq!(summary.schema_version, 2);
+  assert_eq!(summary.schema_version, 3);
   assert_eq!(migrated_raw.0.as_deref(), Some(run_id.as_str()));
   assert_eq!(migrated_raw.1, "keyword_search");
   assert_eq!(object_count(&migrated, "table", "raw_record"), 1);
   assert_eq!(object_count(&migrated, "table", "normalized_record"), 1);
+  assert_eq!(object_count(&migrated, "table", "tikhub_connector"), 1);
+  assert_eq!(migration_marker(&migrated, 3).0, "tikhub_connector");
   assert_eq!(foreign_key_violation_count(&migrated), 0);
 
   fs::remove_dir_all(root_path).ok();
@@ -441,6 +664,27 @@ fn object_count(connection: &Connection, object_type: &str, name: &str) -> i64 {
       |row| row.get(0),
     )
     .expect("sqlite_master query should pass")
+}
+
+fn table_columns(connection: &Connection, table: &str) -> Vec<String> {
+  let mut statement = connection
+    .prepare(&format!("PRAGMA table_info({table})"))
+    .expect("table info should prepare");
+  statement
+    .query_map([], |row| row.get::<_, String>(1))
+    .expect("table info should run")
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .expect("table columns should load")
+}
+
+fn migration_marker(connection: &Connection, version: i64) -> (String, String) {
+  connection
+    .query_row(
+      "SELECT name, checksum FROM schema_migrations WHERE version = ?1",
+      params![version],
+      |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .expect("migration marker should exist")
 }
 
 fn foreign_key_violation_count(connection: &Connection) -> usize {

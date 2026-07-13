@@ -15,6 +15,14 @@ pub(super) fn record_observation_migration_checksum() -> String {
   format!("{:x}", hasher.finalize())
 }
 
+pub(super) fn tikhub_connector_migration_checksum() -> String {
+  use sha2::{Digest, Sha256};
+
+  let mut hasher = Sha256::new();
+  hasher.update(TIKHUB_CONNECTOR_MIGRATION_SQL.as_bytes());
+  format!("{:x}", hasher.finalize())
+}
+
 pub(super) const SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS schema_migrations (
   version INTEGER PRIMARY KEY,
@@ -44,6 +52,21 @@ CREATE TABLE IF NOT EXISTS secret_ref (
   updated_at TEXT NOT NULL,
   last_tested_at TEXT,
   last_test_status TEXT
+);
+
+CREATE TABLE IF NOT EXISTS tikhub_connector (
+  id TEXT PRIMARY KEY NOT NULL DEFAULT 'default' CHECK (id = 'default'),
+  workspace_id TEXT NOT NULL UNIQUE,
+  secret_ref_id TEXT,
+  base_url TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+  config_version INTEGER NOT NULL DEFAULT 1 CHECK (config_version > 0),
+  last_tested_at TEXT,
+  last_test_status TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE,
+  FOREIGN KEY (secret_ref_id) REFERENCES secret_ref(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS model_provider (
@@ -566,4 +589,21 @@ CREATE INDEX IF NOT EXISTS idx_raw_record_platform ON raw_record(platform);
 CREATE INDEX IF NOT EXISTS idx_raw_record_data_type ON raw_record(data_type);
 CREATE INDEX IF NOT EXISTS idx_raw_record_platform_record_id ON raw_record(platform_record_id);
 CREATE INDEX IF NOT EXISTS idx_normalized_record_task_id ON normalized_record(task_id);
+"#;
+
+pub(super) const TIKHUB_CONNECTOR_MIGRATION_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS tikhub_connector (
+  id TEXT PRIMARY KEY NOT NULL DEFAULT 'default' CHECK (id = 'default'),
+  workspace_id TEXT NOT NULL UNIQUE,
+  secret_ref_id TEXT,
+  base_url TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+  config_version INTEGER NOT NULL DEFAULT 1 CHECK (config_version > 0),
+  last_tested_at TEXT,
+  last_test_status TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE,
+  FOREIGN KEY (secret_ref_id) REFERENCES secret_ref(id) ON DELETE SET NULL
+);
 "#;
