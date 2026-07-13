@@ -329,49 +329,57 @@ fn retry_rejects_non_v2_or_corrupted_failed_plan_without_mutation() {
 }
 
 #[test]
-fn claim_skips_a_queued_v1_run_without_mutation() {
+fn claim_quarantines_a_queued_v1_run_and_continues_to_valid_v2() {
   let (root_path, task, plan) = prepared_task_workspace("execution-claim-v1");
   let queued = enqueue_task(&root_path, &task.id).expect("task should enqueue");
   forge_plan_execution_contract(&root_path, &plan, 1, false);
+  let (valid_task, _) = prepared_task_in_workspace(&root_path, "后续有效任务");
+  let valid_queued = enqueue_task(&root_path, &valid_task.id).expect("valid task should enqueue");
 
-  assert!(claim_next_task(&root_path)
-    .expect("legacy queued run should be skipped")
-    .is_none());
-  assert_run_and_task_state(&root_path, &queued.id, &task.id, "queued", "queued");
+  let claimed = claim_next_task(&root_path)
+    .expect("claim should isolate legacy run")
+    .expect("valid v2 run behind legacy run should be claimed");
+  assert_eq!(claimed.id, valid_queued.id);
+  assert_reconfirmation_quarantine(&root_path, &queued.id, &task.id, &plan.id);
 
   std::fs::remove_dir_all(root_path).ok();
 }
 
 #[test]
-fn claim_rejects_a_corrupted_v2_run_without_mutation() {
+fn claim_quarantines_a_corrupted_v2_run() {
   let (root_path, task, plan) = prepared_task_workspace("execution-claim-corrupted-v2");
   let queued = enqueue_task(&root_path, &task.id).expect("task should enqueue");
   forge_plan_execution_contract(&root_path, &plan, 2, true);
 
-  let error =
-    claim_next_task(&root_path).expect_err("corrupted queued v2 plan must not be claimed");
-  assert!(error.message.contains("v2") || error.message.contains("采集计划"));
-  assert_run_and_task_state(&root_path, &queued.id, &task.id, "queued", "queued");
+  assert!(claim_next_task(&root_path)
+    .expect("claim should isolate corrupted v2 run")
+    .is_none());
+  assert_reconfirmation_quarantine(&root_path, &queued.id, &task.id, &plan.id);
 
   std::fs::remove_dir_all(root_path).ok();
 }
 
 #[test]
-fn recovery_does_not_requeue_a_running_v1_run() {
-  let (root_path, task, plan) = prepared_task_workspace("execution-recover-v1");
-  enqueue_task(&root_path, &task.id).expect("task should enqueue");
-  let running = claim_next_task(&root_path)
-    .expect("claim should succeed")
-    .expect("task should be claimed");
-  forge_plan_execution_contract(&root_path, &plan, 1, false);
+fn recovery_quarantines_non_executable_running_runs() {
+  for (label, schema_version, corrupt_budget) in [
+    ("execution-recover-v1", 1, false),
+    ("execution-recover-corrupted-v2", 2, true),
+  ] {
+    let (root_path, task, plan) = prepared_task_workspace(label);
+    enqueue_task(&root_path, &task.id).expect("task should enqueue");
+    let running = claim_next_task(&root_path)
+      .expect("claim should succeed")
+      .expect("task should be claimed");
+    forge_plan_execution_contract(&root_path, &plan, schema_version, corrupt_budget);
 
-  assert_eq!(
-    recover_interrupted_runs(&root_path).expect("recovery should run"),
-    0
-  );
-  assert_run_and_task_state(&root_path, &running.id, &task.id, "running", "running");
+    assert_eq!(
+      recover_interrupted_runs(&root_path).expect("recovery should isolate invalid run"),
+      0
+    );
+    assert_reconfirmation_quarantine(&root_path, &running.id, &task.id, &plan.id);
 
-  std::fs::remove_dir_all(root_path).ok();
+    std::fs::remove_dir_all(root_path).ok();
+  }
 }
 
 #[test]
@@ -666,10 +674,18 @@ fn prepared_task_workspace(
 ) -> (std::path::PathBuf, CollectionTaskView, CollectionPlanView) {
   let root_path = unique_temp_workspace(label);
   create_workspace("执行器测试", &root_path).expect("workspace should be created");
+  let (task, plan) = prepared_task_in_workspace(&root_path, "执行任务");
+  (root_path, task, plan)
+}
+
+fn prepared_task_in_workspace(
+  root_path: &Path,
+  name: &str,
+) -> (CollectionTaskView, CollectionPlanView) {
   let task = create_collection_task(
-    &root_path,
+    root_path,
     CreateCollectionTaskInput {
-      name: "执行任务".to_string(),
+      name: name.to_string(),
       source_type: "form".to_string(),
       platforms: vec!["tiktok".to_string()],
       data_types: vec!["keyword_search".to_string()],
@@ -677,9 +693,9 @@ fn prepared_task_workspace(
   )
   .expect("task should create");
   let plan =
-    save_collection_plan(&root_path, execution_plan_input(&task.id)).expect("plan should save");
-  confirm_collection_plan(&root_path, &task.id, &plan.id).expect("plan should confirm");
-  (root_path, task, plan)
+    save_collection_plan(root_path, execution_plan_input(&task.id)).expect("plan should save");
+  confirm_collection_plan(root_path, &task.id, &plan.id).expect("plan should confirm");
+  (task, plan)
 }
 
 fn execution_plan_input(task_id: &str) -> SaveCollectionPlanInput {
@@ -740,36 +756,42 @@ fn forge_plan_execution_contract(
     .expect("test should forge the persisted plan contract");
 }
 
-fn assert_run_and_task_state(
-  root_path: &Path,
-  run_id: &str,
-  task_id: &str,
-  run_status: &str,
-  task_status: &str,
-) {
+fn assert_reconfirmation_quarantine(root_path: &Path, run_id: &str, task_id: &str, plan_id: &str) {
   let connection = open_workspace_connection(root_path).expect("database should reopen");
-  let state = connection
+  let run = get_task_run(&connection, run_id).expect("quarantined run should load");
+  let task = get_task_by_id(&connection, task_id).expect("quarantined task should load");
+  let plan_state = connection
     .query_row(
-      "SELECT status, claimed_at,
-              (SELECT status FROM collection_task WHERE id = ?2)
-       FROM task_run WHERE id = ?1",
-      params![run_id, task_id],
+      "SELECT validation_status, validation_errors_json, confirmed_by_user,
+              (SELECT COUNT(*) FROM task_log
+               WHERE task_run_id = ?2 AND message LIKE '%重新确认%')
+       FROM collection_plan WHERE id = ?1",
+      params![plan_id, run_id],
       |row| {
         Ok((
           row.get::<_, String>(0)?,
-          row.get::<_, Option<String>>(1)?,
-          row.get::<_, String>(2)?,
+          row.get::<_, String>(1)?,
+          row.get::<_, i64>(2)?,
+          row.get::<_, i64>(3)?,
         ))
       },
     )
-    .expect("run and task state should load");
-  assert_eq!(state.0, run_status);
-  if run_status == "queued" {
-    assert!(state.1.is_none());
-  } else {
-    assert!(state.1.is_some());
-  }
-  assert_eq!(state.2, task_status);
+    .expect("quarantine plan state should load");
+
+  assert_eq!(run.status, "failed");
+  assert!(run.ended_at.is_some());
+  assert!(run.claimed_at.is_none());
+  assert_eq!(
+    run.error_code.as_deref(),
+    Some("PLAN_RECONFIRMATION_REQUIRED")
+  );
+  assert!(!run.retryable);
+  assert_eq!(task.status, "waiting_confirmation");
+  assert!(task.confirmed_at.is_none());
+  assert_eq!(plan_state.0, "needs_review");
+  assert!(plan_state.1.contains("重新确认"));
+  assert_eq!(plan_state.2, 0);
+  assert_eq!(plan_state.3, 1);
 }
 
 fn task_run_count_and_state(root_path: &Path, task_id: &str) -> (i64, String, Option<String>) {

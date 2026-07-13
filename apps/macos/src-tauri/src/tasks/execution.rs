@@ -6,7 +6,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::collection::validate_collection_plan_v2;
-use crate::domain::{redact_sensitive_text, AppResult};
+use crate::domain::{redact_sensitive_text, AppErrorCode, AppResult};
 
 use super::validation::validate_plan_for_task;
 use super::{
@@ -72,66 +72,77 @@ pub fn enqueue_task(root_path: impl AsRef<Path>, task_id: &str) -> AppResult<Tas
 pub fn claim_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRunView>> {
   let mut connection = open_workspace_connection(root_path)?;
   let transaction = immediate_transaction(&mut connection)?;
-  let queued = transaction
-    .query_row(
-      "SELECT run.id, run.task_id, run.status, run.started_at, run.ended_at,
-              run.current_stage, run.error_code, run.error_message, run.retryable,
-              run.cost_actual_json, run.plan_id, run.attempt_number, run.claimed_at
-       FROM task_run AS run
-       JOIN collection_plan AS plan
-         ON plan.id = run.plan_id AND plan.task_id = run.task_id
-       WHERE run.status = 'queued' AND plan.schema_version = 2
-         AND plan.validation_status = 'valid'
-       ORDER BY run.started_at ASC, run.id ASC
-       LIMIT 1",
-      [],
-      map_task_run,
-    )
-    .optional()
-    .map_err(database_error)?;
-  let Some(queued) = queued else {
-    transaction.commit().map_err(database_error)?;
-    return Ok(None);
-  };
-  let plan_id = queued
-    .plan_id
-    .as_deref()
-    .ok_or_else(|| task_error("队列任务缺少采集计划，不能领取"))?;
-  require_executable_plan(&transaction, &queued.task_id, plan_id)?;
-  let now = Utc::now().to_rfc3339();
-  let changed = transaction
-    .execute(
-      "UPDATE task_run
-       SET status = 'running', current_stage = '执行采集', error_code = NULL,
-           error_message = NULL, retryable = 0, claimed_at = ?1
-       WHERE id = ?2 AND status = 'queued' AND plan_id IS NOT NULL
-         AND EXISTS (
-           SELECT 1 FROM collection_plan AS plan
-           WHERE plan.id = task_run.plan_id AND plan.task_id = task_run.task_id
-             AND plan.schema_version = 2 AND plan.validation_status = 'valid'
-         )",
-      params![now, queued.id],
-    )
-    .map_err(database_error)?;
-  if changed != 1 {
-    return Err(task_error("队列任务状态已变化，无法领取"));
-  }
-  transaction
-    .execute(
-      "UPDATE collection_task SET status = 'running', updated_at = ?1 WHERE id = ?2",
-      params![now, queued.task_id],
-    )
-    .map_err(database_error)?;
-  append_task_log(
-    &transaction,
-    &queued.id,
-    "执行采集",
-    "info",
-    "本地执行器已领取任务",
-  )?;
-  transaction.commit().map_err(database_error)?;
+  loop {
+    let queued = transaction
+      .query_row(
+        "SELECT id, task_id, status, started_at, ended_at, current_stage, error_code,
+                error_message, retryable, cost_actual_json, plan_id, attempt_number, claimed_at
+         FROM task_run WHERE status = 'queued'
+         ORDER BY started_at ASC, id ASC
+         LIMIT 1",
+        [],
+        map_task_run,
+      )
+      .optional()
+      .map_err(database_error)?;
+    let Some(queued) = queued else {
+      transaction.commit().map_err(database_error)?;
+      return Ok(None);
+    };
+    let plan_id = queued.plan_id.as_deref();
+    let plan_validation = plan_id.map_or_else(
+      || Err(task_error("队列任务缺少采集计划，不能领取")),
+      |plan_id| require_executable_plan(&transaction, &queued.task_id, plan_id),
+    );
+    if let Err(error) = plan_validation {
+      if !matches!(&error.code, AppErrorCode::ValidationError) {
+        return Err(error);
+      }
+      quarantine_run_for_reconfirmation(
+        &transaction,
+        &queued.id,
+        &queued.task_id,
+        plan_id,
+        &error.message,
+      )?;
+      continue;
+    }
 
-  get_task_run(&connection, &queued.id).map(Some)
+    let now = Utc::now().to_rfc3339();
+    let changed = transaction
+      .execute(
+        "UPDATE task_run
+         SET status = 'running', current_stage = '执行采集', error_code = NULL,
+             error_message = NULL, retryable = 0, claimed_at = ?1
+         WHERE id = ?2 AND status = 'queued' AND plan_id IS NOT NULL
+           AND EXISTS (
+             SELECT 1 FROM collection_plan AS plan
+             WHERE plan.id = task_run.plan_id AND plan.task_id = task_run.task_id
+               AND plan.schema_version = 2 AND plan.validation_status = 'valid'
+           )",
+        params![now, queued.id],
+      )
+      .map_err(database_error)?;
+    if changed != 1 {
+      return Err(task_error("队列任务状态已变化，无法领取"));
+    }
+    transaction
+      .execute(
+        "UPDATE collection_task SET status = 'running', updated_at = ?1 WHERE id = ?2",
+        params![now, queued.task_id],
+      )
+      .map_err(database_error)?;
+    append_task_log(
+      &transaction,
+      &queued.id,
+      "执行采集",
+      "info",
+      "本地执行器已领取任务",
+    )?;
+    transaction.commit().map_err(database_error)?;
+
+    return get_task_run(&connection, &queued.id).map(Some);
+  }
 }
 
 pub fn complete_task_run(
@@ -217,10 +228,7 @@ pub fn recover_interrupted_runs(root_path: impl AsRef<Path>) -> AppResult<i64> {
       .prepare(
         "SELECT run.id, run.task_id, run.plan_id
          FROM task_run AS run
-         JOIN collection_plan AS plan
-           ON plan.id = run.plan_id AND plan.task_id = run.task_id
-         WHERE run.status = 'running' AND plan.schema_version = 2
-           AND plan.validation_status = 'valid'
+         WHERE run.status = 'running'
          ORDER BY run.started_at, run.id",
       )
       .map_err(database_error)?;
@@ -229,7 +237,7 @@ pub fn recover_interrupted_runs(root_path: impl AsRef<Path>) -> AppResult<i64> {
         Ok((
           row.get::<_, String>(0)?,
           row.get::<_, String>(1)?,
-          row.get::<_, String>(2)?,
+          row.get::<_, Option<String>>(2)?,
         ))
       })
       .map_err(database_error)?;
@@ -237,12 +245,29 @@ pub fn recover_interrupted_runs(root_path: impl AsRef<Path>) -> AppResult<i64> {
       .collect::<rusqlite::Result<Vec<_>>>()
       .map_err(database_error)?
   };
-  for (_, task_id, plan_id) in &interrupted {
-    require_executable_plan(&transaction, task_id, plan_id)?;
+  let mut recoverable = Vec::new();
+  for (run_id, task_id, plan_id) in interrupted {
+    let plan_validation = plan_id.as_deref().map_or_else(
+      || Err(task_error("运行中的任务缺少采集计划，不能恢复")),
+      |plan_id| require_executable_plan(&transaction, &task_id, plan_id),
+    );
+    match plan_validation {
+      Ok(()) => recoverable.push((run_id, task_id, plan_id)),
+      Err(error) if matches!(&error.code, AppErrorCode::ValidationError) => {
+        quarantine_run_for_reconfirmation(
+          &transaction,
+          &run_id,
+          &task_id,
+          plan_id.as_deref(),
+          &error.message,
+        )?;
+      }
+      Err(error) => return Err(error),
+    }
   }
   let now = Utc::now().to_rfc3339();
 
-  for (run_id, task_id, _) in &interrupted {
+  for (run_id, task_id, _) in &recoverable {
     transaction
       .execute(
         "UPDATE task_run
@@ -267,7 +292,7 @@ pub fn recover_interrupted_runs(root_path: impl AsRef<Path>) -> AppResult<i64> {
       "检测到上次进程中断，任务已重新排队",
     )?;
   }
-  let recovered = interrupted.len() as i64;
+  let recovered = recoverable.len() as i64;
   transaction.commit().map_err(database_error)?;
   Ok(recovered)
 }
@@ -505,6 +530,85 @@ fn require_persisted_steps_match_plan(
         "采集计划与持久化步骤 {} 不一致，不能执行",
         index + 1
       )));
+    }
+  }
+
+  Ok(())
+}
+
+fn quarantine_run_for_reconfirmation(
+  connection: &Connection,
+  run_id: &str,
+  task_id: &str,
+  plan_id: Option<&str>,
+  reason: &str,
+) -> AppResult<()> {
+  let now = Utc::now().to_rfc3339();
+  let message = redact_sensitive_text(&format!(
+    "采集计划不可执行，任务已停止，请重新确认有效的 v2 计划：{reason}"
+  ));
+  let changed = connection
+    .execute(
+      "UPDATE task_run
+       SET status = 'failed', ended_at = ?1, current_stage = '需要重新确认计划',
+           error_code = 'PLAN_RECONFIRMATION_REQUIRED', error_message = ?2,
+           retryable = 0, claimed_at = NULL
+       WHERE id = ?3 AND task_id = ?4 AND status IN ('queued', 'running')",
+      params![now, message, run_id, task_id],
+    )
+    .map_err(database_error)?;
+  if changed != 1 {
+    return Err(task_error("活动任务状态已变化，无法隔离无效采集计划"));
+  }
+
+  if let Some(plan_id) = plan_id {
+    connection
+      .execute(
+        "UPDATE collection_plan
+         SET validation_status = 'needs_review', validation_errors_json = ?1,
+             confirmed_by_user = 0, updated_at = ?2
+         WHERE id = ?3 AND task_id = ?4",
+        params![
+          serde_json::json!([message]).to_string(),
+          now,
+          plan_id,
+          task_id
+        ],
+      )
+      .map_err(database_error)?;
+  }
+  append_task_log(connection, run_id, "需要重新确认计划", "error", &message)?;
+
+  let has_other_active_runs = connection
+    .query_row(
+      "SELECT EXISTS(
+         SELECT 1 FROM task_run
+         WHERE task_id = ?1 AND status IN ('queued', 'running')
+       )",
+      params![task_id],
+      |row| row.get::<_, i64>(0),
+    )
+    .map_err(database_error)?
+    != 0;
+  if !has_other_active_runs {
+    let task_changed = connection
+      .execute(
+        "UPDATE collection_task
+         SET status = 'waiting_confirmation', confirmed_at = NULL,
+             completed_at = NULL, cancelled_at = NULL, updated_at = ?1
+         WHERE id = ?2 AND status IN ('queued', 'running')",
+        params![now, task_id],
+      )
+      .map_err(database_error)?;
+    if task_changed == 1 {
+      connection
+        .execute(
+          "UPDATE collection_plan
+           SET confirmed_by_user = 0, updated_at = ?1
+           WHERE task_id = ?2 AND confirmed_by_user = 1",
+          params![now, task_id],
+        )
+        .map_err(database_error)?;
     }
   }
 
