@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use chrono::Utc;
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -206,8 +206,11 @@ pub fn save_collection_plan(
   root_path: impl AsRef<Path>,
   input: SaveCollectionPlanInput,
 ) -> AppResult<CollectionPlanView> {
-  let connection = open_workspace_connection(root_path)?;
-  let task = get_task_by_id(&connection, &input.task_id)?;
+  let mut connection = open_workspace_connection(root_path)?;
+  let transaction = connection
+    .transaction_with_behavior(TransactionBehavior::Immediate)
+    .map_err(database_error)?;
+  let task = get_task_by_id(&transaction, &input.task_id)?;
 
   if !["draft", "waiting_confirmation"].contains(&task.status.as_str()) {
     return Err(task_error("只允许给草稿或等待确认状态的任务保存采集计划"));
@@ -225,7 +228,7 @@ pub fn save_collection_plan(
   let validation_errors = serde_json::json!(validation_errors);
   let cost_estimate = estimate_from_plan_json(&input.plan_json).cost_estimate_json;
 
-  connection
+  transaction
     .execute(
       "UPDATE collection_plan
        SET confirmed_by_user = 0, updated_at = ?1
@@ -234,7 +237,7 @@ pub fn save_collection_plan(
     )
     .map_err(database_error)?;
 
-  connection
+  transaction
     .execute(
       "INSERT INTO collection_plan (
         id, task_id, source, schema_version, plan_json, validation_status,
@@ -254,7 +257,9 @@ pub fn save_collection_plan(
     )
     .map_err(database_error)?;
 
-  connection
+  persist_api_call_steps(&transaction, &id, &input.plan_json, validation_status, &now)?;
+
+  transaction
     .execute(
       "UPDATE collection_task
        SET status = 'waiting_confirmation', confirmed_at = NULL,
@@ -264,7 +269,69 @@ pub fn save_collection_plan(
     )
     .map_err(database_error)?;
 
+  transaction.commit().map_err(database_error)?;
   get_collection_plan(&connection, &id)
+}
+
+fn persist_api_call_steps(
+  connection: &Connection,
+  plan_id: &str,
+  plan_json: &Value,
+  validation_status: &str,
+  created_at: &str,
+) -> AppResult<()> {
+  let Some(steps) = plan_json.get("steps").and_then(Value::as_array) else {
+    return Ok(());
+  };
+  let request_limit = plan_json
+    .get("request_limit")
+    .and_then(Value::as_i64)
+    .unwrap_or(1)
+    .max(1);
+  let step_status = if validation_status == "valid" {
+    "planned"
+  } else {
+    "needs_review"
+  };
+
+  for (index, step) in steps.iter().enumerate() {
+    let Some(step) = step.as_object() else {
+      continue;
+    };
+    let (Some(platform), Some(data_type), Some(endpoint_key)) = (
+      step.get("platform").and_then(Value::as_str),
+      step.get("data_type").and_then(Value::as_str),
+      step.get("endpoint_key").and_then(Value::as_str),
+    ) else {
+      continue;
+    };
+    let params_json = step
+      .get("params")
+      .cloned()
+      .unwrap_or_else(|| serde_json::json!({}));
+    connection
+      .execute(
+        "INSERT INTO api_call_step (
+          id, plan_id, step_order, platform, data_type, endpoint_key, params_json,
+          status, request_count_estimate, cost_estimate_json, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
+        params![
+          Uuid::new_v4().to_string(),
+          plan_id,
+          index as i64,
+          platform,
+          data_type,
+          endpoint_key,
+          params_json.to_string(),
+          step_status,
+          request_limit,
+          serde_json::json!({ "request_count_estimate": request_limit }).to_string(),
+          created_at
+        ],
+      )
+      .map_err(database_error)?;
+  }
+  Ok(())
 }
 
 pub fn estimate_task_cost(

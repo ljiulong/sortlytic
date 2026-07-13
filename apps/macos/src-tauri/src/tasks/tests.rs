@@ -30,9 +30,34 @@ fn persisted_cost_estimate_counts_the_confirmed_request_limit() {
 
   let plan = save_collection_plan(&root_path, input).expect("plan should save");
   let estimate = estimate_task_cost(&root_path, Some(task.id), None).expect("cost should load");
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  let stored_step = connection
+    .query_row(
+      "SELECT platform, data_type, endpoint_key, request_count_estimate
+       FROM api_call_step WHERE plan_id = ?1",
+      params![plan.id],
+      |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, String>(1)?,
+          row.get::<_, String>(2)?,
+          row.get::<_, i64>(3)?,
+        ))
+      },
+    )
+    .expect("confirmed request step should be stored");
 
   assert_eq!(plan.cost_estimate_json["request_count_estimate"], 5);
   assert_eq!(estimate.request_count_estimate, 5);
+  assert_eq!(
+    stored_step,
+    (
+      "tiktok".to_string(),
+      "comments".to_string(),
+      "tiktok.comments".to_string(),
+      5
+    )
+  );
   std::fs::remove_dir_all(root_path).ok();
 }
 
