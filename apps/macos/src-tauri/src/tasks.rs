@@ -11,14 +11,15 @@ use crate::workspace::{open_workspace_database, DATABASE_FILE_NAME};
 
 mod execution;
 mod plans;
+mod recovery;
 mod validation;
 
 pub use execution::{
-  cancel_task, claim_next_task, complete_task_run, enqueue_task, fail_task_run,
-  recover_interrupted_runs, retry_task,
+  cancel_task, claim_next_task, complete_task_run, enqueue_task, fail_task_run, retry_task,
 };
 use plans::latest_plan_for_task;
 pub use plans::{confirm_collection_plan, estimate_task_cost, save_collection_plan};
+pub use recovery::recover_interrupted_runs;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CreateCollectionTaskInput {
