@@ -17,7 +17,12 @@ pub(super) fn estimate_from_plan_json(plan_json: &Value) -> CostEstimateView {
     .get("steps")
     .and_then(Value::as_array)
     .map_or(1, |items| items.len().max(1) as i64);
-  let request_count_estimate = platform_count.max(1) * data_type_count.max(1) * step_count;
+  let request_limit = plan_json
+    .get("request_limit")
+    .and_then(Value::as_i64)
+    .unwrap_or(1)
+    .max(1);
+  let request_count_estimate = step_count.saturating_mul(request_limit);
   let requires_confirmation =
     request_count_estimate > 1 || platform_count > 1 || data_type_count > 1;
 

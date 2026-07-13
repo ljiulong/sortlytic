@@ -21,6 +21,22 @@ fn task_plan_confirm_enqueue_and_logs_round_trip() {
 }
 
 #[test]
+fn persisted_cost_estimate_counts_the_confirmed_request_limit() {
+  let root_path = unique_temp_workspace("request-limit-cost");
+  create_workspace("任务测试", &root_path).expect("workspace should be created");
+  let task = create_collection_task(&root_path, create_task_input()).expect("task created");
+  let mut input = plan_input(&task.id);
+  input.plan_json["request_limit"] = serde_json::json!(5);
+
+  let plan = save_collection_plan(&root_path, input).expect("plan should save");
+  let estimate = estimate_task_cost(&root_path, Some(task.id), None).expect("cost should load");
+
+  assert_eq!(plan.cost_estimate_json["request_count_estimate"], 5);
+  assert_eq!(estimate.request_count_estimate, 5);
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn backend_validation_overrides_client_supplied_status() {
   let root_path = unique_temp_workspace("authoritative-plan-validation");
   create_workspace("任务测试", &root_path).expect("workspace should be created");
