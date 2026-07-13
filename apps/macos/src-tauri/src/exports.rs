@@ -1,5 +1,7 @@
-use std::fs;
-use std::io::Write;
+use std::fs::{self, OpenOptions};
+use std::io::{ErrorKind, Write};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
@@ -142,7 +144,7 @@ pub fn create_export_job(
   let report = get_report(&connection, report_id)?;
   let job_id = Uuid::new_v4().to_string();
   let now = Utc::now().to_rfc3339();
-  let file_path = resolve_export_path(root_path, report_id, &export_type, target_path)?;
+  let file_path = resolve_export_path(root_path, report_id, &job_id, &export_type, target_path)?;
 
   connection
     .execute(
@@ -313,7 +315,8 @@ fn write_excel(path: &Path, report: &ReportView) -> AppResult<()> {
     )],
   )?;
 
-  workbook.save(path).map_err(export_error)
+  let bytes = workbook.save_to_buffer().map_err(export_error)?;
+  write_new_export_file(path, &bytes)
 }
 
 fn write_key_value_sheet(
@@ -375,8 +378,7 @@ fn write_pdf(path: &Path, report: &ReportView) -> AppResult<()> {
     content.len(),
     content
   );
-  let mut file = fs::File::create(path).map_err(export_error)?;
-  file.write_all(pdf.as_bytes()).map_err(export_error)
+  write_new_export_file(path, pdf.as_bytes())
 }
 
 fn write_report_snapshot(root_path: impl AsRef<Path>, report: &ReportView) -> AppResult<()> {
@@ -392,11 +394,14 @@ fn write_report_snapshot(root_path: impl AsRef<Path>, report: &ReportView) -> Ap
 fn resolve_export_path(
   root_path: &Path,
   report_id: &str,
+  job_id: &str,
   export_type: &str,
   target_path: Option<String>,
 ) -> AppResult<PathBuf> {
   if let Some(target_path) = target_path {
-    return Ok(PathBuf::from(target_path));
+    let target_path = PathBuf::from(target_path);
+    validate_new_export_path(&target_path, export_type, true)?;
+    return Ok(target_path);
   }
 
   let directory = if export_type == "xlsx" {
@@ -405,7 +410,68 @@ fn resolve_export_path(
     root_path.join("exports/pdf")
   };
   fs::create_dir_all(&directory).map_err(export_error)?;
-  Ok(directory.join(format!("{report_id}.{export_type}")))
+  ensure_real_directory(&directory)?;
+  let path = directory.join(format!("{report_id}-{job_id}.{export_type}"));
+  validate_new_export_path(&path, export_type, false)?;
+  Ok(path)
+}
+
+fn validate_new_export_path(
+  path: &Path,
+  export_type: &str,
+  require_absolute: bool,
+) -> AppResult<()> {
+  if require_absolute && !path.is_absolute() {
+    return Err(export_error("自定义导出路径必须是绝对路径"));
+  }
+  let extension_matches = path
+    .extension()
+    .and_then(|value| value.to_str())
+    .is_some_and(|value| value.eq_ignore_ascii_case(export_type));
+  if !extension_matches {
+    return Err(export_error("导出目标扩展名与导出类型不一致"));
+  }
+  let parent = path
+    .parent()
+    .filter(|parent| !parent.as_os_str().is_empty())
+    .ok_or_else(|| export_error("导出目标缺少父目录"))?;
+  ensure_real_directory(parent)?;
+  match fs::symlink_metadata(path) {
+    Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+    Ok(_) => Err(export_error("导出目标已存在，拒绝覆盖")),
+    Err(error) => Err(export_error(error)),
+  }
+}
+
+fn ensure_real_directory(path: &Path) -> AppResult<()> {
+  let metadata = fs::symlink_metadata(path).map_err(export_error)?;
+  if metadata.file_type().is_symlink() || !metadata.is_dir() {
+    return Err(export_error("导出父目录必须是非符号链接目录"));
+  }
+  Ok(())
+}
+
+fn write_new_export_file(path: &Path, bytes: &[u8]) -> AppResult<()> {
+  let mut options = OpenOptions::new();
+  options.write(true).create_new(true);
+  #[cfg(unix)]
+  options.mode(0o600);
+  let mut file = options.open(path).map_err(export_error)?;
+  let result = (|| -> AppResult<()> {
+    file.write_all(bytes).map_err(export_error)?;
+    file.sync_all().map_err(export_error)?;
+    let parent = path
+      .parent()
+      .ok_or_else(|| export_error("导出目标缺少父目录"))?;
+    fs::File::open(parent)
+      .and_then(|directory| directory.sync_all())
+      .map_err(export_error)
+  })();
+  if result.is_err() {
+    drop(file);
+    fs::remove_file(path).ok();
+  }
+  result
 }
 
 fn task_summary(connection: &Connection, task_id: &str) -> AppResult<Value> {
@@ -599,6 +665,77 @@ mod tests {
     assert!(pdf.file_size.unwrap_or_default() > 0);
 
     std::fs::remove_dir_all(root_path).ok();
+  }
+
+  #[test]
+  fn custom_export_target_must_be_new_and_match_the_export_type() {
+    let (root_path, report) = test_report("custom-target");
+    let existing = root_path.join("existing.pdf");
+    fs::write(&existing, b"user content").expect("sentinel should be written");
+
+    let existing_result = create_export_job(
+      &root_path,
+      &report.id,
+      "pdf",
+      Some(existing.to_string_lossy().to_string()),
+    );
+    let wrong_extension = create_export_job(
+      &root_path,
+      &report.id,
+      "pdf",
+      Some(root_path.join("wrong.txt").to_string_lossy().to_string()),
+    );
+
+    assert!(existing_result.is_err());
+    assert_eq!(
+      fs::read(&existing).expect("sentinel should remain"),
+      b"user content"
+    );
+    assert!(wrong_extension.is_err());
+    std::fs::remove_dir_all(root_path).ok();
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn custom_export_target_rejects_symbolic_links() {
+    use std::os::unix::fs::symlink;
+
+    let (root_path, report) = test_report("target-symlink");
+    let sentinel = root_path.join("sentinel.pdf");
+    let target = root_path.join("linked.pdf");
+    fs::write(&sentinel, b"user content").expect("sentinel should be written");
+    symlink(&sentinel, &target).expect("target symlink should be created");
+
+    let result = create_export_job(
+      &root_path,
+      &report.id,
+      "pdf",
+      Some(target.to_string_lossy().to_string()),
+    );
+
+    assert!(result.is_err());
+    assert_eq!(
+      fs::read(&sentinel).expect("sentinel should remain"),
+      b"user content"
+    );
+    std::fs::remove_dir_all(root_path).ok();
+  }
+
+  fn test_report(label: &str) -> (std::path::PathBuf, ReportView) {
+    let root_path = unique_temp_workspace(label);
+    create_workspace("导出测试", &root_path).expect("workspace should be created");
+    let task = create_collection_task(
+      &root_path,
+      CreateCollectionTaskInput {
+        name: "导出任务".to_string(),
+        source_type: "form".to_string(),
+        platforms: vec!["tiktok".to_string()],
+        data_types: vec!["comments".to_string()],
+      },
+    )
+    .expect("task should be created");
+    let report = build_report_model(&root_path, &task.id, "summary").expect("report built");
+    (root_path, report)
   }
 
   fn unique_temp_workspace(label: &str) -> std::path::PathBuf {
