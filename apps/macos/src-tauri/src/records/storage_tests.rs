@@ -1,3 +1,4 @@
+use super::super::prepare_record;
 use super::*;
 use crate::workspace::create_workspace;
 
@@ -284,8 +285,8 @@ fn rejects_symlinked_database_and_mismatched_registered_root() {
 }
 
 #[test]
-fn recovers_orphan_file_as_the_first_snapshot_after_interruption() {
-  let workspace = TestWorkspace::new("orphan", &["keyword_search"]);
+fn rejects_conflicting_orphan_file_without_overwriting_or_persisting_it() {
+  let workspace = TestWorkspace::new("orphan-conflict", &["keyword_search"]);
   let run_id = workspace.insert_running_task_run();
   let first_value = tiktok_video("video-1", "中断前快照");
   let input = normalized_input(
@@ -299,20 +300,53 @@ fn recovers_orphan_file_as_the_first_snapshot_after_interruption() {
     .root
     .join(RAW_DIRECTORY)
     .join(format!("{}.json", prepared.identity_hash));
-  fs::write(&orphan_path, &prepared.raw_bytes).expect("orphan should be simulated");
+  let orphan_bytes = prepared.raw_bytes.clone();
+  fs::write(&orphan_path, &orphan_bytes).expect("orphan should be simulated");
 
-  let recovered = persist_page(
+  let error = persist_page(
     &workspace,
     &run_id,
     "keyword_search",
     vec![tiktok_video("video-1", "重启后变化")],
   )
-  .expect("valid orphan should be adopted");
+  .expect_err("conflicting orphan snapshot must be rejected");
+
+  assert_eq!(
+    error.code,
+    crate::domain::AppErrorCode::ExportIntegrityError
+  );
+  assert!(error.message.contains("哈希"));
+  assert_eq!(
+    fs::read(&orphan_path).expect("orphan should remain"),
+    orphan_bytes
+  );
+  assert_eq!(workspace.count_rows("raw_record"), 0);
+  assert_eq!(workspace.count_rows("normalized_record"), 0);
+}
+
+#[test]
+fn recovers_byte_identical_orphan_using_current_prepared_record() {
+  let workspace = TestWorkspace::new("orphan-identical", &["keyword_search"]);
+  let run_id = workspace.insert_running_task_run();
+  let value = tiktok_video("video-1", "磁盘原始正文");
+  let input = normalized_input(&workspace, &run_id, "keyword_search", vec![value.clone()]);
+  let mut prepared = prepare_record(&input, &value).expect("record should prepare");
+  let orphan_path = workspace
+    .root
+    .join(RAW_DIRECTORY)
+    .join(format!("{}.json", prepared.identity_hash));
+  fs::write(&orphan_path, &prepared.raw_bytes).expect("orphan should be simulated");
+  prepared.normalized.content_text = Some("本次标准化结果".to_string());
+
+  let recovered = super::persist_prepared_records(&workspace.root, &input, vec![prepared])
+    .expect("byte-identical orphan should recover");
+
   assert_eq!(
     recovered.normalized_records[0].content_text.as_deref(),
-    Some("中断前快照")
+    Some("本次标准化结果")
   );
   assert_eq!(workspace.count_rows("raw_record"), 1);
+  assert_eq!(workspace.count_rows("normalized_record"), 1);
 }
 
 fn persist_page(

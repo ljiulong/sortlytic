@@ -13,7 +13,7 @@ use crate::domain::AppResult;
 use crate::workspace::{open_workspace_database, CURRENT_SCHEMA_VERSION, DATABASE_FILE_NAME};
 
 use super::{
-  database_error, integrity_error, permission_error, prepare_record, record_file_error, sha256_hex,
+  database_error, integrity_error, permission_error, record_file_error, sha256_hex,
   validation_error, NormalizedFields, NormalizedInput, NormalizedRecordView,
   PersistCollectionPageResult, PreparedRecord, RawRecordView, MAX_RAW_RECORD_BYTES,
   NORMALIZED_SCHEMA_VERSION,
@@ -79,7 +79,7 @@ fn persist_records(
       continue;
     }
 
-    let (record, created_file) = materialize_raw_snapshot(paths, input, record)?;
+    let (record, created_file) = materialize_raw_snapshot(paths, record)?;
     let relative_path = raw_relative_path(&record.identity_hash)?;
     let absolute_path = paths.raw.join(format!("{}.json", record.identity_hash));
     if created_file {
@@ -137,37 +137,27 @@ fn persist_records(
 
 fn materialize_raw_snapshot(
   paths: &WorkspacePaths,
-  input: &NormalizedInput,
   record: PreparedRecord,
 ) -> AppResult<(PreparedRecord, bool)> {
   let final_path = paths.raw.join(format!("{}.json", record.identity_hash));
   match fs::symlink_metadata(&final_path) {
-    Ok(_) => return adopt_orphan_snapshot(&final_path, input, &record.identity_hash),
+    Ok(_) => return adopt_orphan_snapshot(&final_path, record),
     Err(error) if error.kind() == ErrorKind::NotFound => {}
     Err(error) => return Err(record_file_error(error)),
   }
 
   match write_new_raw_file(paths, &final_path, &record.raw_bytes)? {
     true => Ok((record, true)),
-    false => adopt_orphan_snapshot(&final_path, input, &record.identity_hash),
+    false => adopt_orphan_snapshot(&final_path, record),
   }
 }
 
-fn adopt_orphan_snapshot(
-  path: &Path,
-  input: &NormalizedInput,
-  expected_identity_hash: &str,
-) -> AppResult<(PreparedRecord, bool)> {
+fn adopt_orphan_snapshot(path: &Path, record: PreparedRecord) -> AppResult<(PreparedRecord, bool)> {
   let bytes = read_bounded_regular_file(path)?;
-  let raw_value = serde_json::from_slice::<Value>(&bytes)
-    .map_err(|_| integrity_error("孤儿原始记录文件不是合法 JSON"))?;
-  let mut adopted = prepare_record(input, &raw_value)?;
-  if adopted.identity_hash != expected_identity_hash {
-    return Err(integrity_error("孤儿原始记录文件与记录身份不一致"));
+  if sha256_hex(&bytes) != record.raw_hash {
+    return Err(integrity_error("孤儿原始记录文件哈希与本次采集记录不一致"));
   }
-  adopted.raw_hash = sha256_hex(&bytes);
-  adopted.raw_bytes = bytes;
-  Ok((adopted, false))
+  Ok((record, false))
 }
 
 fn write_new_raw_file(paths: &WorkspacePaths, final_path: &Path, bytes: &[u8]) -> AppResult<bool> {
