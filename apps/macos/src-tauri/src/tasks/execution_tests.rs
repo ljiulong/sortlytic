@@ -212,6 +212,169 @@ fn legacy_runs_without_a_plan_cannot_be_claimed_or_retried() {
 }
 
 #[test]
+fn enqueue_rejects_non_v2_or_corrupted_confirmed_plans_without_mutation() {
+  for (label, schema_version, corrupt_budget) in [
+    ("execution-enqueue-v1", 1, false),
+    ("execution-enqueue-unknown", 3, false),
+    ("execution-enqueue-corrupted-v2", 2, true),
+  ] {
+    let (root_path, task, plan) = prepared_task_workspace(label);
+    forge_plan_execution_contract(&root_path, &plan, schema_version, corrupt_budget);
+
+    let error =
+      enqueue_task(&root_path, &task.id).expect_err("non-v2 or corrupted plan must not enqueue");
+    assert!(error.message.contains("v2") || error.message.contains("采集计划"));
+
+    let state = task_run_count_and_state(&root_path, &task.id);
+    assert_eq!(state.0, 0);
+    assert_eq!(state.1, "waiting_confirmation");
+    assert!(state.2.is_some());
+
+    std::fs::remove_dir_all(root_path).ok();
+  }
+}
+
+#[test]
+fn enqueue_rejects_plan_and_step_snapshot_divergence_without_mutation() {
+  for (label, mutation) in [
+    ("execution-plan-json-divergence", "plan_json"),
+    ("execution-step-params-divergence", "step_params"),
+    ("execution-step-metadata-divergence", "step_metadata"),
+  ] {
+    let (root_path, task, plan) = prepared_task_workspace(label);
+    let connection = open_workspace_connection(&root_path).expect("database should open");
+    match mutation {
+      "plan_json" => {
+        let mut changed_plan = plan.plan_json.clone();
+        changed_plan["steps"][0]["params"]["keyword"] = serde_json::json!("truck");
+        connection
+          .execute(
+            "UPDATE collection_plan SET plan_json = ?1 WHERE id = ?2",
+            params![changed_plan.to_string(), plan.id],
+          )
+          .expect("test should change the confirmed plan body");
+      }
+      "step_params" => {
+        connection
+          .execute(
+            "UPDATE api_call_step SET params_json = ?1 WHERE plan_id = ?2",
+            params![
+              serde_json::json!({
+                "keyword": "truck",
+                "region": "US",
+                "time_range": "近 30 天"
+              })
+              .to_string(),
+              plan.id
+            ],
+          )
+          .expect("test should change persisted step parameters");
+      }
+      "step_metadata" => {
+        connection
+          .execute(
+            "UPDATE api_call_step
+             SET endpoint_key = 'tiktok.comments', status = 'success',
+                 request_count_estimate = 99
+             WHERE plan_id = ?1",
+            params![plan.id],
+          )
+          .expect("test should change persisted step metadata");
+      }
+      _ => unreachable!("test mutation should be known"),
+    }
+    drop(connection);
+
+    let error = enqueue_task(&root_path, &task.id)
+      .expect_err("divergent plan and step snapshots must not enqueue");
+    assert!(error.message.contains("步骤") || error.message.contains("采集计划"));
+
+    let state = task_run_count_and_state(&root_path, &task.id);
+    assert_eq!((state.0, state.1), (0, "waiting_confirmation".to_string()));
+
+    std::fs::remove_dir_all(root_path).ok();
+  }
+}
+
+#[test]
+fn retry_rejects_non_v2_or_corrupted_failed_plan_without_mutation() {
+  for (label, schema_version, corrupt_budget) in [
+    ("execution-retry-v1", 1, false),
+    ("execution-retry-corrupted-v2", 2, true),
+  ] {
+    let (root_path, task, plan) = prepared_task_workspace(label);
+    enqueue_task(&root_path, &task.id).expect("task should enqueue");
+    let running = claim_next_task(&root_path)
+      .expect("claim should succeed")
+      .expect("task should be claimed");
+    fail_task_run(
+      &root_path,
+      &running.id,
+      "TIKHUB_REQUEST_ERROR",
+      "网络超时",
+      true,
+    )
+    .expect("run should fail");
+    forge_plan_execution_contract(&root_path, &plan, schema_version, corrupt_budget);
+
+    let error = retry_task(&root_path, &task.id, None)
+      .expect_err("non-v2 or corrupted failed plan must not create a retry");
+    assert!(error.message.contains("v2") || error.message.contains("采集计划"));
+
+    let state = task_run_count_and_state(&root_path, &task.id);
+    assert_eq!((state.0, state.1), (1, "failed".to_string()));
+
+    std::fs::remove_dir_all(root_path).ok();
+  }
+}
+
+#[test]
+fn claim_skips_a_queued_v1_run_without_mutation() {
+  let (root_path, task, plan) = prepared_task_workspace("execution-claim-v1");
+  let queued = enqueue_task(&root_path, &task.id).expect("task should enqueue");
+  forge_plan_execution_contract(&root_path, &plan, 1, false);
+
+  assert!(claim_next_task(&root_path)
+    .expect("legacy queued run should be skipped")
+    .is_none());
+  assert_run_and_task_state(&root_path, &queued.id, &task.id, "queued", "queued");
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn claim_rejects_a_corrupted_v2_run_without_mutation() {
+  let (root_path, task, plan) = prepared_task_workspace("execution-claim-corrupted-v2");
+  let queued = enqueue_task(&root_path, &task.id).expect("task should enqueue");
+  forge_plan_execution_contract(&root_path, &plan, 2, true);
+
+  let error =
+    claim_next_task(&root_path).expect_err("corrupted queued v2 plan must not be claimed");
+  assert!(error.message.contains("v2") || error.message.contains("采集计划"));
+  assert_run_and_task_state(&root_path, &queued.id, &task.id, "queued", "queued");
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn recovery_does_not_requeue_a_running_v1_run() {
+  let (root_path, task, plan) = prepared_task_workspace("execution-recover-v1");
+  enqueue_task(&root_path, &task.id).expect("task should enqueue");
+  let running = claim_next_task(&root_path)
+    .expect("claim should succeed")
+    .expect("task should be claimed");
+  forge_plan_execution_contract(&root_path, &plan, 1, false);
+
+  assert_eq!(
+    recover_interrupted_runs(&root_path).expect("recovery should run"),
+    0
+  );
+  assert_run_and_task_state(&root_path, &running.id, &task.id, "running", "running");
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn enqueue_rejects_a_missing_confirmed_plan_without_mutation() {
   let (root_path, task, _) = prepared_task_workspace("execution-missing-plan");
   let connection = open_workspace_connection(&root_path).expect("database should open");
@@ -551,6 +714,82 @@ fn execution_plan_input(task_id: &str) -> SaveCollectionPlanInput {
     validation_errors_json: None,
     cost_estimate_json: None,
   }
+}
+
+fn forge_plan_execution_contract(
+  root_path: &Path,
+  plan: &CollectionPlanView,
+  schema_version: i64,
+  corrupt_budget: bool,
+) {
+  let mut plan_json = plan.plan_json.clone();
+  if corrupt_budget {
+    plan_json
+      .as_object_mut()
+      .expect("plan fixture should be an object")
+      .remove("budget_limit");
+  }
+  let connection = open_workspace_connection(root_path).expect("database should open");
+  connection
+    .execute(
+      "UPDATE collection_plan
+       SET schema_version = ?1, plan_json = ?2, validation_status = 'valid'
+       WHERE id = ?3",
+      params![schema_version, plan_json.to_string(), plan.id],
+    )
+    .expect("test should forge the persisted plan contract");
+}
+
+fn assert_run_and_task_state(
+  root_path: &Path,
+  run_id: &str,
+  task_id: &str,
+  run_status: &str,
+  task_status: &str,
+) {
+  let connection = open_workspace_connection(root_path).expect("database should reopen");
+  let state = connection
+    .query_row(
+      "SELECT status, claimed_at,
+              (SELECT status FROM collection_task WHERE id = ?2)
+       FROM task_run WHERE id = ?1",
+      params![run_id, task_id],
+      |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, Option<String>>(1)?,
+          row.get::<_, String>(2)?,
+        ))
+      },
+    )
+    .expect("run and task state should load");
+  assert_eq!(state.0, run_status);
+  if run_status == "queued" {
+    assert!(state.1.is_none());
+  } else {
+    assert!(state.1.is_some());
+  }
+  assert_eq!(state.2, task_status);
+}
+
+fn task_run_count_and_state(root_path: &Path, task_id: &str) -> (i64, String, Option<String>) {
+  let connection = open_workspace_connection(root_path).expect("database should reopen");
+  connection
+    .query_row(
+      "SELECT
+         (SELECT COUNT(*) FROM task_run WHERE task_id = ?1),
+         status, confirmed_at
+       FROM collection_task WHERE id = ?1",
+      params![task_id],
+      |row| {
+        Ok((
+          row.get::<_, i64>(0)?,
+          row.get::<_, String>(1)?,
+          row.get::<_, Option<String>>(2)?,
+        ))
+      },
+    )
+    .expect("task run count and state should load")
 }
 
 fn unique_temp_workspace(label: &str) -> std::path::PathBuf {

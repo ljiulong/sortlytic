@@ -5,12 +5,25 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBe
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::collection::validate_collection_plan_v2;
 use crate::domain::{redact_sensitive_text, AppResult};
 
+use super::validation::validate_plan_for_task;
 use super::{
   database_error, get_task_by_id, get_task_run, latest_plan_for_task, map_task_run,
   normalize_required, open_workspace_connection, task_error, CollectionTaskView, TaskRunView,
 };
+
+struct PersistedPlanStep {
+  order: i64,
+  platform: String,
+  data_type: String,
+  endpoint_key: String,
+  params_json: String,
+  status: String,
+  request_count_estimate: i64,
+  cost_estimate_json: String,
+}
 
 pub fn enqueue_task(root_path: impl AsRef<Path>, task_id: &str) -> AppResult<TaskRunView> {
   let mut connection = open_workspace_connection(root_path)?;
@@ -61,11 +74,15 @@ pub fn claim_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRunV
   let transaction = immediate_transaction(&mut connection)?;
   let queued = transaction
     .query_row(
-      "SELECT id, task_id, status, started_at, ended_at, current_stage, error_code,
-              error_message, retryable, cost_actual_json, plan_id, attempt_number, claimed_at
-       FROM task_run
-       WHERE status = 'queued' AND plan_id IS NOT NULL
-       ORDER BY started_at ASC, id ASC
+      "SELECT run.id, run.task_id, run.status, run.started_at, run.ended_at,
+              run.current_stage, run.error_code, run.error_message, run.retryable,
+              run.cost_actual_json, run.plan_id, run.attempt_number, run.claimed_at
+       FROM task_run AS run
+       JOIN collection_plan AS plan
+         ON plan.id = run.plan_id AND plan.task_id = run.task_id
+       WHERE run.status = 'queued' AND plan.schema_version = 2
+         AND plan.validation_status = 'valid'
+       ORDER BY run.started_at ASC, run.id ASC
        LIMIT 1",
       [],
       map_task_run,
@@ -76,13 +93,23 @@ pub fn claim_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRunV
     transaction.commit().map_err(database_error)?;
     return Ok(None);
   };
+  let plan_id = queued
+    .plan_id
+    .as_deref()
+    .ok_or_else(|| task_error("队列任务缺少采集计划，不能领取"))?;
+  require_executable_plan(&transaction, &queued.task_id, plan_id)?;
   let now = Utc::now().to_rfc3339();
   let changed = transaction
     .execute(
       "UPDATE task_run
        SET status = 'running', current_stage = '执行采集', error_code = NULL,
            error_message = NULL, retryable = 0, claimed_at = ?1
-       WHERE id = ?2 AND status = 'queued' AND plan_id IS NOT NULL",
+       WHERE id = ?2 AND status = 'queued' AND plan_id IS NOT NULL
+         AND EXISTS (
+           SELECT 1 FROM collection_plan AS plan
+           WHERE plan.id = task_run.plan_id AND plan.task_id = task_run.task_id
+             AND plan.schema_version = 2 AND plan.validation_status = 'valid'
+         )",
       params![now, queued.id],
     )
     .map_err(database_error)?;
@@ -187,20 +214,35 @@ pub fn recover_interrupted_runs(root_path: impl AsRef<Path>) -> AppResult<i64> {
   let transaction = immediate_transaction(&mut connection)?;
   let interrupted = {
     let mut statement = transaction
-      .prepare("SELECT id, task_id FROM task_run WHERE status = 'running' ORDER BY started_at")
+      .prepare(
+        "SELECT run.id, run.task_id, run.plan_id
+         FROM task_run AS run
+         JOIN collection_plan AS plan
+           ON plan.id = run.plan_id AND plan.task_id = run.task_id
+         WHERE run.status = 'running' AND plan.schema_version = 2
+           AND plan.validation_status = 'valid'
+         ORDER BY run.started_at, run.id",
+      )
       .map_err(database_error)?;
     let rows = statement
       .query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, String>(1)?,
+          row.get::<_, String>(2)?,
+        ))
       })
       .map_err(database_error)?;
     rows
       .collect::<rusqlite::Result<Vec<_>>>()
       .map_err(database_error)?
   };
+  for (_, task_id, plan_id) in &interrupted {
+    require_executable_plan(&transaction, task_id, plan_id)?;
+  }
   let now = Utc::now().to_rfc3339();
 
-  for (run_id, task_id) in &interrupted {
+  for (run_id, task_id, _) in &interrupted {
     transaction
       .execute(
         "UPDATE task_run
@@ -278,6 +320,7 @@ pub fn retry_task(
     return Err(task_error("只有失败任务可以重试"));
   }
   let plan_id = latest_failed_plan_id(&transaction, task_id)?;
+  require_executable_plan(&transaction, task_id, &plan_id)?;
   let attempt_number = next_attempt_number(&transaction, task_id, &plan_id)?;
   let run_id = Uuid::new_v4().to_string();
   let now = Utc::now().to_rfc3339();
@@ -338,7 +381,134 @@ fn confirmed_plan_id(connection: &Connection, task_id: &str) -> AppResult<String
       "当前确认的采集计划不是最新计划，请重新确认最新采集计划",
     ));
   }
+  require_executable_plan(connection, task_id, &plan_id)?;
   Ok(plan_id)
+}
+
+fn require_executable_plan(connection: &Connection, task_id: &str, plan_id: &str) -> AppResult<()> {
+  let plan = connection
+    .query_row(
+      "SELECT task_id, schema_version, validation_status, plan_json
+       FROM collection_plan WHERE id = ?1",
+      params![plan_id],
+      |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, i64>(1)?,
+          row.get::<_, String>(2)?,
+          row.get::<_, String>(3)?,
+        ))
+      },
+    )
+    .optional()
+    .map_err(database_error)?
+    .ok_or_else(|| task_error("任务绑定的采集计划不存在，请重新确认后再运行"))?;
+
+  if plan.0 != task_id {
+    return Err(task_error("任务运行绑定了其他任务的采集计划"));
+  }
+  if plan.1 != 2 {
+    return Err(task_error(format!(
+      "schema_version={} 的采集计划不能执行，必须重新确认有效的 v2 计划",
+      plan.1
+    )));
+  }
+  if plan.2 != "valid" {
+    return Err(task_error("采集计划不是 valid 状态，不能执行"));
+  }
+
+  let plan_json = serde_json::from_str::<Value>(&plan.3)
+    .map_err(|_| task_error("采集计划 v2 不是合法 JSON，不能执行"))?;
+  let task = get_task_by_id(connection, task_id)?;
+  let mut validation_errors = validate_plan_for_task(&task, &plan_json);
+  validation_errors.extend(validate_collection_plan_v2(&plan_json).errors);
+  validation_errors.sort();
+  validation_errors.dedup();
+  if !validation_errors.is_empty() {
+    return Err(task_error(format!(
+      "采集计划 v2 已损坏或不再满足执行条件：{}",
+      validation_errors.join("；")
+    )));
+  }
+  require_persisted_steps_match_plan(connection, plan_id, &plan_json)?;
+
+  Ok(())
+}
+
+fn require_persisted_steps_match_plan(
+  connection: &Connection,
+  plan_id: &str,
+  plan_json: &Value,
+) -> AppResult<()> {
+  let expected_steps = plan_json
+    .get("steps")
+    .and_then(Value::as_array)
+    .ok_or_else(|| task_error("采集计划 v2 缺少步骤，不能执行"))?;
+  let request_limit = plan_json
+    .get("request_limit")
+    .and_then(Value::as_i64)
+    .ok_or_else(|| task_error("采集计划 v2 缺少有效请求上限，不能执行"))?;
+  let persisted_steps = {
+    let mut statement = connection
+      .prepare(
+        "SELECT step_order, platform, data_type, endpoint_key, params_json, status,
+                request_count_estimate, cost_estimate_json
+         FROM api_call_step WHERE plan_id = ?1 ORDER BY step_order, id",
+      )
+      .map_err(database_error)?;
+    let rows = statement
+      .query_map(params![plan_id], |row| {
+        Ok(PersistedPlanStep {
+          order: row.get(0)?,
+          platform: row.get(1)?,
+          data_type: row.get(2)?,
+          endpoint_key: row.get(3)?,
+          params_json: row.get(4)?,
+          status: row.get(5)?,
+          request_count_estimate: row.get(6)?,
+          cost_estimate_json: row.get(7)?,
+        })
+      })
+      .map_err(database_error)?;
+    rows
+      .collect::<rusqlite::Result<Vec<_>>>()
+      .map_err(database_error)?
+  };
+
+  if persisted_steps.len() != expected_steps.len() {
+    return Err(task_error("采集计划与持久化步骤数量不一致，不能执行"));
+  }
+
+  for (index, (persisted, expected)) in persisted_steps.iter().zip(expected_steps).enumerate() {
+    let expected = expected
+      .as_object()
+      .ok_or_else(|| task_error("采集计划 v2 包含无效步骤，不能执行"))?;
+    let expected_params = expected
+      .get("params")
+      .cloned()
+      .unwrap_or_else(|| serde_json::json!({}));
+    let persisted_params = serde_json::from_str::<Value>(&persisted.params_json)
+      .map_err(|_| task_error("持久化采集步骤参数不是合法 JSON，不能执行"))?;
+    let persisted_cost = serde_json::from_str::<Value>(&persisted.cost_estimate_json)
+      .map_err(|_| task_error("持久化采集步骤成本不是合法 JSON，不能执行"))?;
+    let expected_cost = serde_json::json!({ "request_count_estimate": request_limit });
+    let matches_plan = persisted.order == index as i64
+      && expected.get("platform").and_then(Value::as_str) == Some(&persisted.platform)
+      && expected.get("data_type").and_then(Value::as_str) == Some(&persisted.data_type)
+      && expected.get("endpoint_key").and_then(Value::as_str) == Some(&persisted.endpoint_key)
+      && persisted_params == expected_params
+      && persisted.status == "planned"
+      && persisted.request_count_estimate == request_limit
+      && persisted_cost == expected_cost;
+    if !matches_plan {
+      return Err(task_error(format!(
+        "采集计划与持久化步骤 {} 不一致，不能执行",
+        index + 1
+      )));
+    }
+  }
+
+  Ok(())
 }
 
 fn latest_failed_plan_id(connection: &Connection, task_id: &str) -> AppResult<String> {
