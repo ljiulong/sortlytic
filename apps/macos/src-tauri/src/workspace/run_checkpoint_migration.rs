@@ -683,6 +683,24 @@ mod tests {
   }
 
   fn downgrade_to_v3(connection: &Connection) {
+    if columns(connection, "secret_ref")
+      .iter()
+      .any(|column| column == "credential_revision")
+    {
+      connection
+        .execute_batch(
+          "DROP TRIGGER trg_collection_runtime_snapshot_immutable_delete; DROP TRIGGER trg_collection_runtime_snapshot_immutable_update;
+         DROP TRIGGER trg_collection_runtime_snapshot_insert;
+         DROP TRIGGER trg_secret_ref_credential_invalidates_connector;
+         DROP TRIGGER trg_secret_ref_credential_revision;
+         DROP TRIGGER trg_secret_ref_credential_revision_overflow;
+         DROP INDEX idx_collection_runtime_snapshot_task_run_id;
+         DROP TABLE collection_runtime_snapshot;
+         ALTER TABLE secret_ref DROP COLUMN credential_revision;
+         DELETE FROM schema_migrations WHERE version = 6;",
+        )
+        .expect("v6 runtime fixture should be removed");
+    }
     if columns(connection, "task_run")
       .iter()
       .any(|column| column == "plan_id")

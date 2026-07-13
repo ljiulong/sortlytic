@@ -311,6 +311,7 @@ fn opening_v2_workspace_migrates_connector_schema_without_data_loss() {
       params!["2026-07-13T08:00:00+00:00"],
     )
     .expect("sentinel should insert");
+  remove_collection_runtime_v6_fixture(&connection);
   connection
     .execute_batch(
       "DROP TABLE IF EXISTS tikhub_connector;
@@ -884,6 +885,7 @@ mod active_run_v5 {
   }
 
   fn downgrade_to_v4(connection: &Connection) {
+    remove_collection_runtime_v6_fixture(connection);
     connection
       .execute_batch(
         "DROP INDEX idx_task_run_single_active;
@@ -1204,6 +1206,7 @@ fn opening_v1_workspace_migrates_record_observations_without_data_loss() {
     "tiktok",
   )
   .expect("legacy normalized row should insert");
+  remove_collection_runtime_v6_fixture(&connection);
   connection
     .execute("DELETE FROM schema_migrations WHERE version > 1", [])
     .expect("future migration markers should clear");
@@ -1366,6 +1369,28 @@ fn table_columns(connection: &Connection, table: &str) -> Vec<String> {
     .expect("table info should run")
     .collect::<rusqlite::Result<Vec<_>>>()
     .expect("table columns should load")
+}
+
+fn remove_collection_runtime_v6_fixture(connection: &Connection) {
+  if table_columns(connection, "secret_ref")
+    .iter()
+    .any(|column| column == "credential_revision")
+  {
+    connection
+      .execute_batch(
+        "DROP TRIGGER IF EXISTS trg_collection_runtime_snapshot_immutable_delete;
+         DROP TRIGGER IF EXISTS trg_collection_runtime_snapshot_immutable_update;
+         DROP TRIGGER IF EXISTS trg_collection_runtime_snapshot_insert;
+         DROP TRIGGER IF EXISTS trg_secret_ref_credential_invalidates_connector;
+         DROP TRIGGER IF EXISTS trg_secret_ref_credential_revision;
+         DROP TRIGGER IF EXISTS trg_secret_ref_credential_revision_overflow;
+         DROP INDEX IF EXISTS idx_collection_runtime_snapshot_task_run_id;
+         DROP TABLE IF EXISTS collection_runtime_snapshot;
+         ALTER TABLE secret_ref DROP COLUMN credential_revision;
+         DELETE FROM schema_migrations WHERE version = 6;",
+      )
+      .expect("v6 runtime fixture should be removed");
+  }
 }
 
 fn migration_marker(connection: &Connection, version: i64) -> (String, String) {
