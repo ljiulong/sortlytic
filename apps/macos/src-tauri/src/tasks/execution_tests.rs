@@ -4,45 +4,8 @@ use crate::workspace::create_workspace;
 #[path = "execution_claim_tests.rs"]
 mod execution_claim_tests;
 
-#[test]
-fn queued_run_can_be_claimed_and_completed_atomically() {
-  let (root_path, task, plan) = prepared_task_workspace("execution-success");
-  let queued = enqueue_task(&root_path, &task.id).expect("task should enqueue");
-
-  assert_eq!(queued.plan_id.as_deref(), Some(plan.id.as_str()));
-  assert_eq!(queued.attempt_number, 1);
-  assert!(queued.claimed_at.is_none());
-  let serialized = serde_json::to_value(&queued).expect("run should serialize");
-  assert_eq!(serialized["plan_id"], plan.id);
-  assert_eq!(serialized["attempt_number"], 1);
-  assert!(serialized["claimed_at"].is_null());
-
-  let running = claim_next_task(&root_path)
-    .expect("claim should succeed")
-    .expect("queued task should be claimed");
-  let running_task = get_task(&root_path, &task.id).expect("task should load");
-
-  assert_eq!(running.id, queued.id);
-  assert_eq!(running.status, "running");
-  assert!(running.claimed_at.is_some());
-  assert_eq!(running_task.status, "running");
-
-  let completed = complete_task_run(
-    &root_path,
-    &running.id,
-    serde_json::json!({ "request_count": 1 }),
-  )
-  .expect("running task should complete");
-  let completed_task = get_task(&root_path, &task.id).expect("task should load");
-
-  assert_eq!(completed.status, "success");
-  assert!(completed.ended_at.is_some());
-  assert_eq!(completed.claimed_at, running.claimed_at);
-  assert_eq!(completed_task.status, "success");
-  assert!(completed_task.completed_at.is_some());
-
-  std::fs::remove_dir_all(root_path).ok();
-}
+#[path = "execution_completion_tests.rs"]
+mod execution_completion_tests;
 
 #[test]
 fn failed_run_can_create_a_new_retry_run() {
