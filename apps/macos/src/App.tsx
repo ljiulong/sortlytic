@@ -494,7 +494,8 @@ function CollectionPlanPreview({
   const canConfirm = Boolean(
     plan.taskId && plan.planId && plan.validationStatus === 'valid' && plan.status === '等待确认',
   )
-  const confirmLabel = plan.status === '运行中' ? '已入队' : plan.taskId ? '确认运行' : '先生成计划'
+  const isEnqueued = plan.status === '已排队' || plan.status === '运行中'
+  const confirmLabel = isEnqueued ? '已入队' : plan.taskId ? '确认运行' : '先生成计划'
 
   return (
     <div className="plan-preview">

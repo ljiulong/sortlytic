@@ -17,6 +17,7 @@ import {
   mapBackendData,
   planFromBackend,
   saveAndTestTikhubToken,
+  type RuntimeCollectionPlan,
   useWorkbenchBackend,
 } from './use-workbench-backend'
 import { workspaceSnapshot } from './workbench-data'
@@ -300,6 +301,39 @@ describe('TikHub mutation 失败回读', () => {
     finishInvalidation?.()
     await completion
     expect(completed).toBe(true)
+  })
+})
+
+describe('计划确认状态转换', () => {
+  it('确认并入队后把活动计划标记为已排队，而不是运行中', () => {
+    renderWorkbenchHook()
+    const confirmMutation = mutationOptionsMock.current[2]
+    const activePlanSetter = stateSettersMock.current[0]
+    if (!confirmMutation?.onSuccess || !activePlanSetter) {
+      throw new Error('未捕获计划确认 mutation 或活动计划状态 setter')
+    }
+
+    confirmMutation.onSuccess(undefined)
+    const updatePlan = activePlanSetter.mock.calls.at(-1)?.[0]
+    if (typeof updatePlan !== 'function') {
+      throw new Error('计划确认成功后应通过函数更新活动计划')
+    }
+    const currentPlan: RuntimeCollectionPlan = {
+      platform: 'TikTok',
+      dataType: '评论采集',
+      regionCode: 'US',
+      keyword: 'electric vehicle',
+      range: '2026-07-01/2026-07-07',
+      maxRecords: 100,
+      budget: 10,
+      status: '等待确认',
+      missing: [],
+      taskId: 'task-1',
+      planId: 'plan-1',
+      validationStatus: 'valid',
+    }
+
+    expect(updatePlan(currentPlan).status).toBe('已排队')
   })
 })
 

@@ -219,7 +219,7 @@ export function useWorkbenchBackend() {
       return run
     },
     onSuccess: () => {
-      setActivePlan((plan) => (plan ? { ...plan, status: '运行中' } : plan))
+      setActivePlan((plan) => (plan ? { ...plan, status: '已排队' } : plan))
       setActionMessage('任务已确认并加入本地队列')
       void queryClient.invalidateQueries({ queryKey })
     },
