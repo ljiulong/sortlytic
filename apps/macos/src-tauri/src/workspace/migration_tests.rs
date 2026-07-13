@@ -402,6 +402,697 @@ fn opening_rejects_invalid_tikhub_connector_marker_or_schema() {
 }
 
 #[test]
+fn opening_rejects_damaged_v5_marker_or_active_run_index() {
+  let checksum_root = unique_temp_workspace("v5-bad-checksum");
+  create_workspace("v5 checksum 校验", &checksum_root).expect("workspace should be created");
+  let connection = Connection::open(checksum_root.join(DATABASE_FILE_NAME))
+    .expect("workspace database should open");
+  connection
+    .execute(
+      "UPDATE schema_migrations SET checksum = 'tampered' WHERE version = 5",
+      [],
+    )
+    .expect("v5 checksum should be corrupted");
+  drop(connection);
+  let checksum_error =
+    open_workspace(&checksum_root).expect_err("invalid v5 checksum must be rejected");
+  assert!(checksum_error.message.contains("v5") && checksum_error.message.contains("校验"));
+  fs::remove_dir_all(checksum_root).ok();
+
+  let marker_root = unique_temp_workspace("v5-missing-marker");
+  create_workspace("v5 标记校验", &marker_root).expect("workspace should be created");
+  let connection =
+    Connection::open(marker_root.join(DATABASE_FILE_NAME)).expect("workspace database should open");
+  connection
+    .execute("DELETE FROM schema_migrations WHERE version = 5", [])
+    .expect("v5 marker should be removed");
+  drop(connection);
+  let marker_error = open_workspace(&marker_root).expect_err("missing v5 marker must be rejected");
+  assert!(marker_error.message.contains("v5") && marker_error.message.contains("标记"));
+  fs::remove_dir_all(marker_root).ok();
+
+  let index_root = unique_temp_workspace("v5-missing-index");
+  create_workspace("v5 索引校验", &index_root).expect("workspace should be created");
+  let connection =
+    Connection::open(index_root.join(DATABASE_FILE_NAME)).expect("workspace database should open");
+  connection
+    .execute("DROP INDEX idx_task_run_single_active", [])
+    .expect("v5 index should be removed");
+  drop(connection);
+  let index_error = open_workspace(&index_root).expect_err("missing v5 index must be rejected");
+  assert!(index_error.message.contains("v5") && index_error.message.contains("结构"));
+  let connection = Connection::open(index_root.join(DATABASE_FILE_NAME))
+    .expect("database should reopen without repair");
+  assert_eq!(
+    object_count(&connection, "index", "idx_task_run_single_active"),
+    0
+  );
+  fs::remove_dir_all(index_root).ok();
+}
+
+#[test]
+fn fresh_workspace_enforces_one_active_run_per_task() {
+  let root_path = unique_temp_workspace("v5-active-run-index");
+  let workspace = create_workspace("活动运行唯一性", &root_path).expect("workspace should create");
+  let connection =
+    open_workspace_database(root_path.join(DATABASE_FILE_NAME)).expect("database should open");
+  let now = "2026-07-13T08:00:00+00:00";
+  for task_id in ["task-active", "task-other"] {
+    connection
+      .execute(
+        "INSERT INTO collection_task (
+           id, name, source_type, status, created_at, updated_at
+         ) VALUES (?1, '唯一性测试', 'form', 'queued', ?2, ?2)",
+        params![task_id, now],
+      )
+      .expect("task should insert");
+  }
+  connection
+    .execute(
+      "INSERT INTO task_run (id, task_id, status, started_at)
+       VALUES ('run-active', 'task-active', 'queued', ?1)",
+      params![now],
+    )
+    .expect("first active run should insert");
+
+  assert_eq!(workspace.schema_version, CURRENT_SCHEMA_VERSION);
+  let (migration_name, checksum) = migration_marker(&connection, 5);
+  assert_eq!(migration_name, "single_active_task_run");
+  assert_eq!(
+    checksum,
+    "5f1a30aa477486ddabf59efac0ce858ad188b3e0e8d1bd054820756a0d101849"
+  );
+  assert!(connection
+    .execute(
+      "INSERT INTO task_run (id, task_id, status, started_at)
+       VALUES ('run-second', 'task-active', 'running', ?1)",
+      params![now],
+    )
+    .is_err());
+  connection
+    .execute(
+      "UPDATE task_run SET status = 'running' WHERE id = 'run-active'",
+      [],
+    )
+    .expect("active run should transition in place");
+  connection
+    .execute(
+      "INSERT INTO task_run (id, task_id, status, started_at, ended_at)
+       VALUES ('run-history', 'task-active', 'failed', ?1, ?1)",
+      params![now],
+    )
+    .expect("terminal history should insert");
+  assert!(connection
+    .execute(
+      "UPDATE task_run SET status = 'queued' WHERE id = 'run-history'",
+      [],
+    )
+    .is_err());
+  connection
+    .execute(
+      "INSERT INTO task_run (id, task_id, status, started_at)
+       VALUES ('run-other', 'task-other', 'queued', ?1)",
+      params![now],
+    )
+    .expect("another task may have its own active run");
+
+  drop(connection);
+  fs::remove_dir_all(root_path).ok();
+}
+
+mod active_run_v5 {
+  use super::*;
+
+  const T0: &str = "2026-07-13T08:00:00+00:00";
+  const T1: &str = "2026-07-13T08:01:00+00:00";
+  const T2: &str = "2026-07-13T08:02:00+00:00";
+  const T3: &str = "2026-07-13T08:03:00+00:00";
+
+  #[test]
+  fn v4_conflicts_fail_closed_and_preserve_uncertain_request_evidence() {
+    let root = unique_temp_workspace("v5-conflict-migration");
+    create_workspace("冲突迁移", &root).expect("workspace should be created");
+    let connection = open_workspace_database(root.join(DATABASE_FILE_NAME))
+      .expect("workspace database should open");
+    downgrade_to_v4(&connection);
+
+    insert_task(&connection, "task-conflict", "success", true);
+    connection
+      .execute(
+        "UPDATE collection_task SET completed_at = ?1, cancelled_at = ?2
+         WHERE id = 'task-conflict'",
+        params![T1, T2],
+      )
+      .expect("historical terminal timestamps should be forged for the test");
+    insert_plan(&connection, "plan-conflict", "task-conflict", true);
+    insert_api_step(&connection, "api-step-conflict", "plan-conflict");
+    insert_bound_run(
+      &connection,
+      "run-requesting",
+      "task-conflict",
+      "plan-conflict",
+      1,
+      "running",
+      Some(T1),
+    );
+    insert_bound_run(
+      &connection,
+      "run-queued",
+      "task-conflict",
+      "plan-conflict",
+      2,
+      "queued",
+      None,
+    );
+    insert_run_step(
+      &connection,
+      "run-step-requesting",
+      "run-requesting",
+      "api-step-conflict",
+      "running",
+    );
+    insert_run_step(
+      &connection,
+      "run-step-queued",
+      "run-queued",
+      "api-step-conflict",
+      "pending",
+    );
+    insert_requesting_checkpoint(&connection, "checkpoint-requesting", "run-step-requesting");
+
+    insert_task(&connection, "task-single", "running", true);
+    insert_unbound_run(&connection, "run-single", "task-single", "running")
+      .expect("single active run should insert before migration");
+
+    insert_task(&connection, "task-cancelled", "cancelled", true);
+    connection
+      .execute(
+        "UPDATE collection_task SET cancelled_at = ?1 WHERE id = 'task-cancelled'",
+        params![T2],
+      )
+      .expect("cancelled task evidence should persist");
+    insert_unbound_run(&connection, "run-cancelled-a", "task-cancelled", "queued")
+      .expect("first cancelled-task run should insert before migration");
+    insert_unbound_run(&connection, "run-cancelled-b", "task-cancelled", "running")
+      .expect("second cancelled-task run should insert before migration");
+
+    let evidence_before = checkpoint_evidence(&connection, "checkpoint-requesting");
+    drop(connection);
+
+    let summary = open_workspace(&root).expect("v4 workspace should migrate to v5");
+    let migrated = open_workspace_database(root.join(DATABASE_FILE_NAME))
+      .expect("migrated database should reopen");
+
+    assert_eq!(summary.schema_version, CURRENT_SCHEMA_VERSION);
+    assert_eq!(active_conflict_count(&migrated), 0);
+    assert_eq!(
+      checkpoint_evidence(&migrated, "checkpoint-requesting"),
+      evidence_before
+    );
+    let checkpoint_state = migrated
+      .query_row(
+        "SELECT status, retryable, last_error_code
+         FROM collection_page_checkpoint WHERE id = 'checkpoint-requesting'",
+        [],
+        |row| {
+          Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, Option<String>>(2)?,
+          ))
+        },
+      )
+      .expect("checkpoint state should load");
+    assert_eq!(
+      checkpoint_state,
+      (
+        "uncertain".to_string(),
+        0,
+        Some("UNCERTAIN_REQUEST_AFTER_CRASH".to_string())
+      )
+    );
+
+    assert_eq!(
+      run_state(&migrated, "run-requesting"),
+      (
+        "failed".to_string(),
+        Some("请求状态不确定".to_string()),
+        Some("UNCERTAIN_REQUEST_AFTER_CRASH".to_string()),
+        0,
+        Some(T1.to_string())
+      )
+    );
+    assert_eq!(
+      run_state(&migrated, "run-queued"),
+      (
+        "failed".to_string(),
+        Some("活动运行冲突".to_string()),
+        Some("ACTIVE_RUN_CONFLICT_MIGRATION".to_string()),
+        0,
+        None
+      )
+    );
+    assert_eq!(
+      run_step_state(&migrated, "run-step-requesting"),
+      (
+        "failed".to_string(),
+        Some("uncertain_request".to_string()),
+        true
+      )
+    );
+    assert_eq!(
+      run_step_state(&migrated, "run-step-queued"),
+      (
+        "failed".to_string(),
+        Some("terminal_error".to_string()),
+        true
+      )
+    );
+
+    let task_state = migrated
+      .query_row(
+        "SELECT status, confirmed_at, completed_at, cancelled_at
+         FROM collection_task WHERE id = 'task-conflict'",
+        [],
+        |row| {
+          Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, Option<String>>(3)?,
+          ))
+        },
+      )
+      .expect("task state should load");
+    assert_eq!(
+      task_state,
+      ("waiting_confirmation".to_string(), None, None, None)
+    );
+
+    let plan_state = migrated
+      .query_row(
+        "SELECT validation_status, confirmed_by_user
+         FROM collection_plan WHERE id = 'plan-conflict'",
+        [],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+      )
+      .expect("plan state should load");
+    assert_eq!(plan_state, ("valid".to_string(), 1));
+
+    assert_eq!(
+      migrated
+        .query_row(
+          "SELECT status FROM task_run WHERE id = 'run-single'",
+          [],
+          |row| row.get::<_, String>(0),
+        )
+        .expect("unrelated run state should load"),
+      "running"
+    );
+
+    assert_eq!(
+      migrated
+        .query_row(
+          "SELECT status, confirmed_at, cancelled_at
+           FROM collection_task WHERE id = 'task-cancelled'",
+          [],
+          |row| {
+            Ok((
+              row.get::<_, String>(0)?,
+              row.get::<_, Option<String>>(1)?,
+              row.get::<_, Option<String>>(2)?,
+            ))
+          },
+        )
+        .expect("cancelled task state should load"),
+      (
+        "cancelled".to_string(),
+        Some(T0.to_string()),
+        Some(T2.to_string())
+      )
+    );
+    assert_eq!(
+      migrated
+        .query_row(
+          "SELECT COUNT(*) FROM task_run
+           WHERE id IN ('run-cancelled-a', 'run-cancelled-b')
+             AND status = 'failed' AND retryable = 0 AND ended_at IS NOT NULL",
+          [],
+          |row| row.get::<_, i64>(0),
+        )
+        .expect("cancelled task runs should load"),
+      2
+    );
+
+    let audit = migrated
+      .query_row(
+        "SELECT json_extract(safe_details_json, '$.original_run_status'),
+                json_extract(safe_details_json, '$.original_current_stage'),
+                json_extract(safe_details_json, '$.original_error_code'),
+                json_extract(safe_details_json, '$.original_ended_at'),
+                json_extract(safe_details_json, '$.original_retryable'),
+                json_extract(safe_details_json, '$.original_claimed_at'),
+                json_extract(safe_details_json, '$.original_task_status'),
+                json_extract(safe_details_json, '$.original_confirmed_at'),
+                json_extract(safe_details_json, '$.original_completed_at'),
+                json_extract(safe_details_json, '$.original_cancelled_at'),
+                json_extract(safe_details_json, '$.original_task_updated_at'),
+                json_extract(safe_details_json, '$.active_run_count')
+         FROM task_log
+         WHERE task_run_id = 'run-requesting' AND stage = '活动运行冲突迁移'",
+        [],
+        |row| {
+          Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, i64>(4)?,
+            row.get::<_, Option<String>>(5)?,
+            row.get::<_, String>(6)?,
+            row.get::<_, Option<String>>(7)?,
+            row.get::<_, Option<String>>(8)?,
+            row.get::<_, Option<String>>(9)?,
+            row.get::<_, Option<String>>(10)?,
+            row.get::<_, i64>(11)?,
+          ))
+        },
+      )
+      .expect("migration audit should load");
+    assert_eq!(
+      audit,
+      (
+        "running".to_string(),
+        Some("执行采集".to_string()),
+        None,
+        None,
+        1,
+        Some(T1.to_string()),
+        "success".to_string(),
+        Some(T0.to_string()),
+        Some(T1.to_string()),
+        Some(T2.to_string()),
+        Some(T0.to_string()),
+        2
+      )
+    );
+    let original_error_message_was_null = migrated
+      .query_row(
+        "SELECT json_extract(
+           safe_details_json, '$.original_error_message_was_null'
+         ) FROM task_log
+         WHERE task_run_id = 'run-requesting' AND stage = '活动运行冲突迁移'",
+        [],
+        |row| row.get::<_, Option<i64>>(0),
+      )
+      .expect("run error-message null marker should load");
+    assert_eq!(original_error_message_was_null, Some(1));
+
+    let step_audit = migrated
+      .query_row(
+        "SELECT json_extract(safe_details_json, '$.original_status'),
+                json_extract(safe_details_json, '$.original_stop_reason'),
+                json_extract(safe_details_json, '$.original_completed_at'),
+                json_extract(safe_details_json, '$.original_updated_at')
+         FROM task_log
+         WHERE task_run_id = 'run-requesting' AND stage = '活动步骤冲突迁移'",
+        [],
+        |row| {
+          Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, String>(3)?,
+          ))
+        },
+      )
+      .expect("run step audit should load");
+    assert_eq!(
+      step_audit,
+      ("running".to_string(), None, None, T1.to_string())
+    );
+
+    let checkpoint_audit = migrated
+      .query_row(
+        "SELECT json_extract(safe_details_json, '$.original_status'),
+                json_extract(safe_details_json, '$.original_retryable'),
+                json_extract(safe_details_json, '$.original_updated_at'),
+                json_extract(safe_details_json, '$.original_last_error_code_was_null'),
+                json_extract(safe_details_json, '$.original_last_error_message_was_null')
+         FROM task_log
+         WHERE task_run_id = 'run-requesting' AND stage = '请求检查点冲突迁移'",
+        [],
+        |row| {
+          Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<i64>>(3)?,
+            row.get::<_, Option<i64>>(4)?,
+          ))
+        },
+      )
+      .expect("checkpoint audit should load");
+    assert_eq!(
+      checkpoint_audit,
+      (
+        "requesting".to_string(),
+        1,
+        T3.to_string(),
+        Some(1),
+        Some(1)
+      )
+    );
+
+    assert_eq!(foreign_key_violation_count(&migrated), 0);
+    let log_count_before = migration_log_count(&migrated, "task-conflict");
+    assert_eq!(log_count_before, 5);
+    drop(migrated);
+
+    open_workspace(&root).expect("v5 migration should be idempotent");
+    let reopened = open_workspace_database(root.join(DATABASE_FILE_NAME))
+      .expect("workspace database should reopen");
+    assert_eq!(
+      migration_log_count(&reopened, "task-conflict"),
+      log_count_before
+    );
+    assert!(insert_unbound_run(&reopened, "run-new-a", "task-conflict", "queued").is_ok());
+    assert!(insert_unbound_run(&reopened, "run-new-b", "task-conflict", "running").is_err());
+
+    drop(reopened);
+    fs::remove_dir_all(root).ok();
+  }
+
+  fn downgrade_to_v4(connection: &Connection) {
+    connection
+      .execute_batch(
+        "DROP INDEX idx_task_run_single_active;
+         DELETE FROM schema_migrations WHERE version = 5;
+         UPDATE workspace SET schema_version = 4;",
+      )
+      .expect("workspace should downgrade to v4 for migration testing");
+  }
+
+  fn insert_task(connection: &Connection, id: &str, status: &str, confirmed: bool) {
+    connection
+      .execute(
+        "INSERT INTO collection_task (
+           id, name, source_type, status, created_at, updated_at, confirmed_at
+         ) VALUES (?1, '迁移测试任务', 'form', ?2, ?3, ?3, ?4)",
+        params![id, status, T0, confirmed.then_some(T0)],
+      )
+      .expect("task should insert");
+  }
+
+  fn insert_plan(connection: &Connection, id: &str, task_id: &str, confirmed: bool) {
+    connection
+      .execute(
+        "INSERT INTO collection_plan (
+           id, task_id, source, schema_version, plan_json, validation_status,
+           confirmed_by_user, created_at, updated_at
+         ) VALUES (?1, ?2, 'form_generated', 2, '{}', 'valid', ?3, ?4, ?4)",
+        params![id, task_id, i64::from(confirmed), T0],
+      )
+      .expect("plan should insert");
+  }
+
+  fn insert_api_step(connection: &Connection, id: &str, plan_id: &str) {
+    connection
+      .execute(
+        "INSERT INTO api_call_step (
+           id, plan_id, step_order, platform, data_type, endpoint_key, status,
+           created_at, updated_at
+         ) VALUES (?1, ?2, 0, 'tiktok', 'comments', 'tiktok.comments', 'planned', ?3, ?3)",
+        params![id, plan_id, T0],
+      )
+      .expect("API step should insert");
+  }
+
+  fn insert_bound_run(
+    connection: &Connection,
+    id: &str,
+    task_id: &str,
+    plan_id: &str,
+    attempt: i64,
+    status: &str,
+    claimed_at: Option<&str>,
+  ) {
+    connection
+      .execute(
+        "INSERT INTO task_run (
+           id, task_id, plan_id, attempt_number, status, started_at,
+           current_stage, claimed_at, retryable
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)",
+        params![
+          id,
+          task_id,
+          plan_id,
+          attempt,
+          status,
+          T0,
+          if status == "running" {
+            "执行采集"
+          } else {
+            "等待执行"
+          },
+          claimed_at
+        ],
+      )
+      .expect("bound run should insert");
+  }
+
+  fn insert_unbound_run(
+    connection: &Connection,
+    id: &str,
+    task_id: &str,
+    status: &str,
+  ) -> rusqlite::Result<usize> {
+    connection.execute(
+      "INSERT INTO task_run (id, task_id, status, started_at)
+       VALUES (?1, ?2, ?3, ?4)",
+      params![id, task_id, status, T0],
+    )
+  }
+
+  fn insert_run_step(
+    connection: &Connection,
+    id: &str,
+    run_id: &str,
+    api_step_id: &str,
+    status: &str,
+  ) {
+    connection
+      .execute(
+        "INSERT INTO task_run_step (
+           id, task_run_id, api_call_step_id, status, started_at, created_at, updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?5)",
+        params![id, run_id, api_step_id, status, T1],
+      )
+      .expect("run step should insert");
+  }
+
+  fn insert_requesting_checkpoint(connection: &Connection, id: &str, run_step_id: &str) {
+    connection
+      .execute(
+        "INSERT INTO collection_page_checkpoint (
+           id, task_run_step_id, page_index, idempotency_key, input_cursor_json,
+           status, request_attempt_count, retry_count, fallback_count, final_endpoint_key,
+           provider_response_json, provider_response_hash, provider_response_size,
+           has_more, next_cursor_json, record_count_received, record_count_persisted,
+           cost_actual_json, retryable, requested_at, response_received_at, committed_at,
+           created_at, updated_at
+         ) VALUES (
+           ?1, ?2, 0, 'request-key-v5', '{\"cursor\":1}',
+           'requesting', 3, 2, 1, 'tiktok.comments.fallback',
+           '{\"data\":[1]}', 'evidence-hash', 12,
+           1, '{\"cursor\":2}', 1, 1,
+           '{\"currency\":\"USD\",\"amount_micros\":100}', 1, ?3, ?4, ?5, ?3, ?5
+         )",
+        params![id, run_step_id, T1, T2, T3],
+      )
+      .expect("requesting checkpoint should insert");
+  }
+
+  fn checkpoint_evidence(connection: &Connection, id: &str) -> String {
+    connection
+      .query_row(
+        "SELECT json_array(
+           input_cursor_json, request_attempt_count, retry_count, fallback_count,
+           final_endpoint_key, provider_response_json, provider_response_hash,
+           provider_response_size, has_more, next_cursor_json, record_count_received,
+           record_count_persisted, cost_actual_json, requested_at,
+           response_received_at, committed_at
+         ) FROM collection_page_checkpoint WHERE id = ?1",
+        params![id],
+        |row| row.get(0),
+      )
+      .expect("checkpoint evidence should load")
+  }
+
+  fn run_state(
+    connection: &Connection,
+    id: &str,
+  ) -> (String, Option<String>, Option<String>, i64, Option<String>) {
+    connection
+      .query_row(
+        "SELECT status, current_stage, error_code, retryable, claimed_at
+         FROM task_run WHERE id = ?1",
+        params![id],
+        |row| {
+          Ok((
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+          ))
+        },
+      )
+      .expect("run state should load")
+  }
+
+  fn run_step_state(connection: &Connection, id: &str) -> (String, Option<String>, bool) {
+    connection
+      .query_row(
+        "SELECT status, stop_reason, completed_at IS NOT NULL
+         FROM task_run_step WHERE id = ?1",
+        params![id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get::<_, i64>(2)? != 0)),
+      )
+      .expect("run step state should load")
+  }
+
+  fn migration_log_count(connection: &Connection, task_id: &str) -> i64 {
+    connection
+      .query_row(
+        "SELECT COUNT(*)
+         FROM task_log AS log
+         JOIN task_run AS run ON run.id = log.task_run_id
+         WHERE run.task_id = ?1 AND log.stage IN (
+           '活动运行冲突迁移', '活动步骤冲突迁移', '请求检查点冲突迁移'
+         )",
+        params![task_id],
+        |row| row.get(0),
+      )
+      .expect("migration log count should load")
+  }
+
+  fn active_conflict_count(connection: &Connection) -> i64 {
+    connection
+      .query_row(
+        "SELECT COUNT(*) FROM (
+           SELECT task_id FROM task_run
+           WHERE status IN ('queued', 'running')
+           GROUP BY task_id HAVING COUNT(*) > 1
+         )",
+        [],
+        |row| row.get(0),
+      )
+      .expect("active run conflict count should load")
+  }
+}
+
+#[test]
 fn record_schema_scopes_observations_to_run_and_data_type() {
   let root_path = unique_temp_workspace("record-observation-schema");
   create_workspace("记录观察结构", &root_path).expect("workspace should be created");
@@ -550,7 +1241,7 @@ fn insert_task_and_runs(connection: &Connection, task_id: &str, run_ids: &[&str]
     .execute(
       "INSERT INTO collection_task (
         id, name, source_type, status, platforms_json, data_types_json, created_at, updated_at
-      ) VALUES (?1, '记录结构测试', 'form', 'running', '[\"tiktok\"]',
+      ) VALUES (?1, '记录结构测试', 'form', 'success', '[\"tiktok\"]',
         '[\"keyword_search\",\"item_detail\"]', ?2, ?2)",
       params![task_id, now],
     )
@@ -558,8 +1249,8 @@ fn insert_task_and_runs(connection: &Connection, task_id: &str, run_ids: &[&str]
   for run_id in run_ids {
     connection
       .execute(
-        "INSERT INTO task_run (id, task_id, status, started_at)
-         VALUES (?1, ?2, 'running', ?3)",
+        "INSERT INTO task_run (id, task_id, status, started_at, ended_at)
+         VALUES (?1, ?2, 'success', ?3, ?3)",
         params![run_id, task_id, now],
       )
       .expect("task run should insert");

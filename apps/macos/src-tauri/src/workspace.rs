@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
+use active_run_migration::{apply_active_run_migration, validate_existing_active_run_migration};
 use run_checkpoint_migration::{
   apply_run_checkpoint_migration, validate_existing_run_checkpoint_migration,
 };
@@ -25,11 +26,12 @@ use security::{
   validate_workspace_root_for_creation,
 };
 
+mod active_run_migration;
 mod run_checkpoint_migration;
 mod schema;
 mod security;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 4;
+pub const CURRENT_SCHEMA_VERSION: i64 = 5;
 pub const DATABASE_FILE_NAME: &str = "app.sqlite";
 
 const WORKSPACE_DIRS: &[&str] = &[
@@ -270,6 +272,7 @@ fn apply_connection_pragmas(connection: &Connection) -> AppResult<()> {
 fn apply_schema(connection: &mut Connection) -> AppResult<()> {
   validate_existing_tikhub_connector_migration(connection)?;
   validate_existing_run_checkpoint_migration(connection)?;
+  validate_existing_active_run_migration(connection)?;
   connection
     .execute_batch(SCHEMA_SQL)
     .map_err(database_error)?;
@@ -284,7 +287,8 @@ fn apply_schema(connection: &mut Connection) -> AppResult<()> {
 
   apply_record_observation_migration(connection)?;
   apply_tikhub_connector_migration(connection)?;
-  apply_run_checkpoint_migration(connection)
+  apply_run_checkpoint_migration(connection)?;
+  apply_active_run_migration(connection)
 }
 
 fn apply_record_observation_migration(connection: &mut Connection) -> AppResult<()> {
