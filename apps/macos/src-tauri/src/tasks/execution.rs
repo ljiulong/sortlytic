@@ -8,6 +8,10 @@ use uuid::Uuid;
 use crate::collection::validate_collection_plan_v2;
 use crate::domain::{redact_sensitive_text, AppErrorCode, AppResult};
 
+use super::recovery::{
+  gate_queued_run_for_claim, quarantine_queued_request_uncertainty, recovery_stage,
+  run_snapshot_allows_plan_reconfirmation,
+};
 use super::validation::validate_plan_for_task;
 use super::{
   database_error, get_task_by_id, get_task_run, latest_plan_for_task, map_task_run,
@@ -92,6 +96,9 @@ pub fn claim_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRunV
       transaction.commit().map_err(database_error)?;
       return Ok(None);
     };
+    if quarantine_queued_request_uncertainty(&transaction, &queued.id, &queued.task_id)? {
+      continue;
+    }
     let plan_id = queued.plan_id.as_deref();
     let plan_validation = plan_id.map_or_else(
       || Err(task_error("队列任务缺少采集计划，不能领取")),
@@ -108,6 +115,16 @@ pub fn claim_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRunV
         plan_id,
         &error.message,
       )?;
+      continue;
+    }
+    let plan_id = plan_id.ok_or_else(|| task_error("已校验的队列任务缺少采集计划"))?;
+    if !gate_queued_run_for_claim(
+      &transaction,
+      &queued.id,
+      &queued.task_id,
+      plan_id,
+      queued.current_stage.as_deref(),
+    )? {
       continue;
     }
 
@@ -130,12 +147,16 @@ pub fn claim_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRunV
     if changed != 1 {
       return Err(task_error("队列任务状态已变化，无法领取"));
     }
-    transaction
+    let task_changed = transaction
       .execute(
-        "UPDATE collection_task SET status = 'running', updated_at = ?1 WHERE id = ?2",
+        "UPDATE collection_task SET status = 'running', updated_at = ?1
+         WHERE id = ?2 AND status = 'queued'",
         params![now, queued.task_id],
       )
       .map_err(database_error)?;
+    if task_changed != 1 {
+      return Err(task_error("父任务状态已变化，无法原子领取队列任务"));
+    }
     append_task_log(
       &transaction,
       &queued.id,
@@ -375,19 +396,6 @@ fn claim_stage(current_stage: Option<&str>) -> &'static str {
   recovery_stage(current_stage).unwrap_or("执行采集")
 }
 
-fn recovery_stage(current_stage: Option<&str>) -> Option<&'static str> {
-  match current_stage {
-    Some("恢复响应入库") => "恢复响应入库",
-    Some("恢复重试") => "恢复重试",
-    Some("恢复待发送") => "恢复待发送",
-    Some("恢复续页") => "恢复续页",
-    Some("恢复收尾") => "恢复收尾",
-    Some("恢复等待") => "恢复等待",
-    _ => return None,
-  }
-  .into()
-}
-
 fn confirmed_plan_id(connection: &Connection, task_id: &str) -> AppResult<String> {
   let (count, plan_id) = connection
     .query_row(
@@ -551,6 +559,34 @@ fn require_persisted_steps_match_plan(
   Ok(())
 }
 
+fn run_has_sent_request_evidence(connection: &Connection, run_id: &str) -> AppResult<bool> {
+  connection
+    .query_row(
+      "SELECT EXISTS(
+         SELECT 1 FROM collection_page_checkpoint AS checkpoint
+         JOIN task_run_step AS run_step ON run_step.id = checkpoint.task_run_step_id
+         WHERE run_step.task_run_id = ?1 AND (
+           checkpoint.status IN ('requesting','uncertain','response_received','completed')
+           OR checkpoint.page_index > 0 OR checkpoint.input_cursor_json IS NOT NULL
+           OR checkpoint.request_attempt_count > 0 OR checkpoint.retry_count > 0
+           OR checkpoint.fallback_count > 0 OR checkpoint.final_endpoint_key IS NOT NULL
+           OR checkpoint.provider_response_json IS NOT NULL
+           OR checkpoint.provider_response_hash IS NOT NULL
+           OR checkpoint.provider_response_size IS NOT NULL OR checkpoint.has_more IS NOT NULL
+           OR checkpoint.next_cursor_json IS NOT NULL OR checkpoint.record_count_received > 0
+           OR checkpoint.record_count_persisted > 0
+           OR TRIM(checkpoint.cost_actual_json) <> '{}'
+           OR checkpoint.requested_at IS NOT NULL OR checkpoint.response_received_at IS NOT NULL
+           OR checkpoint.committed_at IS NOT NULL
+         )
+       )",
+      params![run_id],
+      |row| row.get::<_, i64>(0),
+    )
+    .map(|exists| exists != 0)
+    .map_err(database_error)
+}
+
 pub(super) fn quarantine_run_for_reconfirmation(
   connection: &Connection,
   run_id: &str,
@@ -559,17 +595,45 @@ pub(super) fn quarantine_run_for_reconfirmation(
   reason: &str,
 ) -> AppResult<()> {
   let now = Utc::now().to_rfc3339();
-  let message = redact_sensitive_text(&format!(
-    "采集计划不可执行，任务已停止，请重新确认有效的 v2 计划：{reason}"
-  ));
+  let has_sent_evidence = run_has_sent_request_evidence(connection, run_id)?;
+  let snapshot_allows_reconfirmation = plan_id
+    .map(|plan_id| run_snapshot_allows_plan_reconfirmation(connection, run_id, plan_id))
+    .transpose()?
+    .unwrap_or(false);
+  let requires_manual_review = has_sent_evidence || !snapshot_allows_reconfirmation;
+  let (stage, code, message) = if has_sent_evidence {
+    (
+      "请求证据需要人工处理",
+      "REQUEST_EVIDENCE_REQUIRES_REVIEW",
+      redact_sensitive_text(&format!(
+        "采集计划不可执行，且运行记录包含已发送请求证据，禁止重新入队，必须人工处理：{reason}"
+      )),
+    )
+  } else if !snapshot_allows_reconfirmation {
+    (
+      "运行快照需要人工处理",
+      "RUN_SNAPSHOT_REQUIRES_REVIEW",
+      redact_sensitive_text(&format!(
+        "采集计划不可执行，且运行快照无法证明请求从未发送，禁止重新入队，必须人工处理：{reason}"
+      )),
+    )
+  } else {
+    (
+      "需要重新确认计划",
+      "PLAN_RECONFIRMATION_REQUIRED",
+      redact_sensitive_text(&format!(
+        "采集计划不可执行，任务已停止，请重新确认有效的 v2 计划：{reason}"
+      )),
+    )
+  };
   let changed = connection
     .execute(
       "UPDATE task_run
-       SET status = 'failed', ended_at = ?1, current_stage = '需要重新确认计划',
-           error_code = 'PLAN_RECONFIRMATION_REQUIRED', error_message = ?2,
+       SET status = 'failed', ended_at = ?1, current_stage = ?2,
+           error_code = ?3, error_message = ?4,
            retryable = 0, claimed_at = NULL
-       WHERE id = ?3 AND task_id = ?4 AND status IN ('queued', 'running')",
-      params![now, message, run_id, task_id],
+       WHERE id = ?5 AND task_id = ?6 AND status IN ('queued', 'running')",
+      params![now, stage, code, message, run_id, task_id],
     )
     .map_err(database_error)?;
   if changed != 1 {
@@ -601,7 +665,7 @@ pub(super) fn quarantine_run_for_reconfirmation(
       )
       .map_err(database_error)?;
   }
-  append_task_log(connection, run_id, "需要重新确认计划", "error", &message)?;
+  append_task_log(connection, run_id, stage, "error", &message)?;
 
   let has_other_active_runs = connection
     .query_row(
@@ -615,16 +679,29 @@ pub(super) fn quarantine_run_for_reconfirmation(
     .map_err(database_error)?
     != 0;
   if !has_other_active_runs {
-    let task_changed = connection
-      .execute(
-        "UPDATE collection_task
-         SET status = 'waiting_confirmation', confirmed_at = NULL,
-             completed_at = NULL, cancelled_at = NULL, updated_at = ?1
-         WHERE id = ?2 AND status IN ('queued', 'running')",
-        params![now, task_id],
-      )
-      .map_err(database_error)?;
-    if task_changed == 1 {
+    let task_changed = if requires_manual_review {
+      connection
+        .execute(
+          "UPDATE collection_task SET status = 'failed', updated_at = ?1
+           WHERE id = ?2 AND status IN ('queued', 'running', 'waiting_confirmation')",
+          params![now, task_id],
+        )
+        .map_err(database_error)?
+    } else {
+      connection
+        .execute(
+          "UPDATE collection_task
+           SET status = 'waiting_confirmation', confirmed_at = NULL,
+               completed_at = NULL, cancelled_at = NULL, updated_at = ?1
+           WHERE id = ?2 AND status IN ('queued', 'running')",
+          params![now, task_id],
+        )
+        .map_err(database_error)?
+    };
+    if requires_manual_review && task_changed != 1 {
+      return Err(task_error("父任务状态已变化，无法原子隔离无效采集计划"));
+    }
+    if !requires_manual_review && task_changed == 1 {
       connection
         .execute(
           "UPDATE collection_plan

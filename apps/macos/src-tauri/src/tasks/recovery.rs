@@ -55,6 +55,7 @@ struct RecoveryLimits {
   budget_micros: i64,
 }
 
+type SnapshotCounts = (i64, i64, i64, i64, i64, i64, i64, i64);
 enum RecoveryAction {
   Resume {
     stage: &'static str,
@@ -66,6 +67,105 @@ enum RecoveryAction {
     message: &'static str,
   },
   MarkRequestingUncertain,
+}
+
+pub(super) fn recovery_stage(current_stage: Option<&str>) -> Option<&'static str> {
+  match current_stage {
+    Some("恢复响应入库") => Some("恢复响应入库"),
+    Some("恢复重试") => Some("恢复重试"),
+    Some("恢复待发送") => Some("恢复待发送"),
+    Some("恢复续页") => Some("恢复续页"),
+    Some("恢复收尾") => Some("恢复收尾"),
+    Some("恢复等待") => Some("恢复等待"),
+    _ => None,
+  }
+}
+
+pub(super) fn quarantine_queued_request_uncertainty(
+  connection: &Connection,
+  run_id: &str,
+  task_id: &str,
+) -> AppResult<bool> {
+  let requesting = checkpoint_status_exists(connection, run_id, "requesting")?;
+  if requesting {
+    mark_requesting_uncertain(connection, run_id)?;
+  }
+  if requesting || checkpoint_status_exists(connection, run_id, "uncertain")? {
+    stop_queued_run(
+      connection,
+      run_id,
+      task_id,
+      "请求状态不确定",
+      UNCERTAIN_REQUEST_CODE,
+      "队列中存在可能已发送的 TikHub 请求，远端副作用无法确认，禁止自动重发",
+    )?;
+    return Ok(true);
+  }
+  Ok(false)
+}
+
+pub(super) fn gate_queued_run_for_claim(
+  connection: &Connection,
+  run_id: &str,
+  task_id: &str,
+  plan_id: &str,
+  current_stage: Option<&str>,
+) -> AppResult<bool> {
+  let expected_recovery_stage = recovery_stage(current_stage);
+  let (complete, pristine, _) = run_snapshot_state(connection, run_id, plan_id)?;
+  if expected_recovery_stage.is_none() && pristine {
+    if complete {
+      return Ok(true);
+    }
+    stop_queued_run(
+      connection,
+      run_id,
+      task_id,
+      "运行快照不完整",
+      "RUN_STEP_SNAPSHOT_INCOMPLETE",
+      "运行步骤快照不完整，可能丢失远端请求证据，已停止自动执行",
+    )?;
+    return Ok(false);
+  }
+
+  match classify_recovery(connection, run_id, plan_id)? {
+    RecoveryAction::MarkRequestingUncertain => {
+      mark_requesting_uncertain(connection, run_id)?;
+      stop_queued_run(
+        connection,
+        run_id,
+        task_id,
+        "请求状态不确定",
+        UNCERTAIN_REQUEST_CODE,
+        "队列中存在可能已发送的 TikHub 请求，远端副作用无法确认，禁止自动重发",
+      )?;
+    }
+    RecoveryAction::Stop {
+      stage,
+      code,
+      message,
+    } => stop_queued_run(connection, run_id, task_id, stage, code, message)?,
+    RecoveryAction::Resume { stage, .. } if complete && Some(stage) == expected_recovery_stage => {
+      return Ok(true)
+    }
+    RecoveryAction::Resume { .. } if !complete => stop_queued_run(
+      connection,
+      run_id,
+      task_id,
+      "运行快照不完整",
+      "RUN_STEP_SNAPSHOT_INCOMPLETE",
+      "运行步骤快照不完整，可能丢失远端请求证据，已停止自动执行",
+    )?,
+    RecoveryAction::Resume { .. } => stop_queued_run(
+      connection,
+      run_id,
+      task_id,
+      "恢复指令冲突",
+      "CHECKPOINT_STATE_CONFLICT",
+      "队列恢复指令与运行步骤及检查点证据不一致，已停止自动执行",
+    )?,
+  }
+  Ok(false)
 }
 
 pub fn recover_interrupted_runs(root_path: impl AsRef<Path>) -> AppResult<i64> {
@@ -528,6 +628,86 @@ fn resume_remote_request(
   Ok(RecoveryAction::Resume { stage, message })
 }
 
+fn run_snapshot_state(
+  connection: &Connection,
+  run_id: &str,
+  plan_id: &str,
+) -> AppResult<(bool, bool, bool)> {
+  let (expected, matching, total, dirty, checkpoints, unsafe_steps, unsafe_checkpoints, running): SnapshotCounts = connection
+    .query_row(
+      "SELECT
+         (SELECT COUNT(*) FROM api_call_step WHERE plan_id = ?2),
+         (SELECT COUNT(*) FROM task_run_step AS run_step
+          JOIN api_call_step AS api_step ON api_step.id = run_step.api_call_step_id
+          WHERE run_step.task_run_id = ?1 AND api_step.plan_id = ?2),
+         (SELECT COUNT(*) FROM task_run_step WHERE task_run_id = ?1),
+         (SELECT COUNT(*) FROM task_run_step WHERE task_run_id = ?1 AND (
+            status <> 'pending' OR stop_reason IS NOT NULL OR started_at IS NOT NULL
+            OR completed_at IS NOT NULL
+          )),
+         (SELECT COUNT(*) FROM collection_page_checkpoint AS checkpoint
+          JOIN task_run_step AS run_step ON run_step.id = checkpoint.task_run_step_id
+          WHERE run_step.task_run_id = ?1),
+         (SELECT COUNT(*) FROM task_run_step WHERE task_run_id = ?1 AND (
+            status NOT IN ('pending','running') OR stop_reason IS NOT NULL
+            OR completed_at IS NOT NULL OR (status = 'pending' AND started_at IS NOT NULL)
+            OR (status = 'running' AND started_at IS NULL)
+          )),
+         (SELECT COUNT(*) FROM collection_page_checkpoint AS checkpoint
+          JOIN task_run_step AS run_step ON run_step.id = checkpoint.task_run_step_id
+          WHERE run_step.task_run_id = ?1 AND (
+            checkpoint.status <> 'prepared' OR checkpoint.retryable <> 0
+            OR checkpoint.last_error_code IS NOT NULL OR checkpoint.last_error_message IS NOT NULL
+            OR checkpoint.page_index <> 0
+            OR checkpoint.input_cursor_json IS NOT NULL OR run_step.status <> 'running'
+          )),
+         (SELECT COUNT(*) FROM task_run_step WHERE task_run_id = ?1 AND status = 'running')",
+      params![run_id, plan_id],
+      |row| {
+        Ok((
+          row.get(0)?,
+          row.get(1)?,
+          row.get(2)?,
+          row.get(3)?,
+          row.get(4)?,
+          row.get(5)?,
+          row.get(6)?,
+          row.get(7)?,
+        ))
+      },
+    )
+    .map_err(database_error)?;
+  Ok((
+    expected > 0 && expected == matching && matching == total,
+    dirty == 0 && checkpoints == 0,
+    expected > 0
+      && expected == matching
+      && matching == total
+      && unsafe_steps == 0
+      && unsafe_checkpoints == 0
+      && running == checkpoints
+      && running <= 1,
+  ))
+}
+pub(super) fn run_snapshot_allows_plan_reconfirmation(
+  connection: &Connection,
+  run_id: &str,
+  plan_id: &str,
+) -> AppResult<bool> {
+  run_snapshot_state(connection, run_id, plan_id).map(|state| state.2)
+}
+
+fn stop_queued_run(
+  connection: &Connection,
+  run_id: &str,
+  task_id: &str,
+  stage: &str,
+  code: &str,
+  message: &str,
+) -> AppResult<()> {
+  stop_run_in_state(connection, run_id, task_id, stage, code, message, "queued")
+}
+
 fn mark_requesting_uncertain(connection: &Connection, run_id: &str) -> AppResult<()> {
   let now = Utc::now().to_rfc3339();
   let message = "进程中断时请求处于 requesting，远端副作用无法确认";
@@ -558,18 +738,30 @@ fn stop_run(
   code: &str,
   message: &str,
 ) -> AppResult<()> {
+  stop_run_in_state(connection, run_id, task_id, stage, code, message, "running")
+}
+
+fn stop_run_in_state(
+  connection: &Connection,
+  run_id: &str,
+  task_id: &str,
+  stage: &str,
+  code: &str,
+  message: &str,
+  expected_status: &str,
+) -> AppResult<()> {
   let now = Utc::now().to_rfc3339();
   let changed = connection
     .execute(
       "UPDATE task_run
        SET status = 'failed', ended_at = ?1, current_stage = ?2,
            error_code = ?3, error_message = ?4, retryable = 0, claimed_at = NULL
-       WHERE id = ?5 AND task_id = ?6 AND status = 'running'",
-      params![now, stage, code, message, run_id, task_id],
+       WHERE id = ?5 AND task_id = ?6 AND status = ?7",
+      params![now, stage, code, message, run_id, task_id, expected_status],
     )
     .map_err(database_error)?;
   if changed != 1 {
-    return Err(task_error("运行状态已变化，无法安全停止恢复"));
+    return Err(task_error("活动运行状态已变化，无法安全停止"));
   }
   connection
     .execute(
@@ -580,25 +772,15 @@ fn stop_run(
       params![checkpoint_stop_reason(code), now, run_id],
     )
     .map_err(database_error)?;
-  let has_other_active_runs = connection
-    .query_row(
-      "SELECT EXISTS(
-         SELECT 1 FROM task_run
-         WHERE task_id = ?1 AND status IN ('queued', 'running')
-       )",
-      params![task_id],
-      |row| row.get::<_, i64>(0),
+  let task_changed = connection
+    .execute(
+      "UPDATE collection_task SET status = 'failed', updated_at = ?1
+       WHERE id = ?2 AND status = ?3",
+      params![now, task_id, expected_status],
     )
-    .map_err(database_error)?
-    != 0;
-  if !has_other_active_runs {
-    connection
-      .execute(
-        "UPDATE collection_task SET status = 'failed', updated_at = ?1
-         WHERE id = ?2 AND status = 'running'",
-        params![now, task_id],
-      )
-      .map_err(database_error)?;
+    .map_err(database_error)?;
+  if task_changed != 1 {
+    return Err(task_error("父任务状态已变化，无法原子停止活动运行"));
   }
   append_task_log(connection, run_id, stage, "error", message)
 }

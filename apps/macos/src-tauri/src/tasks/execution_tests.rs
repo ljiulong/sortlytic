@@ -357,8 +357,39 @@ fn freshly_claimed_run_before_first_request_is_safely_requeued() {
 }
 
 #[test]
-fn claim_preserves_a_recovery_directive() {
-  let (root_path, task, _) = prepared_task_workspace("execution-recovery-directive");
+fn recovered_prepared_checkpoint_is_revalidated_and_claimed() {
+  let (root_path, task, plan) = prepared_task_workspace("execution-recovery-prepared-claim");
+  enqueue_task(&root_path, &task.id).expect("task should enqueue");
+  let running = claim_next_task(&root_path)
+    .expect("claim should succeed")
+    .expect("queued task should be claimed");
+  let run_step_id = set_run_step_status(&root_path, &running.id, &plan.id, "running");
+  insert_prepared_checkpoint(&root_path, &run_step_id);
+
+  assert_eq!(
+    recover_interrupted_runs(&root_path).expect("prepared checkpoint should recover"),
+    1
+  );
+  let recovered = get_task_run(
+    &open_workspace_connection(&root_path).expect("database should reopen"),
+    &running.id,
+  )
+  .expect("recovered run should load");
+  assert_eq!(recovered.status, "queued");
+  assert_eq!(recovered.current_stage.as_deref(), Some("恢复待发送"));
+
+  let reclaimed = claim_next_task(&root_path)
+    .expect("recovery evidence should be revalidated")
+    .expect("valid prepared recovery should be claimed");
+  assert_eq!(reclaimed.id, running.id);
+  assert_eq!(reclaimed.current_stage.as_deref(), Some("恢复待发送"));
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn claim_rejects_a_forged_recovery_directive_without_evidence() {
+  let (root_path, task, plan) = prepared_task_workspace("execution-recovery-directive");
   let queued = enqueue_task(&root_path, &task.id).expect("task should enqueue");
   open_workspace_connection(&root_path)
     .expect("database should open")
@@ -368,12 +399,62 @@ fn claim_preserves_a_recovery_directive() {
     )
     .expect("recovery directive should persist");
 
-  let claimed = claim_next_task(&root_path)
-    .expect("claim should succeed")
-    .expect("recovered run should be claimed");
-  assert_eq!(claimed.current_stage.as_deref(), Some("恢复响应入库"));
+  assert!(claim_next_task(&root_path)
+    .expect("forged recovery directive should be quarantined")
+    .is_none());
+  let connection = open_workspace_connection(&root_path).expect("database should reopen");
+  let quarantined = get_task_run(&connection, &queued.id).expect("run should load");
+  let quarantined_task = get_task_by_id(&connection, &task.id).expect("task should load");
+  let confirmed = connection
+    .query_row(
+      "SELECT confirmed_by_user FROM collection_plan WHERE id = ?1",
+      params![plan.id],
+      |row| row.get::<_, i64>(0),
+    )
+    .expect("plan confirmation should load");
+  assert_eq!(quarantined.status, "failed");
+  assert_eq!(
+    quarantined.error_code.as_deref(),
+    Some("CHECKPOINT_STATE_CONFLICT")
+  );
+  assert_eq!(quarantined_task.status, "failed");
+  assert_eq!(confirmed, 1);
 
   std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn claim_rolls_back_when_parent_task_is_not_queued() {
+  for parent_status in ["running", "success", "cancelled"] {
+    let (root_path, task, plan) =
+      prepared_task_workspace(&format!("execution-claim-parent-{parent_status}"));
+    let queued = enqueue_task(&root_path, &task.id).expect("task should enqueue");
+    open_workspace_connection(&root_path)
+      .expect("database should open")
+      .execute(
+        "UPDATE collection_task SET status = ?1 WHERE id = ?2",
+        params![parent_status, task.id],
+      )
+      .expect("parent status should be forged");
+
+    claim_next_task(&root_path).expect_err("claim must reject a non-queued parent task");
+    let connection = open_workspace_connection(&root_path).expect("database should reopen");
+    let run = get_task_run(&connection, &queued.id).expect("run should load");
+    let parent = get_task_by_id(&connection, &task.id).expect("parent task should load");
+    let confirmed = connection
+      .query_row(
+        "SELECT confirmed_by_user FROM collection_plan WHERE id = ?1",
+        params![plan.id],
+        |row| row.get::<_, i64>(0),
+      )
+      .expect("plan confirmation should load");
+    assert_eq!(run.status, "queued");
+    assert!(run.claimed_at.is_none());
+    assert_eq!(parent.status, parent_status);
+    assert_eq!(confirmed, 1);
+
+    std::fs::remove_dir_all(root_path).ok();
+  }
 }
 
 #[test]
@@ -467,25 +548,17 @@ fn legacy_runs_without_a_plan_cannot_be_claimed_or_retried() {
     .is_none());
 
   let connection = open_workspace_connection(&root_path).expect("database should reopen");
-  connection
-    .execute(
-      "UPDATE task_run SET status = 'failed' WHERE id = 'legacy-run'",
-      [],
-    )
-    .expect("legacy run should become failed");
-  connection
-    .execute(
-      "UPDATE collection_task SET status = 'failed' WHERE id = ?1",
-      params![task.id],
-    )
-    .expect("task should become failed");
+  let legacy = get_task_run(&connection, "legacy-run").expect("legacy run should load");
+  let legacy_task = get_task_by_id(&connection, &task.id).expect("legacy task should load");
+  assert_eq!(legacy.status, "failed");
+  assert_eq!(
+    legacy.error_code.as_deref(),
+    Some("RUN_SNAPSHOT_REQUIRES_REVIEW")
+  );
+  assert!(!legacy.retryable);
+  assert_eq!(legacy_task.status, "failed");
   drop(connection);
 
-  let legacy = get_task_run(
-    &open_workspace_connection(&root_path).expect("database should reopen"),
-    "legacy-run",
-  )
-  .expect("legacy terminal run should remain readable");
   assert!(legacy.plan_id.is_none());
   assert_eq!(legacy.attempt_number, 1);
   assert!(legacy.claimed_at.is_none());
@@ -644,6 +717,8 @@ fn claim_quarantines_a_queued_v1_run_and_continues_to_valid_v2() {
 fn claim_quarantines_a_corrupted_v2_run() {
   let (root_path, task, plan) = prepared_task_workspace("execution-claim-corrupted-v2");
   let queued = enqueue_task(&root_path, &task.id).expect("task should enqueue");
+  let run_step_id = set_run_step_status(&root_path, &queued.id, &plan.id, "running");
+  insert_prepared_checkpoint(&root_path, &run_step_id);
   forge_plan_execution_contract(&root_path, &plan, 2, true);
 
   assert!(claim_next_task(&root_path)
@@ -655,7 +730,564 @@ fn claim_quarantines_a_corrupted_v2_run() {
 }
 
 #[test]
-fn recovery_quarantines_non_executable_running_runs() {
+fn invalid_plan_with_tainted_prepared_checkpoint_requires_manual_review() {
+  let (root_path, task, plan) = prepared_task_workspace("execution-invalid-plan-tainted-prepared");
+  let run = enqueue_task(&root_path, &task.id).expect("task should enqueue");
+  let run_step_id = set_run_step_status(&root_path, &run.id, &plan.id, "running");
+  insert_prepared_checkpoint(&root_path, &run_step_id);
+  open_workspace_connection(&root_path)
+    .expect("database should open")
+    .execute(
+      "UPDATE collection_page_checkpoint
+       SET retryable = 1, last_error_code = 'TIKHUB_REQUEST_ERROR',
+           last_error_message = '历史错误'
+       WHERE task_run_step_id = ?1",
+      params![run_step_id],
+    )
+    .expect("prepared checkpoint should be tainted");
+  forge_plan_execution_contract(&root_path, &plan, 2, true);
+
+  assert!(claim_next_task(&root_path)
+    .expect("tainted prepared state should stop")
+    .is_none());
+  let connection = open_workspace_connection(&root_path).expect("database should reopen");
+  let stopped = get_task_run(&connection, &run.id).expect("run should load");
+  let stopped_task = get_task_by_id(&connection, &task.id).expect("task should load");
+  assert_eq!(
+    stopped.error_code.as_deref(),
+    Some("RUN_SNAPSHOT_REQUIRES_REVIEW")
+  );
+  assert_eq!(stopped_task.status, "failed");
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn claim_fails_closed_on_incomplete_run_step_snapshot_and_continues_queue() {
+  let (root_path, damaged_task, damaged_plan) =
+    prepared_multi_step_task_workspace("execution-claim-incomplete-snapshot");
+  let damaged_run =
+    enqueue_task(&root_path, &damaged_task.id).expect("damaged task should enqueue");
+  let (healthy_task, healthy_plan) = prepared_task_in_workspace(&root_path, "后续完整任务");
+  let healthy_run =
+    enqueue_task(&root_path, &healthy_task.id).expect("healthy task should enqueue");
+  let deleted_step_id =
+    set_run_step_status(&root_path, &damaged_run.id, &damaged_plan.id, "running");
+  let deleted_checkpoint_id = insert_requesting_checkpoint(&root_path, &deleted_step_id);
+
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  let deleted = connection
+    .execute(
+      "DELETE FROM task_run_step WHERE id = ?1 AND task_run_id = ?2",
+      params![deleted_step_id, damaged_run.id],
+    )
+    .expect("the run step carrying request evidence should be removable for corruption simulation");
+  assert_eq!(deleted, 1);
+  let cascaded_checkpoint_count = connection
+    .query_row(
+      "SELECT COUNT(*) FROM collection_page_checkpoint WHERE id = ?1",
+      params![deleted_checkpoint_id],
+      |row| row.get::<_, i64>(0),
+    )
+    .expect("cascaded checkpoint count should load");
+  assert_eq!(cascaded_checkpoint_count, 0);
+  connection
+    .execute(
+      "UPDATE task_run SET started_at = '2026-07-13T08:00:00+00:00' WHERE id = ?1",
+      params![damaged_run.id],
+    )
+    .expect("damaged run order should be fixed");
+  connection
+    .execute(
+      "UPDATE task_run SET started_at = '2026-07-13T08:01:00+00:00' WHERE id = ?1",
+      params![healthy_run.id],
+    )
+    .expect("healthy run order should be fixed");
+  drop(connection);
+
+  let claimed = claim_next_task(&root_path)
+    .expect("claim should quarantine an incomplete snapshot")
+    .expect("healthy run behind a damaged run should be claimed");
+  assert_eq!(claimed.id, healthy_run.id);
+  assert_eq!(claimed.plan_id.as_deref(), Some(healthy_plan.id.as_str()));
+
+  let connection = open_workspace_connection(&root_path).expect("database should reopen");
+  let quarantined = get_task_run(&connection, &damaged_run.id).expect("damaged run should load");
+  let quarantined_task =
+    get_task_by_id(&connection, &damaged_task.id).expect("damaged task should load");
+  let plan_state = connection
+    .query_row(
+      "SELECT validation_status, confirmed_by_user, plan_json
+       FROM collection_plan WHERE id = ?1",
+      params![damaged_plan.id],
+      |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, i64>(1)?,
+          row.get::<_, String>(2)?,
+        ))
+      },
+    )
+    .expect("damaged run plan should load");
+  let remaining_step = connection
+    .query_row(
+      "SELECT status, stop_reason, completed_at
+       FROM task_run_step WHERE task_run_id = ?1",
+      params![damaged_run.id],
+      |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, Option<String>>(1)?,
+          row.get::<_, Option<String>>(2)?,
+        ))
+      },
+    )
+    .expect("remaining run step should load");
+  let safety_log_count = connection
+    .query_row(
+      "SELECT COUNT(*) FROM task_log
+       WHERE task_run_id = ?1 AND stage = '运行快照不完整'
+         AND message = '运行步骤快照不完整，可能丢失远端请求证据，已停止自动执行'",
+      params![damaged_run.id],
+      |row| row.get::<_, i64>(0),
+    )
+    .expect("snapshot quarantine log should count");
+
+  assert_eq!(quarantined.status, "failed");
+  assert_eq!(quarantined.current_stage.as_deref(), Some("运行快照不完整"));
+  assert_eq!(
+    quarantined.error_code.as_deref(),
+    Some("RUN_STEP_SNAPSHOT_INCOMPLETE")
+  );
+  assert!(!quarantined.retryable);
+  assert!(quarantined.ended_at.is_some());
+  assert!(quarantined.claimed_at.is_none());
+  assert_eq!(quarantined_task.status, "failed");
+  assert!(quarantined_task.confirmed_at.is_some());
+  assert_eq!(plan_state.0, "valid");
+  assert_eq!(plan_state.1, 1);
+  assert_eq!(
+    serde_json::from_str::<Value>(&plan_state.2).expect("plan JSON should remain valid"),
+    damaged_plan.plan_json
+  );
+  assert_eq!(remaining_step.0, "failed");
+  assert_eq!(remaining_step.1.as_deref(), Some("terminal_error"));
+  assert!(remaining_step.2.is_some());
+  assert_eq!(safety_log_count, 1);
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn claim_rejects_untrusted_queued_run_step_states() {
+  for (label, status, stop_reason, completed_at, expected_code) in [
+    (
+      "failed",
+      "failed",
+      Some("terminal_error"),
+      Some("2026-07-13T08:00:01+00:00"),
+      "CHECKPOINT_TERMINAL_FAILURE",
+    ),
+    (
+      "cancelled",
+      "cancelled",
+      Some("user_cancelled"),
+      Some("2026-07-13T08:00:01+00:00"),
+      "CHECKPOINT_TERMINAL_FAILURE",
+    ),
+    (
+      "running",
+      "running",
+      None,
+      None,
+      "CHECKPOINT_EVIDENCE_INCOMPLETE",
+    ),
+    (
+      "success",
+      "success",
+      None,
+      Some("2026-07-13T08:00:01+00:00"),
+      "CHECKPOINT_STATE_CONFLICT",
+    ),
+  ] {
+    let (root_path, task, plan) =
+      prepared_task_workspace(&format!("execution-claim-untrusted-{label}"));
+    let queued = enqueue_task(&root_path, &task.id).expect("task should enqueue");
+    let connection = open_workspace_connection(&root_path).expect("database should open");
+    let changed = connection
+      .execute(
+        "UPDATE task_run_step
+         SET status = ?1, stop_reason = ?2,
+             started_at = '2026-07-13T08:00:00+00:00', completed_at = ?3,
+             updated_at = '2026-07-13T08:00:01+00:00'
+         WHERE task_run_id = ?4",
+        params![status, stop_reason, completed_at, queued.id],
+      )
+      .expect("run-step state should be forged for fail-closed coverage");
+    assert_eq!(changed, 1);
+    drop(connection);
+
+    assert!(claim_next_task(&root_path)
+      .expect("untrusted queued state should be quarantined")
+      .is_none());
+    let connection = open_workspace_connection(&root_path).expect("database should reopen");
+    let quarantined = get_task_run(&connection, &queued.id).expect("run should load");
+    let quarantined_task = get_task_by_id(&connection, &task.id).expect("task should load");
+    let confirmed = connection
+      .query_row(
+        "SELECT confirmed_by_user FROM collection_plan WHERE id = ?1",
+        params![plan.id],
+        |row| row.get::<_, i64>(0),
+      )
+      .expect("plan confirmation should load");
+    assert_eq!(quarantined.status, "failed");
+    assert_eq!(quarantined.error_code.as_deref(), Some(expected_code));
+    assert!(!quarantined.retryable);
+    assert_eq!(quarantined_task.status, "failed");
+    assert_eq!(confirmed, 1);
+
+    std::fs::remove_dir_all(root_path).ok();
+  }
+}
+
+#[test]
+fn claim_prioritizes_requesting_uncertainty_over_invalid_incomplete_snapshot() {
+  let (root_path, task, plan) =
+    prepared_multi_step_task_workspace("execution-claim-incomplete-requesting");
+  let queued = enqueue_task(&root_path, &task.id).expect("task should enqueue");
+  let run_step_id = set_run_step_status(&root_path, &queued.id, &plan.id, "running");
+  let checkpoint_id = insert_requesting_checkpoint(&root_path, &run_step_id);
+  let deleted = open_workspace_connection(&root_path)
+    .expect("database should open")
+    .execute(
+      "DELETE FROM task_run_step WHERE task_run_id = ?1 AND id <> ?2",
+      params![queued.id, run_step_id],
+    )
+    .expect("the other run step should be removed");
+  assert_eq!(deleted, 1);
+  forge_plan_execution_contract(&root_path, &plan, 2, true);
+
+  assert!(claim_next_task(&root_path)
+    .expect("requesting evidence should be quarantined")
+    .is_none());
+  let connection = open_workspace_connection(&root_path).expect("database should reopen");
+  let quarantined = get_task_run(&connection, &queued.id).expect("run should load");
+  let quarantined_task = get_task_by_id(&connection, &task.id).expect("task should load");
+  let checkpoint = connection
+    .query_row(
+      "SELECT status, retryable, last_error_code FROM collection_page_checkpoint
+       WHERE id = ?1",
+      params![checkpoint_id],
+      |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, i64>(1)?,
+          row.get::<_, Option<String>>(2)?,
+        ))
+      },
+    )
+    .expect("checkpoint should load");
+  let run_step = connection
+    .query_row(
+      "SELECT status, stop_reason FROM task_run_step WHERE id = ?1",
+      params![run_step_id],
+      |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+    )
+    .expect("run step should load");
+  let confirmed = connection
+    .query_row(
+      "SELECT confirmed_by_user FROM collection_plan WHERE id = ?1",
+      params![plan.id],
+      |row| row.get::<_, i64>(0),
+    )
+    .expect("plan confirmation should load");
+
+  assert_eq!(quarantined.status, "failed");
+  assert_eq!(
+    quarantined.error_code.as_deref(),
+    Some("UNCERTAIN_REQUEST_AFTER_CRASH")
+  );
+  assert_eq!(quarantined_task.status, "failed");
+  assert_eq!(checkpoint.0, "uncertain");
+  assert_eq!(checkpoint.1, 0);
+  assert_eq!(
+    checkpoint.2.as_deref(),
+    Some("UNCERTAIN_REQUEST_AFTER_CRASH")
+  );
+  assert_eq!(run_step.0, "failed");
+  assert_eq!(run_step.1.as_deref(), Some("uncertain_request"));
+  assert_eq!(confirmed, 1);
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn invalid_plan_with_sent_request_evidence_requires_manual_review() {
+  for run_state in ["queued", "running"] {
+    let (root_path, task, plan) =
+      prepared_task_workspace(&format!("execution-invalid-plan-sent-{run_state}"));
+    let queued = enqueue_task(&root_path, &task.id).expect("task should enqueue");
+    if run_state == "running" {
+      claim_next_task(&root_path)
+        .expect("claim should succeed")
+        .expect("queued task should be claimed");
+    }
+    let run_step_id = set_run_step_status(&root_path, &queued.id, &plan.id, "running");
+    let checkpoint_id = insert_requesting_checkpoint(&root_path, &run_step_id);
+    open_workspace_connection(&root_path)
+      .expect("database should open")
+      .execute(
+        "UPDATE collection_page_checkpoint
+         SET status = 'failed', last_error_code = 'TIKHUB_REQUEST_ERROR', retryable = 1
+         WHERE id = ?1",
+        params![checkpoint_id],
+      )
+      .expect("sent request evidence should become a retryable failure");
+    forge_plan_execution_contract(&root_path, &plan, 2, true);
+
+    if run_state == "queued" {
+      assert!(claim_next_task(&root_path)
+        .expect("sent request evidence should force manual review")
+        .is_none());
+    } else {
+      assert_eq!(
+        recover_interrupted_runs(&root_path).expect("recovery should force manual review"),
+        0
+      );
+    }
+    let connection = open_workspace_connection(&root_path).expect("database should reopen");
+    let quarantined = get_task_run(&connection, &queued.id).expect("run should load");
+    let quarantined_task = get_task_by_id(&connection, &task.id).expect("task should load");
+    let evidence = connection
+      .query_row(
+        "SELECT checkpoint.status, checkpoint.request_attempt_count,
+                checkpoint.requested_at, plan.validation_status, plan.confirmed_by_user
+         FROM collection_page_checkpoint AS checkpoint
+         JOIN collection_plan AS plan ON plan.id = ?2
+         WHERE checkpoint.id = ?1",
+        params![checkpoint_id, plan.id],
+        |row| {
+          Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, i64>(4)?,
+          ))
+        },
+      )
+      .expect("request and plan evidence should load");
+    assert_eq!(quarantined.status, "failed");
+    assert_eq!(
+      quarantined.error_code.as_deref(),
+      Some("REQUEST_EVIDENCE_REQUIRES_REVIEW")
+    );
+    assert!(!quarantined.retryable);
+    assert_eq!(quarantined_task.status, "failed");
+    assert_eq!(evidence.0, "failed");
+    assert_eq!(evidence.1, 1);
+    assert!(evidence.2.is_some());
+    assert_eq!(evidence.3, "needs_review");
+    assert_eq!(evidence.4, 0);
+
+    std::fs::remove_dir_all(root_path).ok();
+  }
+}
+
+#[test]
+fn invalid_plan_with_cascaded_request_evidence_requires_manual_review() {
+  for run_state in ["queued", "running"] {
+    let (root_path, task, plan) =
+      prepared_multi_step_task_workspace(&format!("execution-invalid-plan-cascade-{run_state}"));
+    let run = enqueue_task(&root_path, &task.id).expect("task should enqueue");
+    if run_state == "running" {
+      claim_next_task(&root_path)
+        .expect("claim should succeed")
+        .expect("queued task should be claimed");
+    }
+    let deleted_step_id = set_run_step_status(&root_path, &run.id, &plan.id, "running");
+    let checkpoint_id = insert_requesting_checkpoint(&root_path, &deleted_step_id);
+    let connection = open_workspace_connection(&root_path).expect("database should open");
+    assert_eq!(
+      connection
+        .execute(
+          "DELETE FROM task_run_step WHERE id = ?1",
+          params![deleted_step_id]
+        )
+        .expect("evidence-carrying step should delete"),
+      1
+    );
+    assert_eq!(
+      connection
+        .query_row(
+          "SELECT COUNT(*) FROM collection_page_checkpoint WHERE id = ?1",
+          params![checkpoint_id],
+          |row| row.get::<_, i64>(0),
+        )
+        .expect("checkpoint count should load"),
+      0
+    );
+    drop(connection);
+    forge_plan_execution_contract(&root_path, &plan, 2, true);
+
+    if run_state == "queued" {
+      assert!(claim_next_task(&root_path)
+        .expect("incomplete snapshot should stop")
+        .is_none());
+    } else {
+      assert_eq!(
+        recover_interrupted_runs(&root_path).expect("incomplete recovery should stop"),
+        0
+      );
+    }
+    let connection = open_workspace_connection(&root_path).expect("database should reopen");
+    let stopped = get_task_run(&connection, &run.id).expect("run should load");
+    let stopped_task = get_task_by_id(&connection, &task.id).expect("task should load");
+    let plan_state = connection
+      .query_row(
+        "SELECT validation_status, confirmed_by_user FROM collection_plan WHERE id = ?1",
+        params![plan.id],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+      )
+      .expect("plan state should load");
+    assert_eq!(stopped.status, "failed");
+    assert_eq!(
+      stopped.error_code.as_deref(),
+      Some("RUN_SNAPSHOT_REQUIRES_REVIEW")
+    );
+    assert!(!stopped.retryable);
+    assert_eq!(stopped_task.status, "failed");
+    assert_eq!(plan_state, ("needs_review".to_string(), 0));
+
+    std::fs::remove_dir_all(root_path).ok();
+  }
+}
+
+#[test]
+fn invalid_plan_with_orphan_continuation_requires_manual_review() {
+  let (root_path, task, plan) = prepared_task_workspace("execution-invalid-plan-orphan-cursor");
+  let run = enqueue_task(&root_path, &task.id).expect("task should enqueue");
+  let run_step_id = set_run_step_status(&root_path, &run.id, &plan.id, "running");
+  open_workspace_connection(&root_path)
+    .expect("database should open")
+    .execute(
+      "INSERT INTO collection_page_checkpoint (
+         id, task_run_step_id, page_index, idempotency_key, input_cursor_json,
+         status, created_at, updated_at
+       ) VALUES (?1, ?2, 1, ?3, '{\"cursor\":\"next\"}', 'prepared',
+                 '2026-07-13T08:01:00+00:00', '2026-07-13T08:01:00+00:00')",
+      params![
+        Uuid::new_v4().to_string(),
+        run_step_id,
+        Uuid::new_v4().to_string()
+      ],
+    )
+    .expect("orphan continuation checkpoint should insert");
+  forge_plan_execution_contract(&root_path, &plan, 2, true);
+
+  assert!(claim_next_task(&root_path)
+    .expect("orphan continuation should stop")
+    .is_none());
+  let connection = open_workspace_connection(&root_path).expect("database should reopen");
+  let stopped = get_task_run(&connection, &run.id).expect("run should load");
+  let stopped_task = get_task_by_id(&connection, &task.id).expect("task should load");
+  assert_eq!(
+    stopped.error_code.as_deref(),
+    Some("REQUEST_EVIDENCE_REQUIRES_REVIEW")
+  );
+  assert_eq!(stopped_task.status, "failed");
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn incomplete_snapshot_quarantine_is_atomic_on_parent_or_log_failure() {
+  for failure_mode in ["parent_state", "log_trigger"] {
+    let (root_path, task, plan) = prepared_multi_step_task_workspace(&format!(
+      "execution-claim-quarantine-rollback-{failure_mode}"
+    ));
+    let damaged_run = enqueue_task(&root_path, &task.id).expect("damaged task should enqueue");
+    let (healthy_task, _) = prepared_task_in_workspace(&root_path, "回滚后的健康任务");
+    let healthy_run =
+      enqueue_task(&root_path, &healthy_task.id).expect("healthy task should enqueue");
+    let connection = open_workspace_connection(&root_path).expect("database should open");
+    let deleted = connection
+      .execute(
+        "DELETE FROM task_run_step WHERE id = (
+           SELECT id FROM task_run_step WHERE task_run_id = ?1 ORDER BY id DESC LIMIT 1
+         )",
+        params![damaged_run.id],
+      )
+      .expect("one run step should be removed");
+    assert_eq!(deleted, 1);
+    connection
+      .execute(
+        "UPDATE task_run SET started_at = '2026-07-13T08:00:00+00:00' WHERE id = ?1",
+        params![damaged_run.id],
+      )
+      .expect("damaged run order should be fixed");
+    connection
+      .execute(
+        "UPDATE task_run SET started_at = '2026-07-13T08:01:00+00:00' WHERE id = ?1",
+        params![healthy_run.id],
+      )
+      .expect("healthy run order should be fixed");
+    if failure_mode == "parent_state" {
+      connection
+        .execute(
+          "UPDATE collection_task SET status = 'running' WHERE id = ?1",
+          params![task.id],
+        )
+        .expect("parent task should be forged");
+    } else {
+      connection
+        .execute_batch(
+          "CREATE TRIGGER fail_snapshot_safety_log
+           BEFORE INSERT ON task_log
+           WHEN NEW.stage = '运行快照不完整'
+           BEGIN
+             SELECT RAISE(ABORT, 'test snapshot safety log failure');
+           END;",
+        )
+        .expect("log failure trigger should install");
+    }
+    drop(connection);
+    let damaged_before = task_execution_mutation_state(&root_path, &task.id);
+    let healthy_before = task_execution_mutation_state(&root_path, &healthy_task.id);
+
+    claim_next_task(&root_path)
+      .expect_err("quarantine failure must roll back the claim transaction");
+
+    assert_eq!(
+      task_execution_mutation_state(&root_path, &task.id),
+      damaged_before
+    );
+    assert_eq!(
+      task_execution_mutation_state(&root_path, &healthy_task.id),
+      healthy_before
+    );
+    let connection = open_workspace_connection(&root_path).expect("database should reopen");
+    let damaged_after =
+      get_task_run(&connection, &damaged_run.id).expect("damaged run should load");
+    let healthy_after =
+      get_task_run(&connection, &healthy_run.id).expect("healthy run should load");
+    let confirmed = connection
+      .query_row(
+        "SELECT confirmed_by_user FROM collection_plan WHERE id = ?1",
+        params![plan.id],
+        |row| row.get::<_, i64>(0),
+      )
+      .expect("plan confirmation should load");
+    assert_eq!(damaged_after.status, "queued");
+    assert_eq!(healthy_after.status, "queued");
+    assert_eq!(confirmed, 1);
+
+    std::fs::remove_dir_all(root_path).ok();
+  }
+}
+
+#[test]
+fn recovery_requires_manual_review_for_invalid_plan_with_unsafe_run_state() {
   for (label, schema_version, corrupt_budget) in [
     ("execution-recover-v1", 1, false),
     ("execution-recover-corrupted-v2", 2, true),
@@ -672,9 +1304,17 @@ fn recovery_quarantines_non_executable_running_runs() {
       recover_interrupted_runs(&root_path).expect("recovery should isolate invalid run"),
       0
     );
-    assert_reconfirmation_quarantine(&root_path, &running.id, &task.id, &plan.id);
-    let run_step = open_workspace_connection(&root_path)
-      .expect("database should reopen")
+    let connection = open_workspace_connection(&root_path).expect("database should reopen");
+    let stopped = get_task_run(&connection, &running.id).expect("run should load");
+    let stopped_task = get_task_by_id(&connection, &task.id).expect("task should load");
+    let plan_state = connection
+      .query_row(
+        "SELECT validation_status, confirmed_by_user FROM collection_plan WHERE id = ?1",
+        params![plan.id],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+      )
+      .expect("plan state should load");
+    let run_step = connection
       .query_row(
         "SELECT status, stop_reason, completed_at
          FROM task_run_step WHERE id = ?1",
@@ -688,6 +1328,15 @@ fn recovery_quarantines_non_executable_running_runs() {
         },
       )
       .expect("run step should load");
+    assert_eq!(stopped.status, "failed");
+    assert_eq!(
+      stopped.error_code.as_deref(),
+      Some("RUN_SNAPSHOT_REQUIRES_REVIEW")
+    );
+    assert!(!stopped.retryable);
+    assert_eq!(stopped_task.status, "failed");
+    assert!(stopped_task.confirmed_at.is_some());
+    assert_eq!(plan_state, ("needs_review".to_string(), 0));
     assert_eq!(run_step.0, "failed");
     assert_eq!(run_step.1.as_deref(), Some("terminal_error"));
     assert!(run_step.2.is_some());
@@ -1199,6 +1848,23 @@ fn insert_requesting_checkpoint(root_path: &Path, run_step_id: &str) -> String {
     )
     .expect("requesting checkpoint should insert");
   checkpoint_id
+}
+
+fn insert_prepared_checkpoint(root_path: &Path, run_step_id: &str) {
+  open_workspace_connection(root_path)
+    .expect("database should open")
+    .execute(
+      "INSERT INTO collection_page_checkpoint (
+         id, task_run_step_id, page_index, idempotency_key, status, created_at, updated_at
+       ) VALUES (?1, ?2, 0, ?3, 'prepared',
+                 '2026-07-13T08:01:00+00:00', '2026-07-13T08:01:00+00:00')",
+      params![
+        Uuid::new_v4().to_string(),
+        run_step_id,
+        Uuid::new_v4().to_string()
+      ],
+    )
+    .expect("prepared checkpoint should insert");
 }
 
 fn run_step_snapshot(
