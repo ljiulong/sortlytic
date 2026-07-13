@@ -79,6 +79,9 @@ pub struct CollectionPlanView {
 pub struct TaskRunView {
   pub id: String,
   pub task_id: String,
+  pub plan_id: Option<String>,
+  pub attempt_number: i64,
+  pub claimed_at: Option<String>,
   pub status: String,
   pub started_at: String,
   pub ended_at: Option<String>,
@@ -586,7 +589,7 @@ fn get_task_run(connection: &Connection, run_id: &str) -> AppResult<TaskRunView>
   connection
     .query_row(
       "SELECT id, task_id, status, started_at, ended_at, current_stage, error_code,
-              error_message, retryable, cost_actual_json
+              error_message, retryable, cost_actual_json, plan_id, attempt_number, claimed_at
        FROM task_run
        WHERE id = ?1",
       params![run_id],
@@ -665,6 +668,9 @@ fn map_task_run(row: &Row<'_>) -> rusqlite::Result<TaskRunView> {
     error_message: row.get(7)?,
     retryable: i64_to_bool(row.get(8)?),
     cost_actual_json: string_to_json(row.get(9)?),
+    plan_id: row.get(10)?,
+    attempt_number: row.get(11)?,
+    claimed_at: row.get(12)?,
   })
 }
 

@@ -24,13 +24,16 @@ pub fn enqueue_task(root_path: impl AsRef<Path>, task_id: &str) -> AppResult<Tas
     return Err(task_error("只有已确认或失败任务可以入队"));
   }
 
+  let plan_id = confirmed_plan_id(&transaction, task_id)?;
+  let attempt_number = next_attempt_number(&transaction, task_id, &plan_id)?;
   let run_id = Uuid::new_v4().to_string();
   let now = Utc::now().to_rfc3339();
   transaction
     .execute(
-      "INSERT INTO task_run (id, task_id, status, started_at, current_stage, retryable)
-       VALUES (?1, ?2, 'queued', ?3, '等待执行', 0)",
-      params![run_id, task_id, now],
+      "INSERT INTO task_run (
+        id, task_id, plan_id, attempt_number, status, started_at, current_stage, retryable
+      ) VALUES (?1, ?2, ?3, ?4, 'queued', ?5, '等待执行', 0)",
+      params![run_id, task_id, plan_id, attempt_number, now],
     )
     .map_err(database_error)?;
   transaction
@@ -59,9 +62,9 @@ pub fn claim_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRunV
   let queued = transaction
     .query_row(
       "SELECT id, task_id, status, started_at, ended_at, current_stage, error_code,
-              error_message, retryable, cost_actual_json
+              error_message, retryable, cost_actual_json, plan_id, attempt_number, claimed_at
        FROM task_run
-       WHERE status = 'queued'
+       WHERE status = 'queued' AND plan_id IS NOT NULL
        ORDER BY started_at ASC, id ASC
        LIMIT 1",
       [],
@@ -78,9 +81,9 @@ pub fn claim_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRunV
     .execute(
       "UPDATE task_run
        SET status = 'running', current_stage = '执行采集', error_code = NULL,
-           error_message = NULL, retryable = 0
-       WHERE id = ?1 AND status = 'queued'",
-      params![queued.id],
+           error_message = NULL, retryable = 0, claimed_at = ?1
+       WHERE id = ?2 AND status = 'queued' AND plan_id IS NOT NULL",
+      params![now, queued.id],
     )
     .map_err(database_error)?;
   if changed != 1 {
@@ -202,7 +205,7 @@ pub fn recover_interrupted_runs(root_path: impl AsRef<Path>) -> AppResult<i64> {
       .execute(
         "UPDATE task_run
          SET status = 'queued', current_stage = '恢复等待', ended_at = NULL,
-             error_code = NULL, error_message = NULL, retryable = 1
+             error_code = NULL, error_message = NULL, retryable = 1, claimed_at = NULL
          WHERE id = ?1 AND status = 'running'",
         params![run_id],
       )
@@ -274,6 +277,8 @@ pub fn retry_task(
   if task.status != "failed" {
     return Err(task_error("只有失败任务可以重试"));
   }
+  let plan_id = latest_failed_plan_id(&transaction, task_id)?;
+  let attempt_number = next_attempt_number(&transaction, task_id, &plan_id)?;
   let run_id = Uuid::new_v4().to_string();
   let now = Utc::now().to_rfc3339();
   let stage = stage
@@ -283,9 +288,10 @@ pub fn retry_task(
     .unwrap_or_else(|| "等待执行".to_string());
   transaction
     .execute(
-      "INSERT INTO task_run (id, task_id, status, started_at, current_stage, retryable)
-       VALUES (?1, ?2, 'queued', ?3, ?4, 0)",
-      params![run_id, task_id, now, stage],
+      "INSERT INTO task_run (
+        id, task_id, plan_id, attempt_number, status, started_at, current_stage, retryable
+      ) VALUES (?1, ?2, ?3, ?4, 'queued', ?5, ?6, 0)",
+      params![run_id, task_id, plan_id, attempt_number, now, stage],
     )
     .map_err(database_error)?;
   transaction
@@ -301,6 +307,61 @@ pub fn retry_task(
 
 fn immediate_transaction(connection: &mut Connection) -> AppResult<Transaction<'_>> {
   Transaction::new(connection, TransactionBehavior::Immediate).map_err(database_error)
+}
+
+fn confirmed_plan_id(connection: &Connection, task_id: &str) -> AppResult<String> {
+  let (count, plan_id) = connection
+    .query_row(
+      "SELECT COUNT(*), MIN(id)
+       FROM collection_plan
+       WHERE task_id = ?1 AND confirmed_by_user = 1 AND validation_status = 'valid'",
+      params![task_id],
+      |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?)),
+    )
+    .map_err(database_error)?;
+
+  match (count, plan_id) {
+    (1, Some(plan_id)) => Ok(plan_id),
+    (0, _) => Err(task_error(
+      "任务没有唯一且有效的已确认采集计划，请重新确认后再运行",
+    )),
+    _ => Err(task_error(
+      "任务存在多个已确认采集计划，无法确定唯一执行计划",
+    )),
+  }
+}
+
+fn latest_failed_plan_id(connection: &Connection, task_id: &str) -> AppResult<String> {
+  let plan_id = connection
+    .query_row(
+      "SELECT plan_id
+       FROM task_run
+       WHERE task_id = ?1 AND status = 'failed'
+       ORDER BY started_at DESC, id DESC
+       LIMIT 1",
+      params![task_id],
+      |row| row.get::<_, Option<String>>(0),
+    )
+    .optional()
+    .map_err(database_error)?
+    .ok_or_else(|| task_error("任务没有可重试的失败运行记录"))?;
+
+  plan_id.ok_or_else(|| task_error("历史任务运行缺少已确认计划，请重新确认采集计划后再运行"))
+}
+
+fn next_attempt_number(connection: &Connection, task_id: &str, plan_id: &str) -> AppResult<i64> {
+  let latest = connection
+    .query_row(
+      "SELECT MAX(attempt_number) FROM task_run WHERE task_id = ?1 AND plan_id = ?2",
+      params![task_id, plan_id],
+      |row| row.get::<_, Option<i64>>(0),
+    )
+    .map_err(database_error)?
+    .unwrap_or(0);
+
+  latest
+    .checked_add(1)
+    .ok_or_else(|| task_error("任务运行尝试次数已达到上限"))
 }
 
 fn require_running(run: &TaskRunView) -> AppResult<()> {
