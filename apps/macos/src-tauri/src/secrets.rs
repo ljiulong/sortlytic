@@ -4,6 +4,7 @@ use chrono::Utc;
 use keyring::Entry;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
@@ -43,9 +44,16 @@ pub fn save_secret(
   let provider_id = normalize_provider_id(provider_id)?;
   let secret = normalize_secret(secret)?;
   let alias = normalize_alias(alias);
+  let root_path = root_path.as_ref();
   let connection = open_workspace_connection(root_path)?;
   let secret_ref_id = Uuid::new_v4().to_string();
-  let secret_store_key = build_secret_store_key(&provider_type, &provider_id, &secret_ref_id);
+  let workspace_scope = workspace_secret_scope(root_path, &connection)?;
+  let secret_store_key = build_secret_store_key(
+    &workspace_scope,
+    &provider_type,
+    &provider_id,
+    &secret_ref_id,
+  );
   let now = Utc::now().to_rfc3339();
 
   keychain_entry(&secret_store_key)?
@@ -97,20 +105,30 @@ pub fn update_secret(
   secret: &str,
 ) -> AppResult<SecretRefView> {
   let secret = normalize_secret(secret)?;
+  let root_path = root_path.as_ref();
   let connection = open_workspace_connection(root_path)?;
-  let metadata = get_secret_metadata(&connection, secret_ref_id)?;
+  let workspace_scope = workspace_secret_scope(root_path, &connection)?;
+  let metadata = load_secret_metadata(&connection, secret_ref_id)?;
+  let expected_store_key = build_secret_store_key(
+    &workspace_scope,
+    &metadata.provider_type,
+    &metadata.provider_id,
+    &metadata.id,
+  );
+  let security_rebound = metadata.secret_store_key != expected_store_key;
   let now = Utc::now().to_rfc3339();
 
-  keychain_entry(&metadata.secret_store_key)?
+  keychain_entry(&expected_store_key)?
     .set_password(&secret)
     .map_err(secret_store_error)?;
 
   connection
     .execute(
       "UPDATE secret_ref
-       SET masked_hint = ?1, updated_at = ?2, last_tested_at = NULL, last_test_status = NULL
-       WHERE id = ?3",
-      params![mask_secret(&secret), now, secret_ref_id],
+       SET secret_store_key = ?1, masked_hint = ?2, updated_at = ?3,
+           last_tested_at = NULL, last_test_status = NULL
+       WHERE id = ?4",
+      params![expected_store_key, mask_secret(&secret), now, secret_ref_id],
     )
     .map_err(database_error)?;
 
@@ -118,15 +136,20 @@ pub fn update_secret(
     &connection,
     "update_secret",
     Some(secret_ref_id),
-    serde_json::json!({ "provider_type": metadata.provider_type }),
+    serde_json::json!({
+      "provider_type": metadata.provider_type,
+      "security_rebound": security_rebound,
+    }),
   )?;
 
   get_secret_ref(&connection, secret_ref_id)
 }
 
 pub fn delete_secret(root_path: impl AsRef<Path>, secret_ref_id: &str) -> AppResult<bool> {
+  let root_path = root_path.as_ref();
   let connection = open_workspace_connection(root_path)?;
-  let metadata = get_secret_metadata(&connection, secret_ref_id)?;
+  let workspace_scope = workspace_secret_scope(root_path, &connection)?;
+  let metadata = get_secret_metadata(&connection, secret_ref_id, &workspace_scope)?;
 
   keychain_entry(&metadata.secret_store_key)?
     .delete_credential()
@@ -190,8 +213,10 @@ pub fn test_secret_connection(
   root_path: impl AsRef<Path>,
   secret_ref_id: &str,
 ) -> AppResult<SecretConnectionTestResult> {
+  let root_path = root_path.as_ref();
   let connection = open_workspace_connection(root_path)?;
-  let metadata = get_secret_metadata(&connection, secret_ref_id)?;
+  let workspace_scope = workspace_secret_scope(root_path, &connection)?;
+  let metadata = get_secret_metadata(&connection, secret_ref_id, &workspace_scope)?;
   let tested_at = Utc::now().to_rfc3339();
   let read_result = keychain_entry(&metadata.secret_store_key)?
     .get_password()
@@ -227,9 +252,12 @@ pub fn read_secret_for_backend(
   expected_provider_type: &str,
 ) -> AppResult<String> {
   let expected_provider_type = normalize_provider_type(expected_provider_type)?;
+  let root_path = root_path.as_ref();
   let connection = open_workspace_connection(root_path)?;
-  let metadata = get_secret_metadata(&connection, secret_ref_id)?;
+  let workspace_scope = workspace_secret_scope(root_path, &connection)?;
+  let metadata = load_secret_metadata(&connection, secret_ref_id)?;
   ensure_provider_type(&metadata, &expected_provider_type)?;
+  ensure_secret_store_key(&metadata, &workspace_scope)?;
   keychain_entry(&metadata.secret_store_key)?
     .get_password()
     .map_err(secret_store_error)
@@ -241,7 +269,7 @@ pub(crate) fn validate_secret_ref_provider(
   expected_provider_type: &str,
 ) -> AppResult<()> {
   let expected_provider_type = normalize_provider_type(expected_provider_type)?;
-  let metadata = get_secret_metadata(connection, secret_ref_id)?;
+  let metadata = load_secret_metadata(connection, secret_ref_id)?;
   ensure_provider_type(&metadata, &expected_provider_type)
 }
 
@@ -318,8 +346,17 @@ fn normalize_alias(alias: Option<String>) -> Option<String> {
   })
 }
 
-fn build_secret_store_key(provider_type: &str, provider_id: &str, secret_ref_id: &str) -> String {
-  format!("smart-data-workbench:{provider_type}:{provider_id}:{secret_ref_id}")
+fn build_secret_store_key(
+  workspace_scope: &str,
+  provider_type: &str,
+  provider_id: &str,
+  secret_ref_id: &str,
+) -> String {
+  let digest = hash_components(
+    "smart-data-workbench-secret-store-v2",
+    &[workspace_scope, provider_type, provider_id, secret_ref_id],
+  );
+  format!("smart-data-workbench:v2:{digest}")
 }
 
 fn keychain_entry(secret_store_key: &str) -> AppResult<Entry> {
@@ -354,21 +391,124 @@ fn get_secret_ref(connection: &Connection, secret_ref_id: &str) -> AppResult<Sec
     .ok_or_else(|| secret_store_error("密钥引用不存在"))
 }
 
-fn get_secret_metadata(connection: &Connection, secret_ref_id: &str) -> AppResult<SecretMetadata> {
+fn get_secret_metadata(
+  connection: &Connection,
+  secret_ref_id: &str,
+  workspace_scope: &str,
+) -> AppResult<SecretMetadata> {
+  let metadata = load_secret_metadata(connection, secret_ref_id)?;
+  ensure_secret_store_key(&metadata, workspace_scope)?;
+  Ok(metadata)
+}
+
+fn load_secret_metadata(connection: &Connection, secret_ref_id: &str) -> AppResult<SecretMetadata> {
   connection
     .query_row(
-      "SELECT id, provider_type, secret_store_key FROM secret_ref WHERE id = ?1",
+      "SELECT id, provider_type, provider_id, secret_store_key FROM secret_ref WHERE id = ?1",
       params![secret_ref_id],
       |row| {
         Ok(SecretMetadata {
+          id: row.get(0)?,
           provider_type: row.get(1)?,
-          secret_store_key: row.get(2)?,
+          provider_id: row.get(2)?,
+          secret_store_key: row.get(3)?,
         })
       },
     )
     .optional()
     .map_err(database_error)?
     .ok_or_else(|| secret_store_error("密钥引用不存在"))
+}
+
+fn ensure_secret_store_key(metadata: &SecretMetadata, workspace_scope: &str) -> AppResult<()> {
+  let expected = build_secret_store_key(
+    workspace_scope,
+    &metadata.provider_type,
+    &metadata.provider_id,
+    &metadata.id,
+  );
+  if metadata.secret_store_key == expected {
+    return Ok(());
+  }
+
+  if metadata.secret_store_key == build_legacy_secret_store_key(metadata) {
+    return Err(AppError::new(
+      AppErrorCode::PermissionError,
+      "检测到旧版密钥引用；为防止跨工作区读取，请重新输入密钥完成安全重绑",
+      AppErrorStage::SecretStore,
+      false,
+    ));
+  }
+
+  Err(AppError::new(
+    AppErrorCode::PermissionError,
+    "密钥引用与当前工作区不匹配，已拒绝访问系统安全存储",
+    AppErrorStage::SecretStore,
+    false,
+  ))
+}
+
+fn build_legacy_secret_store_key(metadata: &SecretMetadata) -> String {
+  format!(
+    "smart-data-workbench:{}:{}:{}",
+    metadata.provider_type, metadata.provider_id, metadata.id
+  )
+}
+
+fn workspace_secret_scope(root_path: &Path, connection: &Connection) -> AppResult<String> {
+  let (count, workspace_id, registered_root) = connection
+    .query_row(
+      "SELECT COUNT(*), MIN(id), MIN(root_path) FROM workspace",
+      [],
+      |row| {
+        Ok((
+          row.get::<_, i64>(0)?,
+          row.get::<_, Option<String>>(1)?,
+          row.get::<_, Option<String>>(2)?,
+        ))
+      },
+    )
+    .map_err(database_error)?;
+
+  match (count, workspace_id, registered_root) {
+    (1, Some(workspace_id), Some(registered_root)) => {
+      let canonical_root = std::fs::canonicalize(root_path).map_err(secret_store_error)?;
+      let canonical_registered = std::fs::canonicalize(&registered_root).map_err(|_| {
+        AppError::new(
+          AppErrorCode::PermissionError,
+          "工作区登记路径无法验证，已拒绝派生系统密钥作用域",
+          AppErrorStage::SecretStore,
+          false,
+        )
+      })?;
+      if canonical_root != canonical_registered {
+        return Err(AppError::new(
+          AppErrorCode::PermissionError,
+          "当前工作区路径与数据库登记路径不一致，已拒绝访问系统安全存储",
+          AppErrorStage::SecretStore,
+          false,
+        ));
+      }
+      let canonical_root = canonical_root.to_string_lossy();
+      Ok(hash_components(
+        "smart-data-workbench-workspace-scope-v1",
+        &[&workspace_id, &canonical_root],
+      ))
+    }
+    _ => Err(database_error(
+      "工作区元数据必须恰好包含一条完整记录，无法派生密钥作用域",
+    )),
+  }
+}
+
+fn hash_components(domain: &str, components: &[&str]) -> String {
+  let mut digest = Sha256::new();
+  digest.update(domain.as_bytes());
+  for component in components {
+    digest.update((component.len() as u64).to_be_bytes());
+    digest.update(component.as_bytes());
+  }
+  format!("{:x}", digest.finalize())
 }
 
 fn ensure_provider_type(metadata: &SecretMetadata, expected_provider_type: &str) -> AppResult<()> {
@@ -447,13 +587,16 @@ fn database_error(error: impl ToString) -> AppError {
 
 #[derive(Debug)]
 struct SecretMetadata {
+  id: String,
   provider_type: String,
+  provider_id: String,
   secret_store_key: String,
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::workspace::create_workspace;
 
   #[test]
   fn masks_secret_without_returning_full_value() {
@@ -473,19 +616,147 @@ mod tests {
 
   #[test]
   fn secret_store_key_does_not_include_secret_value() {
-    let key = build_secret_store_key("model_provider", "openai", "secret-ref-id");
-
-    assert_eq!(
-      key,
-      "smart-data-workbench:model_provider:openai:secret-ref-id"
+    let key = build_secret_store_key(
+      "workspace-scope",
+      "model_provider",
+      "openai",
+      "secret-ref-id",
     );
+
+    assert!(key.starts_with("smart-data-workbench:v2:"));
+    assert_eq!(key.len(), "smart-data-workbench:v2:".len() + 64);
     assert!(!key.contains("sk-"));
+  }
+
+  #[test]
+  fn secret_store_keys_are_isolated_by_workspace_scope() {
+    let first = build_secret_store_key("workspace-a", "tikhub", "default", "secret-ref-id");
+    let second = build_secret_store_key("workspace-b", "tikhub", "default", "secret-ref-id");
+
+    assert_ne!(first, second);
+  }
+
+  #[test]
+  fn rejects_a_tampered_secret_store_key_before_keychain_access() {
+    let root_path = std::env::temp_dir().join(format!(
+      "smart-data-workbench-secret-tamper-{}",
+      Uuid::new_v4()
+    ));
+    create_workspace("密钥隔离测试", &root_path).expect("workspace should be created");
+    let connection = open_workspace_connection(&root_path).expect("database should open");
+    connection
+      .execute(
+        "INSERT INTO secret_ref (
+          id, provider_type, provider_id, secret_store_key, masked_hint, created_at, updated_at
+        ) VALUES ('tampered-secret', 'tikhub', 'default',
+                  'smart-data-workbench:tikhub:default:foreign-secret',
+                  '[REDACTED]', '2026-07-13T00:00:00Z', '2026-07-13T00:00:00Z')",
+        [],
+      )
+      .expect("tampered metadata should be inserted as an adversarial fixture");
+
+    let workspace_scope =
+      workspace_secret_scope(&root_path, &connection).expect("workspace scope should derive");
+    let error = get_secret_metadata(&connection, "tampered-secret", &workspace_scope)
+      .expect_err("editable SQLite metadata must not select an arbitrary Keychain account");
+
+    assert_eq!(error.code, AppErrorCode::PermissionError);
+    std::fs::remove_dir_all(root_path).ok();
+  }
+
+  #[test]
+  fn published_legacy_secret_reference_requires_an_explicit_rebind() {
+    let root_path = std::env::temp_dir().join(format!(
+      "smart-data-workbench-secret-legacy-{}",
+      Uuid::new_v4()
+    ));
+    create_workspace("旧密钥升级测试", &root_path).expect("workspace should be created");
+    let connection = open_workspace_connection(&root_path).expect("database should open");
+    connection
+      .execute(
+        "INSERT INTO secret_ref (
+          id, provider_type, provider_id, secret_store_key, masked_hint, created_at, updated_at
+        ) VALUES ('legacy-secret', 'tikhub', 'default',
+                  'smart-data-workbench:tikhub:default:legacy-secret',
+                  '[REDACTED]', '2026-07-07T00:00:00Z', '2026-07-07T00:00:00Z')",
+        [],
+      )
+      .expect("published legacy metadata should insert");
+    let workspace_scope =
+      workspace_secret_scope(&root_path, &connection).expect("workspace scope should derive");
+
+    let error = get_secret_metadata(&connection, "legacy-secret", &workspace_scope)
+      .expect_err("legacy account must not be read automatically from editable SQLite metadata");
+
+    assert_eq!(error.code, AppErrorCode::PermissionError);
+    assert!(error.message.contains("重新输入"));
+    std::fs::remove_dir_all(root_path).ok();
+  }
+
+  #[cfg(target_os = "macos")]
+  #[test]
+  fn updating_a_legacy_reference_rebinds_it_without_reading_the_old_account() {
+    let root_path = std::env::temp_dir().join(format!(
+      "smart-data-workbench-secret-rebind-{}",
+      Uuid::new_v4()
+    ));
+    create_workspace("旧密钥重绑测试", &root_path).expect("workspace should be created");
+    let connection = open_workspace_connection(&root_path).expect("database should open");
+    let secret_ref_id = format!("legacy-secret-{}", Uuid::new_v4());
+    let legacy_key = format!("smart-data-workbench:tikhub:default:{secret_ref_id}");
+    connection
+      .execute(
+        "INSERT INTO secret_ref (
+          id, provider_type, provider_id, secret_store_key, masked_hint, created_at, updated_at
+        ) VALUES (?1, 'tikhub', 'default', ?2, '[REDACTED]', ?3, ?3)",
+        params![secret_ref_id, legacy_key, "2026-07-07T00:00:00Z"],
+      )
+      .expect("published legacy metadata should insert");
+    drop(connection);
+
+    update_secret(&root_path, &secret_ref_id, "replacement-secret-value")
+      .expect("user-supplied replacement should securely rebind the reference");
+    let stored = read_secret_for_backend(&root_path, &secret_ref_id, "tikhub")
+      .expect("rebound secret should be readable through the scoped account");
+
+    assert_eq!(stored, "replacement-secret-value");
+    delete_secret(&root_path, &secret_ref_id).expect("rebound secret should clean up");
+    std::fs::remove_dir_all(root_path).ok();
+  }
+
+  #[test]
+  fn workspace_scope_rejects_a_database_registered_for_another_root() {
+    let root_path = std::env::temp_dir().join(format!(
+      "smart-data-workbench-secret-root-{}",
+      Uuid::new_v4()
+    ));
+    let other_root = std::env::temp_dir().join(format!(
+      "smart-data-workbench-secret-other-root-{}",
+      Uuid::new_v4()
+    ));
+    create_workspace("密钥路径测试", &root_path).expect("workspace should be created");
+    std::fs::create_dir_all(&other_root).expect("other root should exist");
+    let connection = open_workspace_connection(&root_path).expect("database should open");
+    connection
+      .execute(
+        "UPDATE workspace SET root_path = ?1",
+        params![other_root.to_string_lossy()],
+      )
+      .expect("adversarial fixture should alter the registered root");
+
+    let error = workspace_secret_scope(&root_path, &connection)
+      .expect_err("the live root must participate in workspace isolation");
+
+    assert_eq!(error.code, AppErrorCode::PermissionError);
+    std::fs::remove_dir_all(root_path).ok();
+    std::fs::remove_dir_all(other_root).ok();
   }
 
   #[cfg(target_os = "macos")]
   #[test]
   fn system_keychain_round_trip_works_for_app_credentials() {
     let secret_store_key = build_secret_store_key(
+      "system-keychain-test-workspace",
       "tikhub",
       "connectivity-test",
       &format!("test-{}", Uuid::new_v4()),
