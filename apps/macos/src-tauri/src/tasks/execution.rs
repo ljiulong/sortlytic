@@ -51,6 +51,7 @@ pub fn enqueue_task(root_path: impl AsRef<Path>, task_id: &str) -> AppResult<Tas
       params![run_id, task_id, plan_id, attempt_number, now],
     )
     .map_err(database_error)?;
+  materialize_run_steps(&transaction, &run_id, &plan_id, &now)?;
   transaction
     .execute(
       "UPDATE collection_task
@@ -295,6 +296,7 @@ pub fn retry_task(
       params![run_id, task_id, plan_id, attempt_number, now, stage],
     )
     .map_err(database_error)?;
+  materialize_run_steps(&transaction, &run_id, &plan_id, &now)?;
   transaction
     .execute(
       "UPDATE collection_task SET status = 'queued', updated_at = ?1 WHERE id = ?2",
@@ -308,6 +310,65 @@ pub fn retry_task(
 
 fn immediate_transaction(connection: &mut Connection) -> AppResult<Transaction<'_>> {
   Transaction::new(connection, TransactionBehavior::Immediate).map_err(database_error)
+}
+
+fn materialize_run_steps(
+  connection: &Connection,
+  run_id: &str,
+  plan_id: &str,
+  created_at: &str,
+) -> AppResult<()> {
+  let api_step_ids = {
+    let mut statement = connection
+      .prepare(
+        "SELECT id FROM api_call_step
+         WHERE plan_id = ?1
+         ORDER BY step_order, id",
+      )
+      .map_err(database_error)?;
+    let rows = statement
+      .query_map(params![plan_id], |row| row.get::<_, String>(0))
+      .map_err(database_error)?;
+    rows
+      .collect::<rusqlite::Result<Vec<_>>>()
+      .map_err(database_error)?
+  };
+  if api_step_ids.is_empty() {
+    return Err(task_error("采集计划没有可物化的运行步骤，不能创建运行记录"));
+  }
+
+  for api_step_id in &api_step_ids {
+    let changed = connection
+      .execute(
+        "INSERT INTO task_run_step (
+           id, task_run_id, api_call_step_id, status, created_at, updated_at
+         ) VALUES (?1, ?2, ?3, 'pending', ?4, ?4)",
+        params![Uuid::new_v4().to_string(), run_id, api_step_id, created_at],
+      )
+      .map_err(database_error)?;
+    if changed != 1 {
+      return Err(task_error("运行步骤快照写入不完整，已取消创建运行记录"));
+    }
+  }
+
+  let materialized_count = connection
+    .query_row(
+      "SELECT COUNT(*)
+       FROM task_run_step AS run_step
+       JOIN api_call_step AS api_step ON api_step.id = run_step.api_call_step_id
+       WHERE run_step.task_run_id = ?1 AND api_step.plan_id = ?2
+         AND run_step.status = 'pending' AND run_step.stop_reason IS NULL
+         AND run_step.started_at IS NULL AND run_step.completed_at IS NULL",
+      params![run_id, plan_id],
+      |row| row.get::<_, i64>(0),
+    )
+    .map_err(database_error)?;
+  let expected_count =
+    i64::try_from(api_step_ids.len()).map_err(|_| task_error("采集计划步骤数量超出可执行范围"))?;
+  if materialized_count != expected_count {
+    return Err(task_error("运行步骤快照数量不完整，已取消创建运行记录"));
+  }
+  Ok(())
 }
 
 fn claim_stage(current_stage: Option<&str>) -> &'static str {

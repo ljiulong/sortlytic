@@ -716,22 +716,27 @@ fn insert_checkpoint(
   has_more: Option<bool>,
 ) -> String {
   let connection = open_workspace_connection(&fixture.root_path).expect("database should open");
-  let api_call_step_id = connection
+  let run_step_id = connection
     .query_row(
-      "SELECT id FROM api_call_step WHERE plan_id = ?1 ORDER BY step_order LIMIT 1",
-      params![fixture.plan.id],
+      "SELECT run_step.id
+       FROM task_run_step AS run_step
+       JOIN api_call_step AS api_step ON api_step.id = run_step.api_call_step_id
+       WHERE run_step.task_run_id = ?1 AND api_step.plan_id = ?2
+       ORDER BY api_step.step_order, api_step.id
+       LIMIT 1",
+      params![fixture.run.id, fixture.plan.id],
       |row| row.get::<_, String>(0),
     )
-    .expect("API step should load");
-  let run_step_id = Uuid::new_v4().to_string();
-  connection
+    .expect("materialized run step should load");
+  let changed = connection
     .execute(
-      "INSERT INTO task_run_step (
-         id, task_run_id, api_call_step_id, status, started_at, created_at, updated_at
-       ) VALUES (?1, ?2, ?3, 'running', ?4, ?4, ?4)",
-      params![run_step_id, fixture.run.id, api_call_step_id, T0],
+      "UPDATE task_run_step
+       SET status = 'running', started_at = ?1, updated_at = ?1
+       WHERE id = ?2 AND task_run_id = ?3",
+      params![T0, run_step_id, fixture.run.id],
     )
-    .expect("run step should insert");
+    .expect("run step should start");
+  assert_eq!(changed, 1);
   let checkpoint_id = Uuid::new_v4().to_string();
   let requested_at = (request_attempt_count > 0).then_some(T0);
   let response_received_at = matches!(status, "response_received" | "completed").then_some(T1);
