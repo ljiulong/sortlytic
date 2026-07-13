@@ -189,6 +189,48 @@ fn page_size_must_be_a_positive_bounded_integer() {
 }
 
 #[test]
+fn endpoints_without_provider_page_size_reject_the_parameter() {
+  for (platform, data_type, params) in [
+    (
+      "douyin",
+      "keyword_search",
+      serde_json::json!({ "keyword": "汽车", "page_size": 20 }),
+    ),
+    (
+      "xiaohongshu",
+      "keyword_search",
+      serde_json::json!({ "keyword": "汽车", "page_size": 20 }),
+    ),
+    (
+      "xiaohongshu",
+      "comments",
+      serde_json::json!({ "item_id": "note-1", "page_size": 20 }),
+    ),
+  ] {
+    let capability = list_platform_data_types(platform)
+      .expect("supported platform should expose capabilities")
+      .into_iter()
+      .find(|capability| capability.data_type == data_type)
+      .expect("endpoint capability should be registered");
+    let result = validate_collection_params(platform, data_type, params)
+      .expect("parameter validation should run");
+
+    assert!(!capability
+      .optional_params
+      .iter()
+      .any(|param| param == "page_size"));
+    assert!(
+      !result.valid,
+      "{platform}.{data_type} must reject page_size"
+    );
+    assert!(result
+      .errors
+      .iter()
+      .any(|error| error.contains("page_size") && error.contains("白名单")));
+  }
+}
+
+#[test]
 fn complete_tiktok_keyword_plan_passes_v2_validation() {
   let result = validate_collection_plan_v2(&complete_tiktok_keyword_plan_v2());
 

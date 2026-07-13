@@ -108,7 +108,7 @@ fn maps_business_params_to_platform_specific_names_and_pagination() {
   let douyin_search = build_collection_request(
     "douyin",
     "keyword_search",
-    &serde_json::json!({ "keyword": "汽车", "region": "CN", "time_range": "近 30 天", "page_size": 20 }),
+    &serde_json::json!({ "keyword": "汽车", "region": "CN", "time_range": "近 30 天" }),
     Some(&cursor_for(
       "douyin.keyword_search",
       serde_json::json!({ "cursor": 10, "search_id": "search-1", "backtrace": "trace-1" }),
@@ -130,8 +130,7 @@ fn maps_business_params_to_platform_specific_names_and_pagination() {
     &serde_json::json!({
       "keyword": "汽车",
       "region": "CN",
-      "time_range": "近 180 天",
-      "page_size": 20
+      "time_range": "近 180 天"
     }),
     None,
   )
@@ -338,6 +337,32 @@ fn rejects_non_integer_page_size_instead_of_silently_using_default() {
 }
 
 #[test]
+fn rejects_page_size_for_endpoints_that_do_not_send_it_to_tikhub() {
+  for (platform, data_type, params) in [
+    (
+      "douyin",
+      "keyword_search",
+      serde_json::json!({ "keyword": "汽车", "page_size": 20 }),
+    ),
+    (
+      "xiaohongshu",
+      "keyword_search",
+      serde_json::json!({ "keyword": "汽车", "page_size": 20 }),
+    ),
+    (
+      "xiaohongshu",
+      "comments",
+      serde_json::json!({ "item_id": "note-1", "page_size": 20 }),
+    ),
+  ] {
+    let error = build_collection_request(platform, data_type, &params, None)
+      .expect_err("unsupported page_size must fail before building a request");
+
+    assert!(error.message.contains("page_size") && error.message.contains("白名单"));
+  }
+}
+
+#[test]
 fn rejects_boolean_cursor_instead_of_requesting_cursor_true() {
   let error = build_collection_request(
     "tiktok",
@@ -450,8 +475,7 @@ fn keeps_source_constraints_for_local_post_filtering() {
     &serde_json::json!({
       "keyword": "汽车",
       "region": "CN",
-      "time_range": "近 30 天",
-      "page_size": 20
+      "time_range": "近 30 天"
     }),
     None,
   )
@@ -459,7 +483,7 @@ fn keeps_source_constraints_for_local_post_filtering() {
 
   assert_eq!(request.source_params()["region"], "CN");
   assert_eq!(request.source_params()["time_range"], "近 30 天");
-  assert_eq!(request.source_params()["page_size"], 20);
+  assert!(request.source_params().get("page_size").is_none());
 }
 
 #[test]
@@ -714,14 +738,12 @@ fn params_for(data_type: &str) -> Value {
     "keyword_search" => serde_json::json!({
       "keyword": "汽车",
       "region": "US",
-      "time_range": "近 7 天",
-      "page_size": 20
+      "time_range": "近 7 天"
     }),
     "comments" => serde_json::json!({
       "item_id": "item-1",
       "region": "US",
-      "time_range": "近 7 天",
-      "page_size": 20
+      "time_range": "近 7 天"
     }),
     "account_profile" => serde_json::json!({ "account_id": "account-1", "region": "US" }),
     _ => serde_json::json!({ "item_id": "item-1", "region": "US" }),
