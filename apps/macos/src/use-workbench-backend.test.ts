@@ -21,7 +21,15 @@ import {
 } from './use-workbench-backend'
 import { workspaceSnapshot } from './workbench-data'
 
+type CapturedMutationOptions = {
+  onSuccess?: (data: unknown) => unknown
+  onError?: (error: unknown) => unknown
+}
+
 const invokeMock = vi.hoisted(() => vi.fn())
+const invalidateQueriesMock = vi.hoisted(() => vi.fn())
+const mutationOptionsMock = vi.hoisted(() => ({ current: [] as CapturedMutationOptions[] }))
+const stateSettersMock = vi.hoisted(() => ({ current: [] as ReturnType<typeof vi.fn>[] }))
 const queryMock = vi.hoisted(() => ({
   current: {
     data: undefined as unknown,
@@ -33,14 +41,30 @@ const queryMock = vi.hoisted(() => ({
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }))
 
+vi.mock('react', async () => {
+  const actual = await vi.importActual<typeof import('react')>('react')
+  return {
+    ...actual,
+    useState(initialValue: unknown) {
+      const [value] = actual.useState(initialValue)
+      const setter = vi.fn()
+      stateSettersMock.current.push(setter)
+      return [value, setter]
+    },
+  }
+})
+
 vi.mock('@tanstack/react-query', () => ({
-  useMutation: () => ({
-    isPending: false,
-    mutateAsync: vi.fn(),
-  }),
+  useMutation: (options: CapturedMutationOptions) => {
+    mutationOptionsMock.current.push(options)
+    return {
+      isPending: false,
+      mutateAsync: vi.fn(),
+    }
+  },
   useQuery: () => queryMock.current,
   useQueryClient: () => ({
-    invalidateQueries: vi.fn(),
+    invalidateQueries: invalidateQueriesMock,
   }),
 }))
 
@@ -112,6 +136,10 @@ function renderWorkbenchHook() {
 
 beforeEach(() => {
   invokeMock.mockReset()
+  invalidateQueriesMock.mockReset()
+  invalidateQueriesMock.mockResolvedValue(undefined)
+  mutationOptionsMock.current = []
+  stateSettersMock.current = []
   queryMock.current = {
     data: undefined,
     error: null,
@@ -184,8 +212,8 @@ describe('TikHub connector 后端 API', () => {
     expect(invokeMock.mock.calls.map(([command]) => command)).toEqual([
       'get_tikhub_connector',
       'list_secret_refs',
-      'update_secret',
       'save_tikhub_connector',
+      'update_secret',
       'test_tikhub_connector',
     ])
     expect(invokeMock).not.toHaveBeenCalledWith('test_tikhub_connection', expect.anything())
@@ -221,6 +249,57 @@ describe('TikHub connector 后端 API', () => {
       rootPath: null,
     })
     expect(invokeMock.mock.calls.map(([command]) => command)).not.toContain('update_secret')
+  })
+})
+
+describe('TikHub mutation 失败回读', () => {
+  it('清空旧测试结果并等待连接状态查询失效完成', async () => {
+    renderWorkbenchHook()
+    const tikhubMutation = mutationOptionsMock.current[4]
+    if (!tikhubMutation?.onSuccess || !tikhubMutation.onError) {
+      throw new Error('TikHub mutation 应为 Hook 中按顺序注册的第 5 个 mutation')
+    }
+    const oldResult = {
+      success: true,
+      base_url: 'https://api.tikhub.io',
+      daily_usage_json: {},
+      message: '旧成功状态',
+    }
+    await tikhubMutation.onSuccess(oldResult)
+    const tikhubResultSetter = stateSettersMock.current.find((setter) =>
+      setter.mock.calls.some(([value]) => value === oldResult),
+    )
+    const actionMessageSetter = stateSettersMock.current.find((setter) =>
+      setter.mock.calls.some(([value]) => value === oldResult.message),
+    )
+    if (!actionMessageSetter || !tikhubResultSetter) {
+      throw new Error('未捕获 TikHub mutation 使用的状态 setter')
+    }
+    expect(tikhubResultSetter).toHaveBeenCalledWith(oldResult)
+    tikhubResultSetter.mockClear()
+    actionMessageSetter.mockClear()
+    invalidateQueriesMock.mockReset()
+    let finishInvalidation: (() => void) | undefined
+    const invalidation = new Promise<void>((resolve) => {
+      finishInvalidation = resolve
+    })
+    invalidateQueriesMock.mockReturnValue(invalidation)
+
+    const completion = Promise.resolve(tikhubMutation.onError(new Error('Token 已失效')))
+    let completed = false
+    void completion.then(() => {
+      completed = true
+    })
+    await Promise.resolve()
+
+    expect(tikhubResultSetter).toHaveBeenCalledWith(undefined)
+    expect(actionMessageSetter).toHaveBeenCalledWith('Token 已失效')
+    expect(invalidateQueriesMock).toHaveBeenCalledWith({ queryKey: ['workbench-backend'] })
+    expect(completed).toBe(false)
+
+    finishInvalidation?.()
+    await completion
+    expect(completed).toBe(true)
   })
 })
 

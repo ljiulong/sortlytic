@@ -256,7 +256,11 @@ export function useWorkbenchBackend() {
       setActionMessage(result.message)
       await queryClient.invalidateQueries({ queryKey })
     },
-    onError: (error) => setActionMessage(backendErrorMessage(error)),
+    onError: async (error) => {
+      setTikhubTestResult(undefined)
+      setActionMessage(backendErrorMessage(error))
+      await queryClient.invalidateQueries({ queryKey })
+    },
   })
 
   const saveAndValidateModelProvider = async (input: ModelSettingsInput) => {
@@ -384,21 +388,28 @@ export async function saveAndTestTikhubToken(input: { token: string; baseUrl: st
         (secret) => secret.id === connector.secret_ref_id && secret.provider_type === 'tikhub',
       )
     : undefined
-  const secret = boundSecret
-    ? await updateSecret(boundSecret.id, input.token)
-    : await saveSecret({
-        provider_type: 'tikhub',
-        provider_id: 'default',
-        secret: input.token,
-        alias: input.baseUrl.includes('tikhub.dev')
-          ? 'TikHub 中国大陆域名'
-          : 'TikHub 国际域名',
-      })
-  await saveTikhubConnector({
-    secret_ref_id: secret.id,
-    base_url: input.baseUrl,
-    enabled: true,
-  })
+  if (boundSecret) {
+    await saveTikhubConnector({
+      secret_ref_id: boundSecret.id,
+      base_url: input.baseUrl,
+      enabled: true,
+    })
+    await updateSecret(boundSecret.id, input.token)
+  } else {
+    const secret = await saveSecret({
+      provider_type: 'tikhub',
+      provider_id: 'default',
+      secret: input.token,
+      alias: input.baseUrl.includes('tikhub.dev')
+        ? 'TikHub 中国大陆域名'
+        : 'TikHub 国际域名',
+    })
+    await saveTikhubConnector({
+      secret_ref_id: secret.id,
+      base_url: input.baseUrl,
+      enabled: true,
+    })
+  }
   return testTikhubConnector()
 }
 
