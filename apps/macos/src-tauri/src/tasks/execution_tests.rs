@@ -135,7 +135,7 @@ fn a_new_confirmed_plan_starts_its_own_attempt_sequence() {
 
   let mut replacement_input = execution_plan_input(&task.id);
   replacement_input.source = "user_edited".to_string();
-  replacement_input.plan_json["steps"][0]["params"]["item_id"] = serde_json::json!("video-2");
+  replacement_input.plan_json["steps"][0]["params"]["keyword"] = serde_json::json!("truck");
   let replacement =
     save_collection_plan(&root_path, replacement_input).expect("replacement plan should save");
   confirm_collection_plan(&root_path, &task.id, &replacement.id)
@@ -297,7 +297,7 @@ fn enqueue_rejects_a_stale_confirmation_when_a_newer_plan_exists() {
   let (root_path, task, first_plan) = prepared_task_workspace("execution-stale-confirmation");
   let mut replacement_input = execution_plan_input(&task.id);
   replacement_input.source = "user_edited".to_string();
-  replacement_input.plan_json["steps"][0]["params"]["item_id"] = serde_json::json!("video-2");
+  replacement_input.plan_json["steps"][0]["params"]["keyword"] = serde_json::json!("truck");
   let replacement =
     save_collection_plan(&root_path, replacement_input).expect("replacement plan should save");
 
@@ -509,7 +509,7 @@ fn prepared_task_workspace(
       name: "执行任务".to_string(),
       source_type: "form".to_string(),
       platforms: vec!["tiktok".to_string()],
-      data_types: vec!["comments".to_string()],
+      data_types: vec!["keyword_search".to_string()],
     },
   )
   .expect("task should create");
@@ -525,20 +525,25 @@ fn execution_plan_input(task_id: &str) -> SaveCollectionPlanInput {
     source: "form_generated".to_string(),
     plan_json: serde_json::json!({
       "platforms": ["tiktok"],
-      "data_types": ["comments"],
+      "data_types": ["keyword_search"],
       "region": "US",
-      "time_range": "2026-07-01/2026-07-07",
+      "time_range": "近 30 天",
       "steps": [{
-        "endpoint_key": "tiktok.comments",
+        "endpoint_key": "tiktok.keyword_search",
         "platform": "tiktok",
-        "data_type": "comments",
+        "data_type": "keyword_search",
         "params": {
-          "item_id": "video-1",
+          "keyword": "car",
           "region": "US",
-          "time_range": "2026-07-01/2026-07-07"
+          "time_range": "近 30 天"
         }
       }],
+      "record_limit": 1200,
       "request_limit": 1,
+      "budget_limit": {
+        "currency": "USD",
+        "amount_micros": 35_000_000
+      },
       "missing_fields": [],
       "requires_user_confirmation": true
     }),

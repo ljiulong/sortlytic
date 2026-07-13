@@ -12,6 +12,8 @@ fn task_plan_confirm_enqueue_and_logs_round_trip() {
   let logs = list_task_logs(&root_path, &run.id).expect("logs should list");
 
   assert_eq!(task.status, "draft");
+  assert_eq!(plan.schema_version, 2);
+  assert_eq!(plan.validation_status, "valid");
   assert_eq!(confirmed.status, "waiting_confirmation");
   assert!(confirmed.confirmed_at.is_some());
   assert_eq!(run.status, "queued");
@@ -53,8 +55,8 @@ fn persisted_cost_estimate_counts_the_confirmed_request_limit() {
     stored_step,
     (
       "tiktok".to_string(),
-      "comments".to_string(),
-      "tiktok.comments".to_string(),
+      "keyword_search".to_string(),
+      "tiktok.keyword_search".to_string(),
       5
     )
   );
@@ -76,7 +78,9 @@ fn backend_validation_overrides_client_supplied_status() {
   invalid_input.validation_errors_json = Some(serde_json::json!([]));
   let invalid_plan = save_collection_plan(&root_path, invalid_input).expect("invalid plan saved");
 
+  assert_eq!(valid_plan.schema_version, 2);
   assert_eq!(valid_plan.validation_status, "valid");
+  assert_eq!(invalid_plan.schema_version, 2);
   assert_eq!(invalid_plan.validation_status, "needs_review");
   assert!(invalid_plan
     .validation_errors_json
@@ -91,25 +95,188 @@ fn backend_validation_overrides_client_supplied_status() {
 }
 
 #[test]
-fn confirmation_revalidates_persisted_plan_content() {
-  let root_path = unique_temp_workspace("confirm-revalidation");
+fn partial_v2_envelope_is_not_downgraded_to_v1() {
+  for (label, missing_field) in [
+    ("partial-v2-missing-budget", "budget_limit"),
+    ("partial-v2-missing-record-limit", "record_limit"),
+  ] {
+    let root_path = unique_temp_workspace(label);
+    create_workspace("任务测试", &root_path).expect("workspace should be created");
+    let task = create_collection_task(&root_path, create_task_input()).expect("task created");
+    let mut input = plan_input(&task.id);
+    input
+      .plan_json
+      .as_object_mut()
+      .expect("plan fixture should be an object")
+      .remove(missing_field);
+
+    let plan = save_collection_plan(&root_path, input).expect("partial v2 plan should save");
+    let errors = plan
+      .validation_errors_json
+      .as_array()
+      .expect("validation errors should be an array")
+      .iter()
+      .filter_map(Value::as_str)
+      .map(ToString::to_string)
+      .collect::<Vec<_>>();
+    let mut sorted_errors = errors.clone();
+    sorted_errors.sort();
+    sorted_errors.dedup();
+
+    assert_eq!(plan.schema_version, 2);
+    assert_eq!(plan.validation_status, "needs_review");
+    assert!(errors.iter().any(|error| error.contains(missing_field)));
+    assert_eq!(errors, sorted_errors);
+
+    std::fs::remove_dir_all(root_path).ok();
+  }
+}
+
+#[test]
+fn legacy_v1_plan_is_readable_but_cannot_be_confirmed() {
+  let root_path = unique_temp_workspace("legacy-plan");
   create_workspace("任务测试", &root_path).expect("workspace should be created");
   let task = create_collection_task(&root_path, create_task_input()).expect("task created");
-  let plan = save_collection_plan(&root_path, plan_input(&task.id)).expect("plan saved");
-  let connection = open_workspace_connection(&root_path).expect("database should open");
+  let plan = save_collection_plan(&root_path, legacy_plan_input(&task.id))
+    .expect("legacy plan should remain readable");
 
+  assert_eq!(plan.schema_version, 1);
+  assert_eq!(plan.validation_status, "needs_review");
+  assert!(plan
+    .validation_errors_json
+    .as_array()
+    .is_some_and(|errors| errors.iter().any(|error| {
+      error
+        .as_str()
+        .is_some_and(|error| error.contains("v1") && error.contains("兼容读取"))
+    })));
+
+  let connection = open_workspace_connection(&root_path).expect("database should open");
   connection
     .execute(
-      "UPDATE collection_plan SET plan_json = ?1, validation_status = 'valid' WHERE id = ?2",
-      rusqlite::params![invalid_plan_json().to_string(), plan.id],
+      "UPDATE collection_plan
+       SET validation_status = 'valid', validation_errors_json = '[]', confirmed_by_user = 1
+       WHERE id = ?1",
+      params![plan.id],
     )
-    .expect("test should corrupt persisted plan");
+    .expect("test should forge a legacy confirmation");
+  connection
+    .execute(
+      "UPDATE collection_task SET confirmed_at = '2026-07-13T08:00:00+00:00' WHERE id = ?1",
+      params![task.id],
+    )
+    .expect("test should forge the task confirmation marker");
+  drop(connection);
 
   let error = confirm_collection_plan(&root_path, &task.id, &plan.id)
-    .expect_err("confirmation must revalidate persisted content");
-
+    .expect_err("legacy plans must not be confirmable");
   assert_eq!(error.code, AppErrorCode::ValidationError);
+  assert!(error.message.contains("v1") && error.message.contains("不能确认"));
+
+  let connection = open_workspace_connection(&root_path).expect("database should reopen");
+  let persisted = connection
+    .query_row(
+      "SELECT validation_status, validation_errors_json, confirmed_by_user,
+              (SELECT confirmed_at FROM collection_task WHERE id = ?2)
+       FROM collection_plan WHERE id = ?1",
+      params![plan.id, task.id],
+      |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, String>(1)?,
+          row.get::<_, i64>(2)?,
+          row.get::<_, Option<String>>(3)?,
+        ))
+      },
+    )
+    .expect("legacy rejection should persist");
+  assert_eq!(persisted.0, "needs_review");
+  assert!(persisted.1.contains("v1") && persisted.1.contains("兼容读取"));
+  assert_eq!(persisted.2, 0);
+  assert!(persisted.3.is_none());
+
   std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn confirmation_revalidates_persisted_v2_limits() {
+  for (label, mutate, expected_error) in [
+    ("missing-budget", "missing_budget", "budget_limit"),
+    (
+      "invalid-record-limit",
+      "invalid_record_limit",
+      "record_limit",
+    ),
+    (
+      "invalid-request-limit",
+      "invalid_request_limit",
+      "request_limit",
+    ),
+  ] {
+    let root_path = unique_temp_workspace(label);
+    create_workspace("任务测试", &root_path).expect("workspace should be created");
+    let task = create_collection_task(&root_path, create_task_input()).expect("task created");
+    let plan = save_collection_plan(&root_path, plan_input(&task.id)).expect("plan saved");
+    let mut corrupted = plan.plan_json.clone();
+    match mutate {
+      "missing_budget" => {
+        corrupted
+          .as_object_mut()
+          .expect("plan should be an object")
+          .remove("budget_limit");
+      }
+      "invalid_record_limit" => corrupted["record_limit"] = serde_json::json!(0),
+      "invalid_request_limit" => corrupted["request_limit"] = serde_json::json!(1.5),
+      _ => unreachable!("test case should be known"),
+    }
+    let connection = open_workspace_connection(&root_path).expect("database should open");
+    connection
+      .execute(
+        "UPDATE collection_plan
+         SET plan_json = ?1, validation_status = 'valid', validation_errors_json = '[]',
+             confirmed_by_user = 1
+         WHERE id = ?2",
+        params![corrupted.to_string(), plan.id],
+      )
+      .expect("test should corrupt persisted v2 limits");
+    connection
+      .execute(
+        "UPDATE collection_task SET confirmed_at = '2026-07-13T08:00:00+00:00' WHERE id = ?1",
+        params![task.id],
+      )
+      .expect("test should forge the task confirmation marker");
+    drop(connection);
+
+    let error = confirm_collection_plan(&root_path, &task.id, &plan.id)
+      .expect_err("confirmation must revalidate persisted v2 limits");
+    assert_eq!(error.code, AppErrorCode::ValidationError);
+
+    let connection = open_workspace_connection(&root_path).expect("database should reopen");
+    let persisted = connection
+      .query_row(
+        "SELECT schema_version, validation_status, validation_errors_json, confirmed_by_user,
+                (SELECT confirmed_at FROM collection_task WHERE id = ?2)
+         FROM collection_plan WHERE id = ?1",
+        params![plan.id, task.id],
+        |row| {
+          Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, Option<String>>(4)?,
+          ))
+        },
+      )
+      .expect("failed v2 confirmation state should persist");
+    assert_eq!(persisted.0, 2);
+    assert_eq!(persisted.1, "needs_review");
+    assert!(persisted.2.contains(expected_error));
+    assert_eq!(persisted.3, 0);
+    assert!(persisted.4.is_none());
+
+    std::fs::remove_dir_all(root_path).ok();
+  }
 }
 
 #[test]
@@ -164,10 +331,10 @@ fn saving_a_new_plan_revokes_confirmation_and_rejects_stale_plan() {
 
 fn create_task_input() -> CreateCollectionTaskInput {
   CreateCollectionTaskInput {
-    name: "采集 TikTok 评论".to_string(),
+    name: "采集 TikTok 关键词结果".to_string(),
     source_type: "form".to_string(),
     platforms: vec!["tiktok".to_string()],
-    data_types: vec!["comments".to_string()],
+    data_types: vec!["keyword_search".to_string()],
   }
 }
 
@@ -177,20 +344,25 @@ fn plan_input(task_id: &str) -> SaveCollectionPlanInput {
     source: "form_generated".to_string(),
     plan_json: serde_json::json!({
       "platforms": ["tiktok"],
-      "data_types": ["comments"],
+      "data_types": ["keyword_search"],
       "region": "US",
-      "time_range": "2026-07-01/2026-07-07",
+      "time_range": "近 30 天",
       "steps": [{
-        "endpoint_key": "tiktok.comments",
+        "endpoint_key": "tiktok.keyword_search",
         "platform": "tiktok",
-        "data_type": "comments",
+        "data_type": "keyword_search",
         "params": {
-          "item_id": "video-1",
+          "keyword": "car",
           "region": "US",
-          "time_range": "2026-07-01/2026-07-07"
+          "time_range": "近 30 天"
         }
       }],
+      "record_limit": 1200,
       "request_limit": 1,
+      "budget_limit": {
+        "currency": "USD",
+        "amount_micros": 35_000_000
+      },
       "missing_fields": [],
       "requires_user_confirmation": true
     }),
@@ -200,19 +372,38 @@ fn plan_input(task_id: &str) -> SaveCollectionPlanInput {
   }
 }
 
+fn legacy_plan_input(task_id: &str) -> SaveCollectionPlanInput {
+  let mut input = plan_input(task_id);
+  let plan = input
+    .plan_json
+    .as_object_mut()
+    .expect("plan fixture should be an object");
+  plan.remove("record_limit");
+  plan.remove("budget_limit");
+  input
+}
+
 fn invalid_plan_json() -> Value {
   serde_json::json!({
     "platforms": ["tiktok"],
-    "data_types": ["comments"],
+    "data_types": ["keyword_search"],
     "region": "US",
     "time_range": null,
     "steps": [{
-      "endpoint_key": "tiktok.comments",
+      "endpoint_key": "tiktok.keyword_search",
       "platform": "tiktok",
-      "data_type": "comments",
-      "params": {}
+      "data_type": "keyword_search",
+      "params": {
+        "keyword": "",
+        "region": "US"
+      }
     }],
+    "record_limit": 1200,
     "request_limit": 1,
+    "budget_limit": {
+      "currency": "USD",
+      "amount_micros": 35_000_000
+    },
     "missing_fields": [],
     "requires_user_confirmation": true
   })

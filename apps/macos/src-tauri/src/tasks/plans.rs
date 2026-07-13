@@ -5,6 +5,7 @@ use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::collection::validate_collection_plan_v2;
 use crate::domain::AppResult;
 
 use super::validation::{estimate_from_plan_json, validate_plan_for_task};
@@ -12,6 +13,8 @@ use super::{
   database_error, get_task_by_id, i64_to_bool, open_workspace_connection, string_to_json,
   task_error, CollectionPlanView, CollectionTaskView, CostEstimateView, SaveCollectionPlanInput,
 };
+
+const LEGACY_PLAN_ERROR: &str = "v1 采集计划仅兼容读取，不能确认/执行";
 
 pub fn save_collection_plan(
   root_path: impl AsRef<Path>,
@@ -30,7 +33,8 @@ pub fn save_collection_plan(
   let source = normalize_plan_source(&input.source)?;
   let id = Uuid::new_v4().to_string();
   let now = Utc::now().to_rfc3339();
-  let validation_errors = validate_plan_for_task(&task, &input.plan_json);
+  let schema_version = detect_plan_schema_version(&input.plan_json);
+  let validation_errors = validate_plan_for_schema(&task, &input.plan_json, schema_version);
   let validation_status = if validation_errors.is_empty() {
     "valid"
   } else {
@@ -53,11 +57,12 @@ pub fn save_collection_plan(
       "INSERT INTO collection_plan (
         id, task_id, source, schema_version, plan_json, validation_status,
         validation_errors_json, cost_estimate_json, confirmed_by_user, created_at, updated_at
-      ) VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6, ?7, 0, ?8, ?9)",
+      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9, ?10)",
       params![
         id,
         input.task_id,
         source,
+        schema_version,
         input.plan_json.to_string(),
         validation_status,
         validation_errors.to_string(),
@@ -184,8 +189,9 @@ pub fn confirm_collection_plan(
     return Err(task_error("只能确认当前任务的最新采集计划"));
   }
 
-  let validation_errors = validate_plan_for_task(&task, &plan.plan_json);
-  if !validation_errors.is_empty() {
+  let validation_errors = validate_plan_for_schema(&task, &plan.plan_json, plan.schema_version);
+  if plan.schema_version != 2 || !validation_errors.is_empty() {
+    let error_message = confirmation_error_message(plan.schema_version);
     let now = Utc::now().to_rfc3339();
     transaction
       .execute(
@@ -207,7 +213,7 @@ pub fn confirm_collection_plan(
       )
       .map_err(database_error)?;
     transaction.commit().map_err(database_error)?;
-    return Err(task_error("采集计划未通过后端校验，不能确认"));
+    return Err(task_error(error_message));
   }
 
   let now = Utc::now().to_rfc3339();
@@ -252,6 +258,40 @@ fn normalize_plan_source(source: &str) -> AppResult<String> {
   match source.trim() {
     "ai_generated" | "user_edited" | "form_generated" => Ok(source.trim().to_string()),
     _ => Err(task_error("采集计划来源不受支持")),
+  }
+}
+
+fn detect_plan_schema_version(plan_json: &Value) -> i64 {
+  if plan_json.get("record_limit").is_some() || plan_json.get("budget_limit").is_some() {
+    2
+  } else {
+    1
+  }
+}
+
+fn validate_plan_for_schema(
+  task: &CollectionTaskView,
+  plan_json: &Value,
+  schema_version: i64,
+) -> Vec<String> {
+  let mut errors = validate_plan_for_task(task, plan_json);
+  match schema_version {
+    2 => errors.extend(validate_collection_plan_v2(plan_json).errors),
+    1 => errors.push(LEGACY_PLAN_ERROR.to_string()),
+    version => errors.push(format!(
+      "schema_version={version} 不受支持，只有 v2 采集计划可以确认/执行"
+    )),
+  }
+  errors.sort();
+  errors.dedup();
+  errors
+}
+
+fn confirmation_error_message(schema_version: i64) -> String {
+  match schema_version {
+    2 => "采集计划未通过后端校验（v2），不能确认".to_string(),
+    1 => LEGACY_PLAN_ERROR.to_string(),
+    version => format!("schema_version={version} 不受支持，只有 v2 采集计划可以确认/执行"),
   }
 }
 
