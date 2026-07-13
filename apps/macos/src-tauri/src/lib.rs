@@ -35,7 +35,7 @@ use tasks::{
   SaveCollectionPlanInput, TaskLogView, TaskRunView, UpdateCollectionTaskInput,
 };
 use tauri::Manager;
-use tikhub::TikhubConnectionTestResult;
+use tikhub::{TikhubConnectionTestResult, TikhubConnectorInput, TikhubConnectorView};
 use workspace::{WorkspaceHealthCheck, WorkspaceSummary};
 
 #[tauri::command]
@@ -170,14 +170,60 @@ fn test_secret_connection(
 }
 
 #[tauri::command]
-fn test_tikhub_connection(
+async fn test_tikhub_connection(
   secret_ref_id: String,
   base_url: Option<String>,
   root_path: Option<String>,
   state: tauri::State<'_, AppState>,
 ) -> AppResult<TikhubConnectionTestResult> {
   let root_path = resolve_workspace_root(root_path, &state)?;
-  tikhub::test_tikhub_connection(root_path, &secret_ref_id, base_url)
+  run_tikhub_blocking(move || tikhub::test_tikhub_connection(root_path, &secret_ref_id, base_url))
+    .await
+}
+
+#[tauri::command]
+fn get_tikhub_connector(
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<Option<TikhubConnectorView>> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  tikhub::get_tikhub_connector(root_path)
+}
+
+#[tauri::command]
+fn save_tikhub_connector(
+  input: TikhubConnectorInput,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<TikhubConnectorView> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  tikhub::save_tikhub_connector(root_path, input)
+}
+
+#[tauri::command]
+async fn test_tikhub_connector(
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<TikhubConnectionTestResult> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  run_tikhub_blocking(move || tikhub::test_tikhub_connector(root_path)).await
+}
+
+async fn run_tikhub_blocking<T, F>(task: F) -> AppResult<T>
+where
+  T: Send + 'static,
+  F: FnOnce() -> AppResult<T> + Send + 'static,
+{
+  tauri::async_runtime::spawn_blocking(task)
+    .await
+    .map_err(|_| {
+      AppError::new(
+        domain::AppErrorCode::TikhubRequestError,
+        "TikHub 后台任务意外终止",
+        AppErrorStage::Collection,
+        true,
+      )
+    })?
 }
 
 #[tauri::command]
@@ -629,6 +675,9 @@ pub fn run() {
       list_secret_refs,
       test_secret_connection,
       test_tikhub_connection,
+      get_tikhub_connector,
+      save_tikhub_connector,
+      test_tikhub_connector,
       list_model_providers,
       create_model_provider,
       update_model_provider,

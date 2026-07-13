@@ -229,17 +229,20 @@ pub fn read_secret_for_backend(
   let expected_provider_type = normalize_provider_type(expected_provider_type)?;
   let connection = open_workspace_connection(root_path)?;
   let metadata = get_secret_metadata(&connection, secret_ref_id)?;
-  if metadata.provider_type != expected_provider_type {
-    return Err(AppError::new(
-      AppErrorCode::PermissionError,
-      "密钥类型与当前调用目标不匹配",
-      AppErrorStage::SecretStore,
-      false,
-    ));
-  }
+  ensure_provider_type(&metadata, &expected_provider_type)?;
   keychain_entry(&metadata.secret_store_key)?
     .get_password()
     .map_err(secret_store_error)
+}
+
+pub(crate) fn validate_secret_ref_provider(
+  connection: &Connection,
+  secret_ref_id: &str,
+  expected_provider_type: &str,
+) -> AppResult<()> {
+  let expected_provider_type = normalize_provider_type(expected_provider_type)?;
+  let metadata = get_secret_metadata(connection, secret_ref_id)?;
+  ensure_provider_type(&metadata, &expected_provider_type)
 }
 
 pub fn mask_secret(secret: &str) -> String {
@@ -366,6 +369,18 @@ fn get_secret_metadata(connection: &Connection, secret_ref_id: &str) -> AppResul
     .optional()
     .map_err(database_error)?
     .ok_or_else(|| secret_store_error("密钥引用不存在"))
+}
+
+fn ensure_provider_type(metadata: &SecretMetadata, expected_provider_type: &str) -> AppResult<()> {
+  if metadata.provider_type == expected_provider_type {
+    return Ok(());
+  }
+  Err(AppError::new(
+    AppErrorCode::PermissionError,
+    "密钥类型与当前调用目标不匹配",
+    AppErrorStage::SecretStore,
+    false,
+  ))
 }
 
 fn map_secret_ref_view(row: &Row<'_>) -> rusqlite::Result<SecretRefView> {
