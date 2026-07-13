@@ -33,8 +33,10 @@ pub fn enqueue_task(root_path: impl AsRef<Path>, task_id: &str) -> AppResult<Tas
   if task.confirmed_at.is_none() {
     return Err(task_error("任务必须先确认采集计划才能入队"));
   }
-  if !["waiting_confirmation", "failed"].contains(&task.status.as_str()) {
-    return Err(task_error("只有已确认或失败任务可以入队"));
+  if task.status != "waiting_confirmation" {
+    return Err(task_error(
+      "只有已确认待执行任务可以入队，失败任务必须使用重试流程",
+    ));
   }
 
   let plan_id = confirmed_plan_id(&transaction, task_id)?;

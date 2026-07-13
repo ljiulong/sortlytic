@@ -101,6 +101,30 @@ fn non_retryable_failure_cannot_use_the_ordinary_retry_command() {
 }
 
 #[test]
+fn failed_task_cannot_bypass_retry_policy_through_enqueue() {
+  let (root_path, task, _) = prepared_task_workspace("execution-enqueue-retry-bypass");
+  enqueue_task(&root_path, &task.id).expect("task should enqueue");
+  let running = claim_next_task(&root_path)
+    .expect("claim should succeed")
+    .expect("queued task should be claimed");
+  fail_task_run(
+    &root_path,
+    &running.id,
+    "UNCERTAIN_REQUEST_AFTER_CRASH",
+    "远端请求状态不确定",
+    false,
+  )
+  .expect("running task should fail");
+
+  let error = enqueue_task(&root_path, &task.id)
+    .expect_err("failed task must not bypass the explicit retry policy through enqueue");
+  assert!(error.message.contains("重试流程"));
+  assert_eq!(task_run_count_and_state(&root_path, &task.id).0, 1);
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn ordinary_retry_cannot_forge_an_internal_recovery_directive() {
   for reserved_stage in [
     "恢复响应入库",
