@@ -548,9 +548,9 @@ fn map_model_provider(row: &Row<'_>) -> rusqlite::Result<ModelProviderView> {
     api_format: row.get(7)?,
     region: row.get(8)?,
     default_model_id: row.get(9)?,
-    cost_policy_json: string_to_json(row.get(10)?),
-    rate_limit_policy_json: string_to_json(row.get(11)?),
-    health_check_json: string_to_json(row.get(12)?),
+    cost_policy_json: string_to_json(row.get(10)?)?,
+    rate_limit_policy_json: string_to_json(row.get(11)?)?,
+    health_check_json: string_to_json(row.get(12)?)?,
     created_at: row.get(13)?,
     updated_at: row.get(14)?,
   })
@@ -562,7 +562,7 @@ fn map_model_profile(row: &Row<'_>) -> rusqlite::Result<ModelProfileView> {
     provider_id: row.get(1)?,
     model_id: row.get(2)?,
     display_name: row.get(3)?,
-    capabilities_json: string_to_json(row.get(4)?),
+    capabilities_json: string_to_json(row.get(4)?)?,
     context_window: row.get(5)?,
     supports_structured_output: i64_to_bool(row.get(6)?),
     supports_streaming: i64_to_bool(row.get(7)?),
@@ -584,8 +584,10 @@ fn json_to_string(value: Option<Value>) -> String {
   value.unwrap_or_else(|| serde_json::json!({})).to_string()
 }
 
-fn string_to_json(value: String) -> Value {
-  serde_json::from_str(&value).unwrap_or_else(|_| serde_json::json!({}))
+fn string_to_json(value: String) -> rusqlite::Result<Value> {
+  serde_json::from_str(&value).map_err(|error| {
+    rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
+  })
 }
 
 fn bool_to_i64(value: bool) -> i64 {
@@ -701,6 +703,28 @@ mod tests {
       .expect("audit log should be queryable");
     assert_eq!(audit_count, 0);
 
+    std::fs::remove_dir_all(root_path).ok();
+  }
+
+  #[test]
+  fn listing_a_provider_rejects_corrupted_json_instead_of_silently_using_empty_object() {
+    let root_path = unique_temp_workspace("corrupted-provider-json");
+    create_workspace("供应商 JSON 测试", &root_path).expect("workspace should be created");
+    create_model_provider(&root_path, provider_input("openai"))
+      .expect("provider should be created");
+    let connection = open_workspace_connection(&root_path).expect("database should open");
+    connection
+      .execute(
+        "UPDATE model_provider SET cost_policy_json = '{not-json' WHERE provider_id = 'openai'",
+        [],
+      )
+      .expect("test should corrupt provider JSON");
+    drop(connection);
+
+    let error = list_model_providers(&root_path, None)
+      .expect_err("corrupted provider JSON must not be silently accepted");
+
+    assert_eq!(error.code, AppErrorCode::DatabaseError);
     std::fs::remove_dir_all(root_path).ok();
   }
 
