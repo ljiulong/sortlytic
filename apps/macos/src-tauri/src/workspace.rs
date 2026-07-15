@@ -724,7 +724,7 @@ mod tests {
   }
 
   fn unique_temp_workspace(label: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("smart-data-workbench-{label}-{}", Uuid::new_v4()))
+    std::env::temp_dir().join(format!("sortlytic-{label}-{}", Uuid::new_v4()))
   }
 }
 

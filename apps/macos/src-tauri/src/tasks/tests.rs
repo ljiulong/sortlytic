@@ -444,5 +444,5 @@ fn invalid_plan_json() -> Value {
 }
 
 fn unique_temp_workspace(label: &str) -> std::path::PathBuf {
-  std::env::temp_dir().join(format!("smart-data-workbench-{label}-{}", Uuid::new_v4()))
+  std::env::temp_dir().join(format!("sortlytic-{label}-{}", Uuid::new_v4()))
 }

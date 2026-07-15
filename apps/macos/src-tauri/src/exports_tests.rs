@@ -161,7 +161,7 @@ fn test_report(label: &str) -> (std::path::PathBuf, ReportView) {
 }
 
 fn unique_temp_workspace(label: &str) -> std::path::PathBuf {
-  std::env::temp_dir().join(format!("smart-data-workbench-{label}-{}", Uuid::new_v4()))
+  std::env::temp_dir().join(format!("sortlytic-{label}-{}", Uuid::new_v4()))
 }
 
 fn assert_pdf_xref_is_well_formed(bytes: &[u8]) {

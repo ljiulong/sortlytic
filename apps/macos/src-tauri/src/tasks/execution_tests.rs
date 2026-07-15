@@ -922,5 +922,5 @@ fn task_run_count_and_state(root_path: &Path, task_id: &str) -> (i64, String, Op
 }
 
 fn unique_temp_workspace(label: &str) -> std::path::PathBuf {
-  std::env::temp_dir().join(format!("smart-data-workbench-{label}-{}", Uuid::new_v4()))
+  std::env::temp_dir().join(format!("sortlytic-{label}-{}", Uuid::new_v4()))
 }
