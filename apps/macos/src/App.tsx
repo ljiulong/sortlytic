@@ -143,10 +143,10 @@ function Workbench() {
                 onSaveAndTest={backend.saveAndTestTikhubToken}
               />
               <ModelSettingsPanel
+                {...backend}
                 isPending={backend.isModelSettingsPending}
                 providers={data.modelProviders}
                 result={backend.modelValidationResult}
-                onSaveAndValidate={backend.saveAndValidateModelProvider}
               />
               <UpdateSettingsPanel
                 {...backend}
@@ -791,7 +791,6 @@ function toneForStatus(status: TaskStatus) {
   if (status === '待人工确认' || status === '等待确认') return 'warning'
   return 'info'
 }
-
 function toneForRecord(status: SocialRecord['status']) {
   if (status === '已校验') return 'success'
   if (status === '证据不足') return 'danger'

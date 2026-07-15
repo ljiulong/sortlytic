@@ -1,5 +1,5 @@
 import { Bot, KeyRound, ShieldCheck } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ModelProviderView, ProviderTestResult } from './backend-api'
 import type { ModelSettingsInput } from './use-workbench-backend'
 
@@ -9,7 +9,8 @@ type ModelSettingsPanelProps = {
   providers: ModelProviderView[]
   isPending: boolean
   result?: ProviderTestResult
-  onSaveAndValidate: (input: ModelSettingsInput) => Promise<unknown>
+  activateModelProvider: (providerId: string) => Promise<unknown>
+  saveAndValidateModelProvider: (input: ModelSettingsInput) => Promise<unknown>
 }
 
 const providerPresets: Array<{
@@ -55,7 +56,8 @@ function ModelSettingsPanel({
   providers,
   isPending,
   result,
-  onSaveAndValidate,
+  activateModelProvider,
+  saveAndValidateModelProvider,
 }: ModelSettingsPanelProps) {
   const initialProvider = providers[0]
   const initialPreset = providerPresets.find(
@@ -69,9 +71,12 @@ function ModelSettingsPanel({
     defaultModelId: initialProvider?.default_model_id ?? '',
   })
   const [apiKey, setApiKey] = useState('')
+  const didSyncProviders = useRef(false)
   const configuredProvider = providers.find(
     (provider) => provider.provider_id === form.providerId,
   )
+  const activeProvider = providers.find((provider) => provider.enabled)
+  const isActiveProvider = activeProvider?.provider_id === form.providerId
   const isValidated = result?.success && result.provider_id === form.providerId
   const providerOptions = Array.from(
     new Map(
@@ -83,7 +88,7 @@ function ModelSettingsPanel({
   )
   const needsBaseUrl = form.apiFormat === 'openai_compatible'
   const canSubmit =
-    apiKey.trim().length >= 8 &&
+    (Boolean(configuredProvider) || apiKey.trim().length >= 8) &&
     form.displayName.trim().length > 0 &&
     form.defaultModelId.trim().length > 0 &&
     (!needsBaseUrl || form.baseUrl.trim().length > 0)
@@ -102,9 +107,23 @@ function ModelSettingsPanel({
     setApiKey('')
   }
 
+  useEffect(() => {
+    if (didSyncProviders.current || providers.length === 0) return
+    didSyncProviders.current = true
+    const savedProvider = providers.find((provider) => provider.enabled) ?? providers[0]
+    if (!savedProvider) return
+    setForm({
+      providerId: savedProvider.provider_id,
+      displayName: savedProvider.display_name,
+      apiFormat: toApiFormat(savedProvider.api_format) ?? 'openai_compatible',
+      baseUrl: savedProvider.base_url ?? '',
+      defaultModelId: savedProvider.default_model_id ?? '',
+    })
+  }, [providers])
+
   const submit = async () => {
     try {
-      await onSaveAndValidate({
+      await saveAndValidateModelProvider({
         ...form,
         displayName: form.displayName.trim(),
         baseUrl: form.baseUrl.trim(),
@@ -126,9 +145,9 @@ function ModelSettingsPanel({
         </div>
         <span
           className="status-pill"
-          data-tone={isValidated ? 'success' : configuredProvider ? 'info' : 'warning'}
+          data-tone={isActiveProvider || isValidated ? 'success' : configuredProvider ? 'info' : 'warning'}
         >
-          {isValidated ? '配置已校验' : configuredProvider ? '已保存' : '待配置'}
+          {isActiveProvider ? '当前使用' : isValidated ? '配置已校验' : configuredProvider ? '已保存' : '待配置'}
         </span>
       </div>
 
@@ -201,7 +220,7 @@ function ModelSettingsPanel({
           <span>API Key</span>
           <input
             autoComplete="new-password"
-            placeholder={configuredProvider ? '输入新密钥以更新配置' : '只保存到系统安全存储'}
+            placeholder={configuredProvider ? '留空以复用已保存密钥' : '只保存到系统安全存储'}
             type="password"
             value={apiKey}
             onChange={(event) => setApiKey(event.target.value)}
@@ -225,6 +244,20 @@ function ModelSettingsPanel({
               : '尚未保存该供应商配置'}
           </span>
         </div>
+        <button
+          className="ghost-button"
+          disabled={isPending || isActiveProvider || !configuredProvider?.default_model_id}
+          type="button"
+          onClick={() => {
+            void activateModelProvider(form.providerId).catch(() => undefined)
+          }}
+        >
+          {isActiveProvider
+            ? '当前使用'
+            : configuredProvider?.default_model_id
+              ? '切换到此配置'
+              : '先配置默认模型'}
+        </button>
         <button
           className="primary-button"
           disabled={isPending || !canSubmit}

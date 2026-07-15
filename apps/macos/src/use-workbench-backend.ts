@@ -278,22 +278,28 @@ export function useWorkbenchBackend() {
       const existingProvider = providers.find(
         (provider) => provider.provider_id === input.providerId,
       )
-      const secret = existingProvider?.secret_ref_id
-        ? await updateSecret(existingProvider.secret_ref_id, input.apiKey)
-        : await saveSecret({
-            provider_type: 'model_provider',
-            provider_id: input.providerId,
-            secret: input.apiKey,
-            alias: `${input.displayName} API Key`,
-          })
-      await testSecretConnection(secret.id)
+      const apiKey = input.apiKey.trim()
+      const secretRefId = existingProvider?.secret_ref_id
+      if (!secretRefId && apiKey.length < 8) {
+        throw new Error('请先输入至少 8 位模型 API Key')
+      }
+      if (secretRefId && apiKey) {
+        await updateSecret(secretRefId, apiKey)
+      }
+      const savedSecretRefId = secretRefId ?? (await saveSecret({
+        provider_type: 'model_provider',
+        provider_id: input.providerId,
+        secret: apiKey,
+        alias: `${input.displayName} API Key`,
+      })).id
+      await testSecretConnection(savedSecretRefId)
 
       const providerInput = {
         provider_id: input.providerId,
         display_name: input.displayName,
         enabled: true,
         auth_type: 'api_key' as const,
-        secret_ref_id: secret.id,
+        secret_ref_id: savedSecretRefId,
         base_url: input.baseUrl.trim() || null,
         api_format: input.apiFormat,
         region: null,
