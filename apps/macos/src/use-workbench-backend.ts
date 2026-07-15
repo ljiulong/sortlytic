@@ -36,6 +36,7 @@ import {
   updateSecret,
   upsertModelProfile,
 } from './backend-api'
+import { useAppUpdater } from './use-app-updater'
 import {
   type ConnectionIcon,
   type DataType,
@@ -181,6 +182,7 @@ export function useWorkbenchBackend() {
   const [tikhubTestResult, setTikhubTestResult] = useState<TikhubConnectionTestResult>()
   const [modelValidationResult, setModelValidationResult] = useState<ProviderTestResult>()
   const [isModelSettingsPending, setIsModelSettingsPending] = useState(false)
+  const appUpdater = useAppUpdater()
 
   const dataQuery = useQuery({
     queryKey,
@@ -351,7 +353,8 @@ export function useWorkbenchBackend() {
       confirmPlanMutation.isPending ||
       exportMutation.isPending ||
       saveTikhubTokenMutation.isPending ||
-      isModelSettingsPending,
+      isModelSettingsPending ||
+      appUpdater.isUpdateBusy,
     generateFormPlan: generateFormPlanMutation.mutateAsync,
     generateNaturalPlan: generateNaturalPlanMutation.mutateAsync,
     confirmActivePlan: confirmPlanMutation.mutateAsync,
@@ -361,6 +364,7 @@ export function useWorkbenchBackend() {
     saveAndValidateModelProvider,
     modelValidationResult,
     isModelSettingsPending,
+    ...appUpdater,
     refresh: () => queryClient.invalidateQueries({ queryKey }),
   }
 }
