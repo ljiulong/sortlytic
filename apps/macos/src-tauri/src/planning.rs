@@ -89,7 +89,12 @@ pub(crate) fn generate_plan_json(intent_text: &str) -> Value {
     "accounts": [],
     "time_range": Value::Null,
     "steps": steps,
+    "record_limit": 100,
     "request_limit": request_count_estimate,
+    "budget_limit": {
+      "currency": "USD",
+      "amount_micros": 35_000_000
+    },
     "cost_estimate": {
       "request_count_estimate": request_count_estimate,
       "requires_confirmation": true
@@ -130,6 +135,8 @@ mod tests {
       plan["data_types"],
       serde_json::json!(["comments", "keyword_search"])
     );
+    assert!(plan["record_limit"].as_i64().is_some_and(|value| value > 0));
+    assert_eq!(plan["budget_limit"]["currency"], "USD");
     assert_eq!(plan["steps"].as_array().map(Vec::len), Some(4));
   }
 }

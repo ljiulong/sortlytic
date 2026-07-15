@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::collection::validate_collection_plan;
+use crate::collection::validate_collection_plan_v2;
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 use crate::planning::generate_plan_json;
 use crate::prompts::seed_builtin_prompts;
@@ -99,7 +99,7 @@ pub fn generate_collection_plan_from_text(
       },
     )?;
   }
-  let plan_validation = validate_collection_plan(&generated);
+  let plan_validation = validate_collection_plan_v2(&generated);
   let schema_valid = plan_validation.valid;
   let validation_status = if schema_valid {
     "valid"
@@ -117,7 +117,7 @@ pub fn generate_collection_plan_from_text(
       "INSERT INTO runtime_snapshot (
         id, task_id, provider_id, model_id, api_format, base_url_type, prompt_version_id,
         output_schema_id, capabilities_json, config_source, created_at
-      ) VALUES (?1, ?2, ?3, ?4, 'local_rule', 'none', ?5, 'collection_plan_v1', ?6, 'local', ?7)",
+      ) VALUES (?1, ?2, ?3, ?4, 'local_rule', 'none', ?5, 'collection_plan_v2', ?6, 'local', ?7)",
       params![
         runtime_snapshot_id,
         input.task_id,
@@ -457,7 +457,7 @@ mod tests {
     assert_eq!(result.ai_run.validation_status, "needs_review");
     assert_eq!(
       result.runtime_snapshot.output_schema_id,
-      "collection_plan_v1"
+      "collection_plan_v2"
     );
     assert_eq!(result.collection_plan.validation_status, "needs_review");
     assert!(result
