@@ -53,7 +53,7 @@ struct CompletionTotals {
 pub fn complete_task_run(
   root_path: impl AsRef<Path>,
   run_id: &str,
-  actual_cost_json: Value,
+  _actual_cost_json: Value,
 ) -> AppResult<TaskRunView> {
   let mut connection = open_workspace_connection(root_path)?;
   let transaction = immediate_transaction(&mut connection)?;
@@ -69,9 +69,15 @@ pub fn complete_task_run(
     .as_deref()
     .ok_or_else(|| task_error("运行记录缺少采集计划，不能标记成功"))?;
   require_executable_plan(&transaction, &run.task_id, plan_id)?;
-  require_run_completion_evidence(&transaction, &run, plan_id, &now)?;
+  let totals = require_run_completion_evidence(&transaction, &run, plan_id, &now)?;
 
-  let actual_cost_json = actual_cost_json.to_string();
+  let actual_cost_json = serde_json::json!({
+    "currency": "USD",
+    "amount_micros": totals.cost_micros,
+    "request_count": totals.request_count,
+    "record_count": totals.persisted_records
+  })
+  .to_string();
   let run_changed = transaction
     .execute(
       "UPDATE task_run
@@ -121,7 +127,7 @@ fn require_run_completion_evidence(
   run: &TaskRunView,
   plan_id: &str,
   completion_at: &str,
-) -> AppResult<()> {
+) -> AppResult<CompletionTotals> {
   let (Some(run_started_at), Some(claimed_at), Some(completion_at)) = (
     valid_timestamp(Some(&run.started_at)),
     valid_timestamp(run.claimed_at.as_deref()),
@@ -148,6 +154,7 @@ fn require_run_completion_evidence(
     return Err(task_error("运行步骤快照与采集计划不完整对应，不能标记成功"));
   }
 
+  let mut request_count = 0_i64;
   let mut persisted_records = 0_i64;
   let mut cost_micros = 0_i64;
   for step in &steps {
@@ -177,6 +184,9 @@ fn require_run_completion_evidence(
         step.order + 1
       )));
     }
+    request_count = request_count
+      .checked_add(totals.request_count)
+      .ok_or_else(|| task_error("完成证据的请求次数溢出"))?;
     persisted_records = persisted_records
       .checked_add(totals.persisted_records)
       .ok_or_else(|| task_error("完成证据的持久化记录数溢出"))?;
@@ -190,7 +200,11 @@ fn require_run_completion_evidence(
   if cost_micros > limits.budget_micros {
     return Err(task_error("完成证据的实际成本超过确认预算"));
   }
-  Ok(())
+  Ok(CompletionTotals {
+    request_count,
+    persisted_records,
+    cost_micros,
+  })
 }
 
 fn load_completion_limits(connection: &Connection, plan_id: &str) -> AppResult<CompletionLimits> {

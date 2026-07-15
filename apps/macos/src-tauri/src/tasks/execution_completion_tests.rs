@@ -847,6 +847,53 @@ fn complete_rejects_confirmed_runtime_limit_overruns() {
   );
 }
 
+#[test]
+fn complete_persists_cost_derived_from_checkpoint_evidence() {
+  let (root_path, task, _) =
+    prepared_completion_task_workspace("execution-complete-derived-cost", 1, 10, 1_000);
+  enqueue_task(&root_path, &task.id).expect("task should enqueue");
+  let running = claim_next_task(&root_path)
+    .expect("claim should succeed")
+    .expect("queued task should be claimed");
+  let run_step_id = mark_run_steps_success(&root_path, &running.id)
+    .into_iter()
+    .next()
+    .expect("single run step should exist");
+  insert_completed_checkpoint(&root_path, &run_step_id, 0, None, false, None);
+
+  complete_task_run(
+    &root_path,
+    &running.id,
+    serde_json::json!({
+      "currency": "USD",
+      "amount_micros": 999_999,
+      "request_count": 999,
+      "record_count": 999
+    }),
+  )
+  .expect("valid checkpoint evidence should complete the run");
+
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  let persisted = connection
+    .query_row(
+      "SELECT cost_actual_json FROM task_run WHERE id = ?1",
+      params![running.id],
+      |row| row.get::<_, String>(0),
+    )
+    .expect("actual cost should be persisted");
+  assert_eq!(
+    serde_json::from_str::<Value>(&persisted).expect("persisted cost should be JSON"),
+    serde_json::json!({
+      "currency": "USD",
+      "amount_micros": 100,
+      "request_count": 1,
+      "record_count": 1
+    })
+  );
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
 fn prepared_completion_task_workspace(
   label: &str,
   request_limit: i64,
