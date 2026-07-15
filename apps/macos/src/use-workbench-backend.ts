@@ -270,12 +270,17 @@ export function useWorkbenchBackend() {
 
     try {
       const providers = await listModelProviders()
-      const secret = await saveSecret({
-        provider_type: 'model_provider',
-        provider_id: input.providerId,
-        secret: input.apiKey,
-        alias: `${input.displayName} API Key`,
-      })
+      const existingProvider = providers.find(
+        (provider) => provider.provider_id === input.providerId,
+      )
+      const secret = existingProvider?.secret_ref_id
+        ? await updateSecret(existingProvider.secret_ref_id, input.apiKey)
+        : await saveSecret({
+            provider_type: 'model_provider',
+            provider_id: input.providerId,
+            secret: input.apiKey,
+            alias: `${input.displayName} API Key`,
+          })
       await testSecretConnection(secret.id)
 
       const providerInput = {
@@ -291,9 +296,6 @@ export function useWorkbenchBackend() {
         rate_limit_policy_json: null,
         health_check_json: null,
       }
-      const existingProvider = providers.find(
-        (provider) => provider.provider_id === input.providerId,
-      )
 
       if (existingProvider) {
         await updateModelProvider(input.providerId, providerInput)

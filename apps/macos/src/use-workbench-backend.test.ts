@@ -253,6 +253,60 @@ describe('TikHub connector 后端 API', () => {
   })
 })
 
+describe('模型供应商密钥引用', () => {
+  it('更新已有供应商时复用既有 secretRefId，而不是创建孤立密钥', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    const existingProvider = {
+      provider_id: 'openai',
+      display_name: 'OpenAI',
+      enabled: true,
+      auth_type: 'api_key',
+      secret_ref_id: 'model-secret-1',
+      base_url: 'https://api.openai.com/v1',
+      api_format: 'openai_compatible',
+      region: null,
+      default_model_id: 'gpt-4.1-mini',
+      cost_policy_json: {},
+      rate_limit_policy_json: {},
+      health_check_json: {},
+      id: 'provider-1',
+      created_at: '2026-07-13T00:00:00Z',
+      updated_at: '2026-07-13T00:00:00Z',
+    }
+    const commands: string[] = []
+    invokeMock.mockImplementation(async (command: string) => {
+      commands.push(command)
+      if (command === 'list_model_providers') return [existingProvider]
+      if (command === 'update_secret') return { id: 'model-secret-1' }
+      if (command === 'test_secret_connection') return { success: true }
+      if (command === 'update_model_provider') return existingProvider
+      if (command === 'upsert_model_profile') return { id: 'profile-1' }
+      if (command === 'set_default_model') return true
+      if (command === 'test_model_provider') {
+        return { provider_id: 'openai', success: true, message: '配置完整' }
+      }
+      if (command === 'save_secret') {
+        throw new Error('更新已有供应商时不应创建新的密钥引用')
+      }
+      throw new Error(`意外命令：${command}`)
+    })
+
+    const result = renderWorkbenchHook()
+    await result.saveAndValidateModelProvider({
+      providerId: 'openai',
+      displayName: 'OpenAI',
+      apiFormat: 'openai_compatible',
+      baseUrl: 'https://api.openai.com/v1',
+      defaultModelId: 'gpt-4.1-mini',
+      apiKey: 'replacement-token',
+    })
+
+    expect(commands).toContain('update_secret')
+    expect(commands).not.toContain('save_secret')
+    vi.unstubAllGlobals()
+  })
+})
+
 describe('TikHub mutation 失败回读', () => {
   it('清空旧测试结果并等待连接状态查询失效完成', async () => {
     renderWorkbenchHook()
