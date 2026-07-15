@@ -7,7 +7,7 @@
 </div>
 
 <p align="center">
-  <img src="docs/assets/sortlytic-logo.svg" width="128" alt="Sortlytic logo" />
+  <img src="apps/macos/src-tauri/icons/icon.png" width="128" alt="Sortlytic logo" />
 </p>
 
 <h1 align="center">Sortlytic</h1>
@@ -160,8 +160,6 @@ graph LR
 │   ├── src/                    # React 工作台与设置界面
 │   ├── src-tauri/              # Rust 命令、存储、任务执行器与打包配置
 │   └── package.json            # pnpm 脚本与前端依赖
-├── docs/assets/                # 仓库文档资源
-│   └── sortlytic-logo.svg      # 基于应用内标识制作的 README Logo
 ├── excel/                      # 项目使用的表格模板
 ├── plan/                       # 产品、架构、测试与交付文档
 ├── AGENTS.md                   # 仓库协作规则

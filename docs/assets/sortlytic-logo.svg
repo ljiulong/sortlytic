@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" role="img" aria-labelledby="title description">
-  <title id="title">Sortlytic logo</title>
-  <desc id="description">Three ordered data layers forming the Sortlytic application mark.</desc>
-  <rect width="192" height="192" rx="32" fill="#111827" />
-  <path d="M40 59 96 34l56 25-56 25-56-25Z" fill="none" stroke="#22D3EE" stroke-linecap="round" stroke-linejoin="round" stroke-width="11" />
-  <path d="m40 91 56 25 56-25" fill="none" stroke="#F8FAFC" stroke-linecap="round" stroke-linejoin="round" stroke-width="11" />
-  <path d="m40 124 56 25 56-25" fill="none" stroke="#F8FAFC" stroke-linecap="round" stroke-linejoin="round" stroke-width="11" />
-</svg>

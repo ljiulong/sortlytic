@@ -7,7 +7,7 @@ English · <a href="README-zh.md">中文</a>
 </div>
 
 <p align="center">
-  <img src="docs/assets/sortlytic-logo.svg" width="128" alt="Sortlytic logo" />
+  <img src="apps/macos/src-tauri/icons/icon.png" width="128" alt="Sortlytic logo" />
 </p>
 
 <h1 align="center">Sortlytic</h1>
@@ -160,8 +160,6 @@ Do not commit signing keys, API tokens, or exported credentials to the repositor
 │   ├── src/                    # React workbench and settings interfaces
 │   ├── src-tauri/              # Rust commands, storage, workers, and bundling
 │   └── package.json            # pnpm scripts and frontend dependencies
-├── docs/assets/                # Repository documentation assets
-│   └── sortlytic-logo.svg      # README logo derived from the in-app mark
 ├── excel/                      # Spreadsheet templates used by the project
 ├── plan/                       # Product, architecture, testing, and delivery notes
 ├── AGENTS.md                   # Repository collaboration rules
