@@ -68,8 +68,20 @@ fn ensure_default_workspace(
     )
   })?;
   let root_path = app_data_dir.join("default-workspace");
-  let summary = workspace::ensure_workspace("本地研究工作区", root_path)?;
+  let summary = ensure_default_workspace_for_state(root_path, &state)?;
   prompts::seed_builtin_prompts(&summary.root_path)?;
+  Ok(summary)
+}
+
+fn ensure_default_workspace_for_state(
+  root_path: PathBuf,
+  state: &AppState,
+) -> AppResult<WorkspaceSummary> {
+  let summary = if let Some(active) = state.active_workspace() {
+    workspace::open_workspace(active.root_path)?
+  } else {
+    workspace::ensure_workspace("本地研究工作区", root_path)?
+  };
   state.set_active_workspace(workspace_context_from_summary(&summary));
   Ok(summary)
 }
@@ -736,6 +748,28 @@ pub fn run() {
 #[cfg(test)]
 mod command_tests {
   use super::*;
+
+  #[test]
+  fn default_workspace_initialization_preserves_an_explicit_workspace() {
+    let active_root =
+      std::env::temp_dir().join(format!("active-workspace-{}", uuid::Uuid::new_v4()));
+    let default_root =
+      std::env::temp_dir().join(format!("default-workspace-{}", uuid::Uuid::new_v4()));
+    let active = workspace::create_workspace("显式工作区", &active_root)
+      .expect("active workspace should be created");
+    let state = AppState::new();
+    state.set_active_workspace(workspace_context_from_summary(&active));
+
+    let summary = ensure_default_workspace_for_state(default_root.clone(), &state)
+      .expect("active workspace should remain open");
+
+    assert_eq!(summary.id, active.id);
+    assert_eq!(summary.root_path, active.root_path);
+    assert!(!default_root.exists());
+
+    std::fs::remove_dir_all(active_root).ok();
+    std::fs::remove_dir_all(default_root).ok();
+  }
 
   #[test]
   fn command_root_must_match_the_active_workspace() {
