@@ -13,6 +13,7 @@ mod execution;
 mod plans;
 mod recovery;
 mod validation;
+mod worker;
 
 pub use execution::{
   cancel_task, claim_next_task, complete_task_run, enqueue_task, fail_task_run, retry_task,
@@ -20,6 +21,7 @@ pub use execution::{
 use plans::latest_plan_for_task;
 pub use plans::{confirm_collection_plan, estimate_task_cost, save_collection_plan};
 pub use recovery::recover_interrupted_runs;
+pub use worker::execute_next_task;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CreateCollectionTaskInput {
