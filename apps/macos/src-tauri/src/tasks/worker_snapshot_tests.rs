@@ -77,6 +77,80 @@ fn worker_rejects_a_connector_changed_after_enqueue() {
   std::fs::remove_dir_all(root).ok();
 }
 
+#[test]
+fn worker_rejects_a_page_that_exceeds_record_limit_before_persisting() {
+  let root = std::env::temp_dir().join(format!("worker-record-limit-{}", Uuid::new_v4()));
+  create_workspace("记录上限测试", &root).expect("workspace should be created");
+  let task = create_collection_task(
+    &root,
+    CreateCollectionTaskInput {
+      name: "记录上限任务".to_string(),
+      source_type: "form".to_string(),
+      platforms: vec!["tiktok".to_string()],
+      data_types: vec!["item_detail".to_string()],
+    },
+  )
+  .expect("task should be created");
+  let plan = save_collection_plan(
+    &root,
+    SaveCollectionPlanInput {
+      task_id: task.id.clone(),
+      source: "form_generated".to_string(),
+      plan_json: json!({
+        "platforms": ["tiktok"],
+        "data_types": ["item_detail"],
+        "region": null,
+        "time_range": null,
+        "steps": [{
+          "endpoint_key": "tiktok.item_detail",
+          "platform": "tiktok",
+          "data_type": "item_detail",
+          "params": {"item_id": "video-1"}
+        }],
+        "record_limit": 1,
+        "request_limit": 1,
+        "budget_limit": {"currency": "USD", "amount_micros": 35000000},
+        "missing_fields": [],
+        "requires_user_confirmation": true
+      }),
+      validation_status: "valid".to_string(),
+      validation_errors_json: None,
+      cost_estimate_json: None,
+    },
+  )
+  .expect("plan should be saved");
+  confirm_collection_plan(&root, &task.id, &plan.id).expect("plan should be confirmed");
+  enqueue_task(&root, &task.id).expect("task should be queued");
+  let run = claim_next_task(&root)
+    .expect("worker should claim the task")
+    .expect("queued task should exist");
+
+  let error = super::execute_claimed_run_with_fetcher(&root, &run, |_request| {
+    Ok(crate::tikhub::CollectionPage {
+      records: vec![
+        json!({"aweme_id": "video-1"}),
+        json!({"aweme_id": "video-2"}),
+      ],
+      next_cursor: None,
+      has_more: false,
+      raw_response: json!({
+        "code": 200,
+        "data": {"aweme_id": "video-1"}
+      }),
+    })
+  })
+  .expect_err("record limit must be enforced before persistence");
+  assert!(error.message.contains("RECORD_LIMIT_REACHED"));
+
+  let connection =
+    open_workspace_database(root.join(DATABASE_FILE_NAME)).expect("database should open");
+  let persisted_records: i64 = connection
+    .query_row("SELECT COUNT(*) FROM raw_record", [], |row| row.get(0))
+    .expect("raw record count should load");
+  assert_eq!(persisted_records, 0);
+  std::fs::remove_dir_all(root).ok();
+}
+
 fn insert_ready_connector(root: &Path) {
   let connection =
     open_workspace_database(root.join(DATABASE_FILE_NAME)).expect("database should open");
