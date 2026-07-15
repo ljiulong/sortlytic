@@ -32,9 +32,13 @@ struct RunStep {
   status: String,
 }
 
+#[derive(Clone)]
 struct Checkpoint {
+  id: String,
   page_index: i64,
   status: String,
+  idempotency_key: String,
+  input_cursor: Option<Value>,
   next_cursor: Option<Value>,
   has_more: Option<bool>,
 }
@@ -137,6 +141,10 @@ where
   let connection = open_workspace_connection(root_path)?;
   let existing = load_checkpoints(&connection, &step.id)?;
   let (mut page_index, mut cursor) = resume_position(&existing)?;
+  let mut prepared_checkpoint = existing
+    .last()
+    .filter(|checkpoint| checkpoint.status == "prepared")
+    .cloned();
   if step.status == "success" {
     if existing
       .last()
@@ -145,16 +153,6 @@ where
       return Ok(());
     }
     return Err(task_error("已成功步骤缺少完整的结束检查点"));
-  }
-  if existing
-    .iter()
-    .any(|checkpoint| checkpoint.status != "completed")
-  {
-    return Err(worker_error(
-      "CHECKPOINT_STATE_UNSUPPORTED",
-      "运行步骤存在未完成检查点，请先执行恢复流程",
-      false,
-    ));
   }
 
   let task_id = step.task_id.clone();
@@ -181,8 +179,18 @@ where
       &step.params,
       cursor.as_ref(),
     )?;
-    let (checkpoint_id, idempotency_key) =
-      insert_prepared_checkpoint(&connection, &step.id, page_index, cursor.as_ref())?;
+    let (checkpoint_id, idempotency_key) = if let Some(checkpoint) = prepared_checkpoint.take() {
+      if checkpoint.page_index != page_index || checkpoint.input_cursor != cursor {
+        return Err(worker_error(
+          "CHECKPOINT_CHAIN_INVALID",
+          "恢复检查点的页码或游标与当前执行位置不一致",
+          false,
+        ));
+      }
+      (checkpoint.id, checkpoint.idempotency_key)
+    } else {
+      insert_prepared_checkpoint(&connection, &step.id, page_index, cursor.as_ref())?
+    };
     let request = request.with_idempotency_key(idempotency_key)?;
     let requested_at = Utc::now().to_rfc3339();
     mark_checkpoint_requesting(&connection, &checkpoint_id, &requested_at)?;
@@ -300,14 +308,26 @@ where
 
 fn resume_position(checkpoints: &[Checkpoint]) -> AppResult<(i64, Option<Value>)> {
   for (index, checkpoint) in checkpoints.iter().enumerate() {
-    if checkpoint.page_index != index as i64 || checkpoint.status != "completed" {
+    if checkpoint.page_index != index as i64 {
       return Err(worker_error(
         "CHECKPOINT_CHAIN_INVALID",
         "运行步骤检查点链不连续，已停止执行",
         false,
       ));
     }
-    if index + 1 < checkpoints.len() && checkpoint.has_more != Some(true) {
+    if index > 0 {
+      let previous = &checkpoints[index - 1];
+      if previous.has_more != Some(true) || previous.next_cursor != checkpoint.input_cursor {
+        return Err(worker_error(
+          "CHECKPOINT_CHAIN_INVALID",
+          "检查点之间的续页游标不一致，已停止执行",
+          false,
+        ));
+      }
+    }
+    if index + 1 < checkpoints.len()
+      && (checkpoint.status != "completed" || checkpoint.has_more != Some(true))
+    {
       return Err(worker_error(
         "CHECKPOINT_CHAIN_INVALID",
         "非末页检查点不能声明采集结束",
@@ -318,17 +338,23 @@ fn resume_position(checkpoints: &[Checkpoint]) -> AppResult<(i64, Option<Value>)
   let Some(last) = checkpoints.last() else {
     return Ok((0, None));
   };
-  if last.has_more == Some(false) {
-    return Ok((last.page_index + 1, None));
-  }
-  if last.has_more != Some(true) || last.next_cursor.is_none() {
-    return Err(worker_error(
+  match last.status.as_str() {
+    "prepared" => Ok((last.page_index, last.input_cursor.clone())),
+    "completed" if last.has_more == Some(false) => Ok((last.page_index + 1, None)),
+    "completed" if last.has_more == Some(true) && last.next_cursor.is_some() => {
+      Ok((last.page_index + 1, last.next_cursor.clone()))
+    }
+    "completed" => Err(worker_error(
       "CHECKPOINT_CHAIN_INVALID",
       "续页检查点缺少有效游标",
       false,
-    ));
+    )),
+    _ => Err(worker_error(
+      "CHECKPOINT_STATE_UNSUPPORTED",
+      "运行步骤存在无法安全恢复的未完成检查点",
+      false,
+    )),
   }
-  Ok((last.page_index + 1, last.next_cursor.clone()))
 }
 
 fn load_checkpoints(
@@ -337,7 +363,8 @@ fn load_checkpoints(
 ) -> AppResult<Vec<Checkpoint>> {
   let mut statement = connection
     .prepare(
-      "SELECT id, page_index, status, next_cursor_json, has_more
+      "SELECT id, page_index, status, idempotency_key, input_cursor_json,
+              next_cursor_json, has_more
        FROM collection_page_checkpoint
        WHERE task_run_step_id = ?1
        ORDER BY page_index, id",
@@ -345,21 +372,34 @@ fn load_checkpoints(
     .map_err(database_error)?;
   let rows = statement
     .query_map(params![run_step_id], |row| {
-      let next_cursor: Option<String> = row.get(3)?;
+      let input_cursor: Option<String> = row.get(4)?;
+      let next_cursor: Option<String> = row.get(5)?;
       Ok(Checkpoint {
+        id: row.get(0)?,
         page_index: row.get(1)?,
         status: row.get(2)?,
+        idempotency_key: row.get(3)?,
+        input_cursor: input_cursor
+          .map(|value| serde_json::from_str(&value))
+          .transpose()
+          .map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+              4,
+              rusqlite::types::Type::Text,
+              Box::new(error),
+            )
+          })?,
         next_cursor: next_cursor
           .map(|value| serde_json::from_str(&value))
           .transpose()
           .map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
-              3,
+              5,
               rusqlite::types::Type::Text,
               Box::new(error),
             )
           })?,
-        has_more: row.get::<_, Option<i64>>(4)?.map(|value| value != 0),
+        has_more: row.get::<_, Option<i64>>(6)?.map(|value| value != 0),
       })
     })
     .map_err(database_error)?;

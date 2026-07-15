@@ -164,7 +164,7 @@ fn require_run_completion_evidence(
       .ok_or_else(|| task_error("运行步骤快照缺少计划步骤，不能标记成功"))?;
     if step.status.as_deref() != Some("success")
       || step.stop_reason.is_some()
-      || !valid_step_time_range(step, claimed_at, completion_at)
+      || !valid_step_time_range(step, run_started_at, completion_at)
     {
       return Err(task_error(format!(
         "运行步骤 {} 尚未形成无冲突的成功终态",
@@ -454,7 +454,7 @@ fn checkpoint_evidence_is_complete(
 
 fn valid_step_time_range(
   step: &CompletionStep,
-  claimed_at: DateTime<FixedOffset>,
+  run_started_at: DateTime<FixedOffset>,
   completion_at: DateTime<FixedOffset>,
 ) -> bool {
   let (Some(started_at), Some(completed_at)) = (
@@ -463,7 +463,7 @@ fn valid_step_time_range(
   ) else {
     return false;
   };
-  claimed_at <= started_at && started_at <= completed_at && completed_at <= completion_at
+  run_started_at <= started_at && started_at <= completed_at && completed_at <= completion_at
 }
 
 fn valid_timestamp(value: Option<&str>) -> Option<DateTime<FixedOffset>> {
