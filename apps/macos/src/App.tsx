@@ -17,7 +17,6 @@ import {
   CheckCircle2,
   Gauge,
   KeyRound,
-  Layers3,
   MessageSquareText,
   MonitorCheck,
   RefreshCcw,
@@ -36,6 +35,7 @@ import {
   useWorkbenchBackend,
 } from './use-workbench-backend'
 import ExportPanel from './ExportPanel'
+import AppLogo from './AppLogo'
 import GuidePage from './GuidePage'
 import ModelSettingsPanel from './ModelSettingsPanel'
 import ThemeToggle from './ThemeToggle'
@@ -88,7 +88,7 @@ function Workbench() {
       <aside className="sidebar" aria-label="主导航">
         <div className="brand-block">
           <div className="brand-mark">
-            <Layers3 size={18} aria-hidden="true" />
+            <AppLogo />
           </div>
           <div>
             <p className="brand-name">智能数据整理平台</p>
