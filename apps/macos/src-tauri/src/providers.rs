@@ -87,6 +87,11 @@ pub fn create_model_provider(
 ) -> AppResult<ModelProviderView> {
   let connection = open_workspace_connection(root_path)?;
   let input = normalize_provider_input(input)?;
+  validate_model_provider_secret(
+    &connection,
+    &input.provider_id,
+    input.secret_ref_id.as_deref(),
+  )?;
   let now = Utc::now().to_rfc3339();
   let id = Uuid::new_v4().to_string();
 
@@ -134,6 +139,11 @@ pub fn update_model_provider(
   let connection = open_workspace_connection(root_path)?;
   let provider_id = normalize_required("provider_id", provider_id, AppErrorStage::Provider)?;
   let input = normalize_provider_input(input)?;
+  validate_model_provider_secret(
+    &connection,
+    &input.provider_id,
+    input.secret_ref_id.as_deref(),
+  )?;
   let now = Utc::now().to_rfc3339();
 
   connection
@@ -353,6 +363,9 @@ pub fn test_model_provider(
       message: "供应商需要密钥引用后才能测试连接".to_string(),
     });
   }
+  if let Some(secret_ref_id) = provider.secret_ref_id.as_deref() {
+    validate_model_provider_secret(&connection, &provider.provider_id, Some(secret_ref_id))?;
+  }
 
   if let Some(model_id) = model_id {
     get_model_profile(&connection, &provider.provider_id, &model_id)?;
@@ -399,6 +412,31 @@ fn normalize_provider_input(input: ModelProviderInput) -> AppResult<ModelProvide
     rate_limit_policy_json: input.rate_limit_policy_json,
     health_check_json: input.health_check_json,
   })
+}
+
+fn validate_model_provider_secret(
+  connection: &Connection,
+  provider_id: &str,
+  secret_ref_id: Option<&str>,
+) -> AppResult<()> {
+  let Some(secret_ref_id) = secret_ref_id else {
+    return Ok(());
+  };
+  let metadata = connection
+    .query_row(
+      "SELECT provider_type, provider_id FROM secret_ref WHERE id = ?1",
+      params![secret_ref_id],
+      |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    )
+    .optional()
+    .map_err(database_error)?
+    .ok_or_else(|| provider_error("模型供应商密钥引用不存在"))?;
+  if metadata.0 != "model_provider" || metadata.1 != provider_id {
+    return Err(provider_error(
+      "模型供应商只能绑定同类型且同 provider_id 的密钥",
+    ));
+  }
+  Ok(())
 }
 
 fn normalize_model_profile_input(input: ModelProfileInput) -> AppResult<ModelProfileInput> {
@@ -639,6 +677,37 @@ mod tests {
     let error = normalize_provider_input(input).expect_err("base url should be required");
 
     assert_eq!(error.code, AppErrorCode::ValidationError);
+  }
+
+  #[test]
+  fn model_provider_rejects_a_tikhub_secret_reference() {
+    let root_path = unique_temp_workspace("provider-secret-type");
+    create_workspace("供应商密钥类型测试", &root_path).expect("workspace should be created");
+    let connection = open_workspace_connection(&root_path).expect("database should open");
+    connection
+      .execute(
+        "INSERT INTO secret_ref (
+           id, provider_type, provider_id, secret_store_key, masked_hint,
+           created_at, updated_at
+         ) VALUES ('tikhub-secret', 'tikhub', 'default', 'keychain-ref', 'safe-hint', ?1, ?1)",
+        params![Utc::now().to_rfc3339()],
+      )
+      .expect("fixture secret should insert");
+
+    let mut input = provider_input("openai");
+    input.auth_type = "api_key".to_string();
+    input.secret_ref_id = Some("tikhub-secret".to_string());
+    let error = create_model_provider(&root_path, input)
+      .expect_err("a model provider must reject a TikHub secret");
+
+    assert_eq!(error.code, AppErrorCode::ValidationError);
+    assert_eq!(
+      list_model_providers(&root_path, None)
+        .expect("providers should list")
+        .len(),
+      0
+    );
+    std::fs::remove_dir_all(root_path).ok();
   }
 
   fn provider_input(provider_id: &str) -> ModelProviderInput {
