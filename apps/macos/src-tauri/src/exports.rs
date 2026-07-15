@@ -366,7 +366,7 @@ fn write_json_sheet(worksheet: &mut rust_xlsxwriter::Worksheet, value: &Value) -
 
 fn write_pdf(path: &Path, report: &ReportView) -> AppResult<()> {
   let title = pdf_escape(&report.title);
-  let body = pdf_escape("Smart Data Workbench report. See XLSX export for full structured data.");
+  let body = pdf_escape("Sortlytic report. See XLSX export for full structured data.");
   let content = format!("BT /F1 18 Tf 72 740 Td ({title}) Tj /F1 11 Tf 0 -32 Td ({body}) Tj ET");
   let objects = [
     "<< /Type /Catalog /Pages 2 0 R >>".to_string(),

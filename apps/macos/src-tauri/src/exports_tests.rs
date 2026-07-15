@@ -36,7 +36,11 @@ fn report_exports_xlsx_and_pdf_files() {
   assert!(xlsx.file_path.expect("xlsx path").is_file());
   let pdf_path = pdf.file_path.expect("pdf path");
   assert!(pdf_path.is_file());
-  assert_pdf_xref_is_well_formed(&fs::read(pdf_path).expect("pdf should be readable"));
+  let pdf_bytes = fs::read(pdf_path).expect("pdf should be readable");
+  assert_pdf_xref_is_well_formed(&pdf_bytes);
+  let pdf_text = std::str::from_utf8(&pdf_bytes).expect("pdf fixture should be UTF-8");
+  assert!(pdf_text.contains("Sortlytic report."));
+  assert!(!pdf_text.contains("Smart Data Workbench"));
   assert!(xlsx.file_hash.is_some());
   assert!(pdf.file_size.unwrap_or_default() > 0);
 
