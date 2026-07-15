@@ -40,6 +40,7 @@ import GuidePage from './GuidePage'
 import ModelSettingsPanel from './ModelSettingsPanel'
 import ThemeToggle from './ThemeToggle'
 import TikhubSettingsPanel from './TikhubSettingsPanel'
+import UpdateSettingsPanel from './UpdateSettingsPanel'
 import {
   type NavKey,
   type SocialRecord,
@@ -47,7 +48,6 @@ import {
   dataTypeOptions,
   platformOptions,
 } from './workbench-data'
-
 const queryClient = new QueryClient()
 const collectionFormSchema = z.object({
   platform: z.enum(platformOptions),
@@ -82,7 +82,6 @@ function Workbench() {
   const data = backend.data
   const [activeNav, setActiveNav] = useState<NavKey>('overview')
   const [selectedRecordId, setSelectedRecordId] = useState('rec-104')
-
   return (
     <div className="app-shell" lang="zh-CN">
       <a className="skip-link" href="#main-content">跳至主要内容</a>
@@ -120,7 +119,6 @@ function Workbench() {
           <p>密钥仅保存为系统安全存储引用。</p>
         </div>
       </aside>
-
       <main className="workspace" id="main-content" tabIndex={-1}>
         <TopBar
           actionMessage={backend.actionMessage}
@@ -132,7 +130,7 @@ function Workbench() {
           <GuidePage onOpenSettings={() => setActiveNav('settings')} />
         ) : activeNav === 'settings' ? (
           <section className="main-grid" aria-label="连接与本地设置">
-            <div className="main-column">
+          <div className="main-column">
               <ConnectionStrip
                 connections={data.connections}
                 isBusy={backend.isBusy}
@@ -149,6 +147,10 @@ function Workbench() {
                 result={backend.modelValidationResult}
                 onSaveAndValidate={backend.saveAndValidateModelProvider}
               />
+              <UpdateSettingsPanel
+                {...backend}
+                isTauriApp={data.runtimeMode !== 'demo' && data.runtimeMode !== 'loading'}
+              />
             </div>
           </section>
         ) : (
@@ -158,7 +160,6 @@ function Workbench() {
                 <MetricCard key={metric.label} {...metric} />
               ))}
             </section>
-
             <section className="main-grid">
               <div className="main-column">
                 <ConnectionStrip
@@ -237,7 +238,6 @@ function TopBar({
     </header>
   )
 }
-
 function MetricCard({
   label,
   value,
