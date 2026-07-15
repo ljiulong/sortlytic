@@ -14,6 +14,9 @@ pub mod workspace;
 
 use std::{fs, path::PathBuf, thread, time::Duration};
 
+#[cfg(target_os = "macos")]
+use std::ffi::{c_char, c_void};
+
 use ai::{AiRunView, GenerateCollectionPlanFromTextInput, GeneratedCollectionPlanView};
 use app_state::{AppState, BackendStatus, WorkspaceContext};
 use collection::{
@@ -705,6 +708,57 @@ fn start_task_worker(app: &tauri::AppHandle) {
     .expect("本地任务执行器线程无法启动");
 }
 
+#[cfg(target_os = "macos")]
+#[link(name = "objc")]
+unsafe extern "C" {
+  fn objc_msgSend();
+  fn sel_registerName(name: *const c_char) -> *const c_void;
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn objc_send_id(receiver: *mut c_void, selector: &'static [u8]) -> *mut c_void {
+  let selector = sel_registerName(selector.as_ptr().cast());
+  let send: unsafe extern "C" fn(*mut c_void, *const c_void) -> *mut c_void =
+    std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+  send(receiver, selector)
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn objc_send_bool(receiver: *mut c_void, selector: &'static [u8], value: bool) {
+  let selector = sel_registerName(selector.as_ptr().cast());
+  let send: unsafe extern "C" fn(*mut c_void, *const c_void, bool) =
+    std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+  send(receiver, selector, value);
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn objc_send_f64(receiver: *mut c_void, selector: &'static [u8], value: f64) {
+  let selector = sel_registerName(selector.as_ptr().cast());
+  let send: unsafe extern "C" fn(*mut c_void, *const c_void, f64) =
+    std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+  send(receiver, selector, value);
+}
+
+#[cfg(target_os = "macos")]
+fn apply_native_window_corner_radius(window: &tauri::WebviewWindow) -> Result<(), String> {
+  let native_window = window.ns_window().map_err(|error| error.to_string())?;
+  let content_view = unsafe { objc_send_id(native_window, b"contentView\0") };
+  if content_view.is_null() {
+    return Err("无法获取 macOS 窗口内容视图".to_string());
+  }
+
+  unsafe {
+    objc_send_bool(content_view, b"setWantsLayer:\0", true);
+    let layer = objc_send_id(content_view, b"layer\0");
+    if layer.is_null() {
+      return Err("无法获取 macOS 窗口内容图层".to_string());
+    }
+    objc_send_f64(layer, b"setCornerRadius:\0", 16.0);
+    objc_send_bool(layer, b"setMasksToBounds:\0", true);
+  }
+  Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
@@ -784,6 +838,14 @@ pub fn run() {
             .level(log::LevelFilter::Info)
             .build(),
         )?;
+      }
+      #[cfg(target_os = "macos")]
+      {
+        let main_window = app
+          .get_webview_window("main")
+          .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "找不到主窗口"))?;
+        apply_native_window_corner_radius(&main_window)
+          .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error))?;
       }
       start_task_worker(app.handle());
       Ok(())
