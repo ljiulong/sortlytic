@@ -130,13 +130,14 @@ function Workbench() {
           <GuidePage onOpenSettings={() => setActiveNav('settings')} />
         ) : activeNav === 'settings' ? (
           <section className="main-grid" aria-label="连接与本地设置">
-          <div className="main-column">
+            <div className="main-column">
               <ConnectionStrip
                 connections={data.connections}
                 isBusy={backend.isBusy}
                 onRefresh={backend.refresh}
               />
               <TikhubSettingsPanel
+                connector={data.tikhubConnector}
                 isBusy={backend.isBusy}
                 result={backend.tikhubTestResult}
                 onSaveAndTest={backend.saveAndTestTikhubToken}

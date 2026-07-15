@@ -1,16 +1,22 @@
 import { KeyRound, MonitorCheck, ShieldCheck } from 'lucide-react'
-import { useState } from 'react'
-import type { TikhubConnectionTestResult } from './backend-api'
+import { useEffect, useState } from 'react'
+import type { TikhubConnectionTestResult, TikhubConnectorView } from './backend-api'
 
 type TikhubSettingsPanelProps = {
+  connector?: TikhubConnectorView | null
   isBusy: boolean
   result?: TikhubConnectionTestResult
   onSaveAndTest: (input: { token: string; baseUrl: string }) => Promise<unknown>
 }
 
-function TikhubSettingsPanel({ isBusy, result, onSaveAndTest }: TikhubSettingsPanelProps) {
+function TikhubSettingsPanel({ connector, isBusy, result, onSaveAndTest }: TikhubSettingsPanelProps) {
   const [token, setToken] = useState('')
   const [baseUrl, setBaseUrl] = useState('https://api.tikhub.io')
+  const hasSavedToken = Boolean(connector?.secret_ref_id)
+
+  useEffect(() => {
+    if (connector?.base_url) setBaseUrl(connector.base_url)
+  }, [connector?.base_url])
 
   const submit = async () => {
     await onSaveAndTest({ token, baseUrl })
@@ -24,8 +30,8 @@ function TikhubSettingsPanel({ isBusy, result, onSaveAndTest }: TikhubSettingsPa
           <p className="eyebrow">TikHub 设置</p>
           <h2>免费额度可行性测试</h2>
         </div>
-        <span className="status-pill" data-tone={result?.success ? 'success' : 'warning'}>
-          {result?.success ? '已连通' : '待配置'}
+        <span className="status-pill" data-tone={result?.success ? 'success' : connector?.enabled ? 'info' : 'warning'}>
+          {result?.success ? '已连通' : connector?.enabled ? '已保存' : '待配置'}
         </span>
       </div>
       <div className="export-grid">
@@ -40,7 +46,7 @@ function TikhubSettingsPanel({ isBusy, result, onSaveAndTest }: TikhubSettingsPa
           <span>API Token</span>
           <input
             autoComplete="off"
-            placeholder="只保存到系统安全存储"
+            placeholder={hasSavedToken ? '留空以复用已保存 Token' : '只保存到系统安全存储'}
             type="password"
             value={token}
             onChange={(event) => setToken(event.target.value)}
@@ -48,7 +54,7 @@ function TikhubSettingsPanel({ isBusy, result, onSaveAndTest }: TikhubSettingsPa
         </label>
         <button
           className="primary-button wide-button"
-          disabled={isBusy || token.trim().length < 8}
+          disabled={isBusy || (!hasSavedToken && token.trim().length < 8)}
           type="button"
           onClick={() => {
             void submit()

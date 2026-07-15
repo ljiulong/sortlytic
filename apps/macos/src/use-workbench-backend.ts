@@ -86,6 +86,7 @@ export type WorkbenchRuntimeData = {
     lastBackup: string
     health: string
   }
+  tikhubConnector?: TikhubConnectorView | null
   connections: Array<{
     name: string
     detail: string
@@ -387,6 +388,7 @@ async function loadBackendWorkbench(): Promise<BackendWorkbenchData> {
 }
 
 export async function saveAndTestTikhubToken(input: { token: string; baseUrl: string }) {
+  const token = input.token.trim()
   const connector = await getTikhubConnector()
   const secretRefs = await listSecretRefs('tikhub')
   const boundSecret = connector?.secret_ref_id
@@ -400,12 +402,17 @@ export async function saveAndTestTikhubToken(input: { token: string; baseUrl: st
       base_url: input.baseUrl,
       enabled: true,
     })
-    await updateSecret(boundSecret.id, input.token)
+    if (token) {
+      await updateSecret(boundSecret.id, token)
+    }
   } else {
+    if (token.length < 8) {
+      throw new Error('请先输入至少 8 位 TikHub Token')
+    }
     const secret = await saveSecret({
       provider_type: 'tikhub',
       provider_id: 'default',
-      secret: input.token,
+      secret: token,
       alias: input.baseUrl.includes('tikhub.dev')
         ? 'TikHub 中国大陆域名'
         : 'TikHub 国际域名',
@@ -501,6 +508,7 @@ export function mapBackendData(
       lastBackup: '未创建备份',
       health: `可用，运行 ${Math.max(1, Math.round(uptimeMs / 1000))} 秒`,
     },
+    tikhubConnector: connector,
     connections: buildConnections(secretRefs, connector, providers),
     metrics: [
       { label: '本地任务', value: String(tasks.length), delta: `${pendingCount} 个待确认`, tone: 'info' },
