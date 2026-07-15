@@ -610,8 +610,7 @@ mod tests {
   }
 
   fn fresh_workspace(label: &str) -> (PathBuf, i64, Connection) {
-    let root =
-      std::env::temp_dir().join(format!("sortlytic-{label}-{}", Uuid::new_v4()));
+    let root = std::env::temp_dir().join(format!("sortlytic-{label}-{}", Uuid::new_v4()));
     let workspace = create_workspace("v4 迁移测试", &root).expect("workspace should be created");
     let connection = open_workspace_database(root.join(DATABASE_FILE_NAME))
       .expect("workspace database should open");

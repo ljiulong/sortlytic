@@ -638,10 +638,8 @@ mod tests {
 
   #[test]
   fn rejects_a_tampered_secret_store_key_before_keychain_access() {
-    let root_path = std::env::temp_dir().join(format!(
-      "sortlytic-secret-tamper-{}",
-      Uuid::new_v4()
-    ));
+    let root_path =
+      std::env::temp_dir().join(format!("sortlytic-secret-tamper-{}", Uuid::new_v4()));
     create_workspace("密钥隔离测试", &root_path).expect("workspace should be created");
     let connection = open_workspace_connection(&root_path).expect("database should open");
     connection
@@ -666,10 +664,8 @@ mod tests {
 
   #[test]
   fn published_legacy_secret_reference_requires_an_explicit_rebind() {
-    let root_path = std::env::temp_dir().join(format!(
-      "sortlytic-secret-legacy-{}",
-      Uuid::new_v4()
-    ));
+    let root_path =
+      std::env::temp_dir().join(format!("sortlytic-secret-legacy-{}", Uuid::new_v4()));
     create_workspace("旧密钥升级测试", &root_path).expect("workspace should be created");
     let connection = open_workspace_connection(&root_path).expect("database should open");
     connection
@@ -696,10 +692,8 @@ mod tests {
   #[cfg(target_os = "macos")]
   #[test]
   fn updating_a_legacy_reference_rebinds_it_without_reading_the_old_account() {
-    let root_path = std::env::temp_dir().join(format!(
-      "sortlytic-secret-rebind-{}",
-      Uuid::new_v4()
-    ));
+    let root_path =
+      std::env::temp_dir().join(format!("sortlytic-secret-rebind-{}", Uuid::new_v4()));
     create_workspace("旧密钥重绑测试", &root_path).expect("workspace should be created");
     let connection = open_workspace_connection(&root_path).expect("database should open");
     let secret_ref_id = format!("legacy-secret-{}", Uuid::new_v4());
@@ -726,14 +720,9 @@ mod tests {
 
   #[test]
   fn workspace_scope_rejects_a_database_registered_for_another_root() {
-    let root_path = std::env::temp_dir().join(format!(
-      "sortlytic-secret-root-{}",
-      Uuid::new_v4()
-    ));
-    let other_root = std::env::temp_dir().join(format!(
-      "sortlytic-secret-other-root-{}",
-      Uuid::new_v4()
-    ));
+    let root_path = std::env::temp_dir().join(format!("sortlytic-secret-root-{}", Uuid::new_v4()));
+    let other_root =
+      std::env::temp_dir().join(format!("sortlytic-secret-other-root-{}", Uuid::new_v4()));
     create_workspace("密钥路径测试", &root_path).expect("workspace should be created");
     std::fs::create_dir_all(&other_root).expect("other root should exist");
     let connection = open_workspace_connection(&root_path).expect("database should open");
