@@ -12,7 +12,7 @@ pub mod tasks;
 pub mod tikhub;
 pub mod workspace;
 
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, thread, time::Duration};
 
 use ai::{AiRunView, GenerateCollectionPlanFromTextInput, GeneratedCollectionPlanView};
 use app_state::{AppState, BackendStatus, WorkspaceContext};
@@ -385,6 +385,15 @@ fn enqueue_task(
 }
 
 #[tauri::command]
+fn execute_next_task(
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<Option<TaskRunView>> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  tasks::execute_next_task(root_path)
+}
+
+#[tauri::command]
 fn cancel_task(
   task_id: String,
   root_path: Option<String>,
@@ -668,6 +677,24 @@ fn workspace_context_from_summary(summary: &WorkspaceSummary) -> WorkspaceContex
   }
 }
 
+fn start_task_worker(app: &tauri::AppHandle) {
+  let app = app.clone();
+  thread::Builder::new()
+    .name("local-task-worker".to_string())
+    .spawn(move || loop {
+      if let Some(workspace) = app.state::<AppState>().active_workspace() {
+        if let Err(error) = tasks::recover_interrupted_runs(&workspace.root_path) {
+          log::error!("恢复本地任务运行失败：{:?}", error);
+        }
+        if let Err(error) = tasks::execute_next_task(&workspace.root_path) {
+          log::error!("执行本地任务失败：{:?}", error);
+        }
+      }
+      thread::sleep(Duration::from_secs(2));
+    })
+    .expect("本地任务执行器线程无法启动");
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
@@ -704,6 +731,7 @@ pub fn run() {
       estimate_task_cost,
       confirm_collection_plan,
       enqueue_task,
+      execute_next_task,
       cancel_task,
       retry_task,
       copy_task,
@@ -739,6 +767,7 @@ pub fn run() {
             .build(),
         )?;
       }
+      start_task_worker(app.handle());
       Ok(())
     })
     .run(tauri::generate_context!())
