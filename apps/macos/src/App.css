@@ -337,6 +337,38 @@ button:disabled:active {
 .plan-header > div {
   min-width: 0;
 }
+.workspace-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  margin: 0;
+  background: var(--border-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+.workspace-detail-grid > div {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 12px;
+  background: var(--surface-raised);
+}
+.workspace-detail-grid dt {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 650;
+}
+.workspace-detail-grid dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
 .connection-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -767,6 +799,16 @@ a:focus-visible,
 tbody tr:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
+}
+@media (max-width: 760px) {
+  .workspace-detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 520px) {
+  .workspace-detail-grid {
+    grid-template-columns: 1fr;
+  }
 }
 @media (hover: hover) {
   .nav-item:hover,

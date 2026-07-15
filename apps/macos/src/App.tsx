@@ -65,6 +65,8 @@ const navItems = [
   { key: 'overview', label: '工作台', icon: MonitorCheck },
   { key: 'settings', label: '设置', icon: Settings },
 ] satisfies Array<{ key: NavKey; label: string; icon: typeof MonitorCheck }>
+const appIdentifier = 'com.steven.sortlytic'
+const defaultWorkspaceDirectory = 'default-workspace'
 const connectionIcons = {
   key: KeyRound,
   bot: Bot,
@@ -91,7 +93,7 @@ function Workbench() {
             <AppLogo />
           </div>
           <div>
-            <p className="brand-name">智能数据整理平台</p>
+            <p className="brand-name">Sortlytic</p>
             <p className="brand-subtitle">macOS 本地工作区</p>
           </div>
         </div>
@@ -131,6 +133,10 @@ function Workbench() {
         ) : activeNav === 'settings' ? (
           <section className="main-grid" aria-label="连接与本地设置">
             <div className="main-column">
+              <LocalWorkspacePanel
+                health={data.workspace.health}
+                storage={data.workspace.storage}
+              />
               <ConnectionStrip
                 connections={data.connections}
                 isBusy={backend.isBusy}
@@ -228,15 +234,47 @@ function TopBar({
         >
           <BookOpen size={18} aria-hidden="true" />
         </button>
-        <div className="workspace-meta" aria-label="当前工作区状态">
-          <span>{workspace.storage}</span>
-          <StatusPill
-            tone={isInitializing ? 'info' : workspace.health === '浏览器预览' ? 'warning' : 'success'}
-            label={workspace.health}
-          />
-        </div>
       </div>
     </header>
+  )
+}
+function LocalWorkspacePanel({
+  health,
+  storage,
+}: {
+  health: string
+  storage: string
+}) {
+  const healthTone = health === '浏览器预览' ? 'warning' : 'success'
+
+  return (
+    <section className="glass-panel local-workspace-panel" aria-label="本地工作区">
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">本地工作区</p>
+          <h2>应用身份与运行状态</h2>
+        </div>
+        <StatusPill tone={healthTone} label={health} />
+      </div>
+      <dl className="workspace-detail-grid">
+        <div>
+          <dt>应用标识</dt>
+          <dd>{appIdentifier}</dd>
+        </div>
+        <div>
+          <dt>工作区目录</dt>
+          <dd>{defaultWorkspaceDirectory}</dd>
+        </div>
+        <div>
+          <dt>本地路径</dt>
+          <dd>{storage}</dd>
+        </div>
+        <div>
+          <dt>后端状态</dt>
+          <dd>{health}</dd>
+        </div>
+      </dl>
+    </section>
   )
 }
 function MetricCard({
