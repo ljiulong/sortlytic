@@ -73,6 +73,33 @@ fn custom_export_target_must_be_new_and_match_the_export_type() {
 
 #[cfg(unix)]
 #[test]
+fn failed_export_returns_an_error_instead_of_a_successful_job_view() {
+  let (root_path, report) = test_report("failed-export");
+  let target_dir = root_path.join("read-only-export");
+  fs::create_dir(&target_dir).expect("target directory should exist");
+  fs::set_permissions(&target_dir, fs::Permissions::from_mode(0o500))
+    .expect("target directory should become read-only");
+
+  let result = create_export_job(
+    &root_path,
+    &report.id,
+    "pdf",
+    Some(target_dir.join("report.pdf").to_string_lossy().to_string()),
+  );
+
+  fs::set_permissions(&target_dir, fs::Permissions::from_mode(0o700))
+    .expect("target directory should become removable");
+  assert!(result.is_err());
+  let jobs =
+    list_export_jobs(&root_path, Some(report.id.clone())).expect("export jobs should list");
+  assert_eq!(jobs.len(), 1);
+  assert_eq!(jobs[0].status, "failed");
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[cfg(unix)]
+#[test]
 fn custom_export_target_rejects_symbolic_links() {
   use std::os::unix::fs::symlink;
 

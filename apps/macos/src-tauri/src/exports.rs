@@ -175,7 +175,7 @@ pub fn create_export_job(
         params![error.message, Utc::now().to_rfc3339(), job_id],
       )
       .map_err(database_error)?;
-    return get_export_job(root_path, &job_id);
+    return Err(error);
   }
 
   let file_size = fs::metadata(&file_path)
