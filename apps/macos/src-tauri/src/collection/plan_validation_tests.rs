@@ -443,6 +443,8 @@ fn form_plan_status_uses_authoritative_whole_plan_validation() {
       "region": "CN"
     }),
     request_limit: Some(1),
+    record_limit: None,
+    budget_limit_micros: None,
   })
   .expect("plan should generate for user correction");
 

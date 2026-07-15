@@ -53,6 +53,8 @@ pub struct FormCollectionPlanRequest {
   pub data_type: String,
   pub params: Value,
   pub request_limit: Option<i64>,
+  pub record_limit: Option<i64>,
+  pub budget_limit_micros: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -520,6 +522,15 @@ pub fn generate_form_collection_plan(
     .request_limit
     .unwrap_or(1)
     .clamp(1, endpoint.max_request_count);
+  let default_record_limit = validation
+    .normalized_params
+    .get("page_size")
+    .and_then(Value::as_i64)
+    .unwrap_or(endpoint.max_page_size)
+    .saturating_mul(request_limit)
+    .max(1);
+  let record_limit = request.record_limit.unwrap_or(default_record_limit);
+  let budget_limit_micros = request.budget_limit_micros.unwrap_or(35_000_000);
   let cost = estimate_plan_cost(1, 1, request_limit);
 
   let plan_json = serde_json::json!({
@@ -535,17 +546,22 @@ pub fn generate_form_collection_plan(
       "data_type": endpoint.data_type,
       "params": validation.normalized_params
     }],
+    "record_limit": record_limit,
     "request_limit": request_limit,
+    "budget_limit": {
+      "currency": "USD",
+      "amount_micros": budget_limit_micros
+    },
     "cost_estimate": cost.cost_estimate_json,
     "missing_fields": validation.missing_fields,
     "confidence": if validation.valid { 1.0 } else { 0.4 },
     "requires_user_confirmation": true
   });
-  let plan_validation = validate_collection_plan(&plan_json);
+  let plan_validation = validate_collection_plan_v2(&plan_json);
 
   Ok(CollectionPlanDraftView {
     source: "form_generated".to_string(),
-    schema_version: 1,
+    schema_version: 2,
     plan_json,
     validation_status: if plan_validation.valid {
       "valid".to_string()
@@ -739,21 +755,33 @@ mod tests {
   #[test]
   fn form_plan_contains_endpoint_and_confirmation_gate() {
     let plan = generate_form_collection_plan(FormCollectionPlanRequest {
-      platform: "xiaohongshu".to_string(),
-      data_type: "comments".to_string(),
+      platform: "tiktok".to_string(),
+      data_type: "keyword_search".to_string(),
       params: serde_json::json!({
-        "item_id": "note-1",
-        "region": "CN",
-        "time_range": "2026-07-01/2026-07-07"
+        "keyword": "car",
+        "region": "US",
+        "time_range": "30",
+        "page_size": 50
       }),
       request_limit: Some(2),
+      record_limit: None,
+      budget_limit_micros: None,
     })
     .expect("plan should generate");
 
-    assert_eq!(plan.validation_status, "valid");
+    assert_eq!(
+      plan.validation_status, "valid",
+      "{:?}",
+      plan.validation_errors_json
+    );
+    assert_eq!(plan.schema_version, 2);
+    assert!(plan.plan_json["record_limit"]
+      .as_i64()
+      .is_some_and(|value| value > 0));
+    assert_eq!(plan.plan_json["budget_limit"]["currency"], "USD");
     assert_eq!(
       plan.plan_json["steps"][0]["endpoint_key"],
-      "xiaohongshu.comments"
+      "tiktok.keyword_search"
     );
     assert_eq!(plan.plan_json["requires_user_confirmation"], true);
     assert_eq!(plan.cost_estimate_json["request_count_estimate"], 2);
