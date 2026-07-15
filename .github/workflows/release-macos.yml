@@ -115,7 +115,7 @@ jobs:
         with:
           projectPath: apps/macos
           tagName: app-v${{ needs.prepare-release.outputs.version }}
-          releaseName: 智能数据整理平台 v${{ needs.prepare-release.outputs.version }}
+          releaseName: Sortlytic v${{ needs.prepare-release.outputs.version }}
           releaseBody: 本次自动发版只打包 macOS 客户端，包含 Apple Silicon 与 Intel 架构产物。
           releaseDraft: false
           prerelease: false
