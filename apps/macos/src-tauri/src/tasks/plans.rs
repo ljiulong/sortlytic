@@ -185,6 +185,10 @@ pub fn confirm_collection_plan(
     return Err(task_error("采集计划不属于当前任务"));
   }
 
+  if !["draft", "waiting_confirmation"].contains(&task.status.as_str()) {
+    return Err(task_error("只有草稿或等待确认状态的任务可以确认采集计划"));
+  }
+
   if latest_plan_for_task(&transaction, task_id)?.id != plan.id {
     return Err(task_error("只能确认当前任务的最新采集计划"));
   }
@@ -243,12 +247,17 @@ pub fn confirm_collection_plan(
   if confirmed != 1 {
     return Err(task_error("采集计划状态已变化，请重新确认最新采集计划"));
   }
-  transaction
+  let updated = transaction
     .execute(
-      "UPDATE collection_task SET confirmed_at = ?1, updated_at = ?1 WHERE id = ?2",
+      "UPDATE collection_task
+       SET confirmed_at = ?1, updated_at = ?1
+       WHERE id = ?2 AND status IN ('draft', 'waiting_confirmation')",
       params![now, task_id],
     )
     .map_err(database_error)?;
+  if updated != 1 {
+    return Err(task_error("任务状态已变化，请重新确认采集计划"));
+  }
   transaction.commit().map_err(database_error)?;
 
   get_task_by_id(&connection, task_id)

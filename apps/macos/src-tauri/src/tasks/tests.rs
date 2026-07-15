@@ -280,6 +280,40 @@ fn confirmation_revalidates_persisted_v2_limits() {
 }
 
 #[test]
+fn confirmation_rejects_a_task_that_is_no_longer_waiting() {
+  let root_path = unique_temp_workspace("confirmation-state-gate");
+  create_workspace("任务测试", &root_path).expect("workspace should be created");
+  let task = create_collection_task(&root_path, create_task_input()).expect("task created");
+  let plan = save_collection_plan(&root_path, plan_input(&task.id)).expect("plan saved");
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  connection
+    .execute(
+      "UPDATE collection_task SET status = 'queued' WHERE id = ?1",
+      params![task.id],
+    )
+    .expect("test should move the task out of the confirmation state");
+  drop(connection);
+
+  let error = confirm_collection_plan(&root_path, &task.id, &plan.id)
+    .expect_err("queued tasks must not be confirmed");
+  assert_eq!(error.code, AppErrorCode::ValidationError);
+
+  let connection = open_workspace_connection(&root_path).expect("database should reopen");
+  let persisted = connection
+    .query_row(
+      "SELECT confirmed_by_user,
+              (SELECT confirmed_at FROM collection_task WHERE id = ?2)
+       FROM collection_plan WHERE id = ?1",
+      params![plan.id, task.id],
+      |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?)),
+    )
+    .expect("task confirmation state should be readable");
+  assert_eq!(persisted, (0, None));
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn changing_confirmed_scope_revokes_confirmation() {
   let root_path = unique_temp_workspace("confirmation-invalidation");
   create_workspace("任务测试", &root_path).expect("workspace should be created");
