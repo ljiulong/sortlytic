@@ -186,12 +186,15 @@ pub fn delete_model_provider(root_path: impl AsRef<Path>, provider_id: &str) -> 
   let connection = open_workspace_connection(root_path)?;
   let provider_id = normalize_required("provider_id", provider_id, AppErrorStage::Provider)?;
 
-  connection
+  let deleted = connection
     .execute(
       "DELETE FROM model_provider WHERE provider_id = ?1",
       params![provider_id],
     )
     .map_err(database_error)?;
+  if deleted == 0 {
+    return Ok(false);
+  }
 
   write_provider_audit_log(
     &connection,
@@ -677,6 +680,28 @@ mod tests {
     let error = normalize_provider_input(input).expect_err("base url should be required");
 
     assert_eq!(error.code, AppErrorCode::ValidationError);
+  }
+
+  #[test]
+  fn deleting_a_missing_provider_reports_that_nothing_was_deleted() {
+    let root_path = unique_temp_workspace("delete-missing-provider");
+    create_workspace("删除供应商测试", &root_path).expect("workspace should be created");
+
+    let deleted = delete_model_provider(&root_path, "missing-provider")
+      .expect("deleting a missing provider should be handled");
+
+    assert!(!deleted);
+    let connection = open_workspace_connection(&root_path).expect("database should open");
+    let audit_count = connection
+      .query_row(
+        "SELECT COUNT(*) FROM audit_log WHERE action = 'delete_model_provider'",
+        [],
+        |row| row.get::<_, i64>(0),
+      )
+      .expect("audit log should be queryable");
+    assert_eq!(audit_count, 0);
+
+    std::fs::remove_dir_all(root_path).ok();
   }
 
   #[test]
