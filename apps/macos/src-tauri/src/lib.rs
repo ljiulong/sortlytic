@@ -322,6 +322,16 @@ fn set_default_model(
 }
 
 #[tauri::command]
+fn set_active_model_provider(
+  provider_id: String,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<bool> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  providers::set_active_model_provider(root_path, &provider_id)
+}
+
+#[tauri::command]
 fn create_collection_task(
   input: CreateCollectionTaskInput,
   root_path: Option<String>,
@@ -725,6 +735,7 @@ pub fn run() {
       upsert_model_profile,
       test_model_provider,
       set_default_model,
+      set_active_model_provider,
       create_collection_task,
       update_collection_task,
       save_collection_plan,

@@ -350,6 +350,51 @@ pub fn set_default_model(
   Ok(true)
 }
 
+pub fn set_active_model_provider(
+  root_path: impl AsRef<Path>,
+  provider_id: &str,
+) -> AppResult<bool> {
+  let mut connection = open_workspace_connection(root_path)?;
+  let provider_id = normalize_required("provider_id", provider_id, AppErrorStage::Provider)?;
+  let transaction = connection
+    .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+    .map_err(database_error)?;
+  let exists = transaction
+    .query_row(
+      "SELECT 1 FROM model_provider WHERE provider_id = ?1",
+      params![provider_id],
+      |_| Ok(()),
+    )
+    .optional()
+    .map_err(database_error)?
+    .is_some();
+  if !exists {
+    return Err(provider_error("要激活的模型供应商不存在"));
+  }
+
+  let now = Utc::now().to_rfc3339();
+  transaction
+    .execute(
+      "UPDATE model_provider SET enabled = 0, updated_at = ?1",
+      params![now],
+    )
+    .map_err(database_error)?;
+  transaction
+    .execute(
+      "UPDATE model_provider SET enabled = 1, updated_at = ?1 WHERE provider_id = ?2",
+      params![now, provider_id],
+    )
+    .map_err(database_error)?;
+  write_provider_audit_log(
+    &transaction,
+    "set_active_model_provider",
+    Some(&provider_id),
+    serde_json::json!({ "provider_id": provider_id }),
+  )?;
+  transaction.commit().map_err(database_error)?;
+  Ok(true)
+}
+
 pub fn test_model_provider(
   root_path: impl AsRef<Path>,
   provider_id: &str,
@@ -682,6 +727,28 @@ mod tests {
     let error = normalize_provider_input(input).expect_err("base url should be required");
 
     assert_eq!(error.code, AppErrorCode::ValidationError);
+  }
+
+  #[test]
+  fn activating_a_provider_disables_its_siblings_atomically() {
+    let root_path = unique_temp_workspace("active-provider");
+    create_workspace("激活供应商测试", &root_path).expect("workspace should be created");
+    create_model_provider(&root_path, provider_input("openai")).expect("openai should create");
+    create_model_provider(&root_path, provider_input("ollama")).expect("ollama should create");
+
+    set_active_model_provider(&root_path, "ollama").expect("ollama should activate");
+
+    let providers = list_model_providers(&root_path, None).expect("providers should list");
+    assert_eq!(
+      providers
+        .iter()
+        .filter(|provider| provider.enabled)
+        .map(|provider| provider.provider_id.as_str())
+        .collect::<Vec<_>>(),
+      vec!["ollama"]
+    );
+
+    std::fs::remove_dir_all(root_path).ok();
   }
 
   #[test]
