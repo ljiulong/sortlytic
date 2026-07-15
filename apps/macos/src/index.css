@@ -108,3 +108,119 @@ a {
   color: inherit;
   text-decoration: none;
 }
+
+.settings-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+.settings-summary-copy {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.settings-summary-copy > div:last-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.settings-summary-copy strong {
+  color: var(--text-strong);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.settings-summary-copy span {
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.settings-summary-detail {
+  margin-top: 10px;
+  padding: 10px 11px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+.settings-modal-backdrop {
+  position: fixed;
+  z-index: 60;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(15 18 24 / 36%);
+  backdrop-filter: blur(8px);
+}
+.settings-modal {
+  width: min(100%, 480px);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 24px 80px rgb(15 18 24 / 24%), var(--shadow-panel);
+}
+.settings-modal-wide {
+  width: min(100%, 720px);
+}
+.settings-modal-header,
+.settings-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px 18px;
+}
+.settings-modal-header {
+  border-bottom: 1px solid var(--border-subtle);
+}
+.settings-modal-body {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+}
+.settings-modal-footer {
+  justify-content: flex-end;
+  border-top: 1px solid var(--border-subtle);
+}
+.settings-modal-footer-actions {
+  display: flex;
+  gap: 8px;
+}
+.settings-modal .model-security-note {
+  margin-top: 0;
+}
+@media (max-width: 560px) {
+  .settings-summary,
+  .settings-modal-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .settings-summary > .primary-button,
+  .settings-modal-footer > .ghost-button,
+  .settings-modal-footer-actions,
+  .settings-modal-footer-actions > .ghost-button,
+  .settings-modal-footer-actions > .primary-button {
+    width: 100%;
+  }
+  .settings-modal-backdrop {
+    padding: 12px;
+  }
+  .settings-modal {
+    max-height: calc(100vh - 24px);
+  }
+  .settings-modal-header,
+  .settings-modal-body,
+  .settings-modal-footer {
+    padding-inline: 14px;
+  }
+  .settings-modal-footer-actions {
+    display: grid;
+  }
+}

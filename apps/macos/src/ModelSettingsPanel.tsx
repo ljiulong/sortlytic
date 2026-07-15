@@ -1,5 +1,5 @@
-import { Bot, KeyRound, ShieldCheck } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { Bot, KeyRound, ShieldCheck, X } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ModelProviderView, ProviderTestResult } from './backend-api'
 import type { ModelSettingsInput } from './use-workbench-backend'
 
@@ -19,30 +19,10 @@ const providerPresets: Array<{
   apiFormat: ApiFormat
   baseUrl: string
 }> = [
-  {
-    providerId: 'openai',
-    displayName: 'OpenAI',
-    apiFormat: 'openai_compatible',
-    baseUrl: 'https://api.openai.com/v1',
-  },
-  {
-    providerId: 'anthropic',
-    displayName: 'Anthropic',
-    apiFormat: 'anthropic_messages',
-    baseUrl: 'https://api.anthropic.com',
-  },
-  {
-    providerId: 'gemini',
-    displayName: 'Google Gemini',
-    apiFormat: 'gemini',
-    baseUrl: 'https://generativelanguage.googleapis.com',
-  },
-  {
-    providerId: 'custom-openai',
-    displayName: '自定义 OpenAI 兼容服务',
-    apiFormat: 'openai_compatible',
-    baseUrl: '',
-  },
+  { providerId: 'openai', displayName: 'OpenAI', apiFormat: 'openai_compatible', baseUrl: 'https://api.openai.com/v1' },
+  { providerId: 'anthropic', displayName: 'Anthropic', apiFormat: 'anthropic_messages', baseUrl: 'https://api.anthropic.com' },
+  { providerId: 'gemini', displayName: 'Google Gemini', apiFormat: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com' },
+  { providerId: 'custom-openai', displayName: '自定义 OpenAI 兼容服务', apiFormat: 'openai_compatible', baseUrl: '' },
 ]
 
 const apiFormatLabels: Record<ApiFormat, string> = {
@@ -60,9 +40,8 @@ function ModelSettingsPanel({
   saveAndValidateModelProvider,
 }: ModelSettingsPanelProps) {
   const initialProvider = providers[0]
-  const initialPreset = providerPresets.find(
-    (preset) => preset.providerId === initialProvider?.provider_id,
-  ) ?? providerPresets[0]
+  const initialPreset = providerPresets.find((preset) => preset.providerId === initialProvider?.provider_id) ?? providerPresets[0]
+  const [isOpen, setIsOpen] = useState(false)
   const [form, setForm] = useState<Omit<ModelSettingsInput, 'apiKey'>>({
     providerId: initialProvider?.provider_id ?? initialPreset.providerId,
     displayName: initialProvider?.display_name ?? initialPreset.displayName,
@@ -72,19 +51,15 @@ function ModelSettingsPanel({
   })
   const [apiKey, setApiKey] = useState('')
   const didSyncProviders = useRef(false)
-  const configuredProvider = providers.find(
-    (provider) => provider.provider_id === form.providerId,
-  )
+  const configuredProvider = providers.find((provider) => provider.provider_id === form.providerId)
   const activeProvider = providers.find((provider) => provider.enabled)
   const isActiveProvider = activeProvider?.provider_id === form.providerId
   const isValidated = result?.success && result.provider_id === form.providerId
   const providerOptions = Array.from(
-    new Map(
-      [
-        ...providerPresets.map((preset) => [preset.providerId, preset.displayName] as const),
-        ...providers.map((provider) => [provider.provider_id, provider.display_name] as const),
-      ],
-    ).entries(),
+    new Map([
+      ...providerPresets.map((preset) => [preset.providerId, preset.displayName] as const),
+      ...providers.map((provider) => [provider.provider_id, provider.display_name] as const),
+    ]).entries(),
   )
   const needsBaseUrl = form.apiFormat === 'openai_compatible'
   const canSubmit =
@@ -93,10 +68,18 @@ function ModelSettingsPanel({
     form.defaultModelId.trim().length > 0 &&
     (!needsBaseUrl || form.baseUrl.trim().length > 0)
 
-  const selectProvider = (providerId: string) => {
+  useEffect(() => {
+    if (!isOpen) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !isPending) setIsOpen(false)
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [isOpen, isPending])
+
+  const selectProvider = useCallback((providerId: string) => {
     const existing = providers.find((provider) => provider.provider_id === providerId)
     const preset = providerPresets.find((item) => item.providerId === providerId)
-
     setForm({
       providerId,
       displayName: existing?.display_name ?? preset?.displayName ?? providerId,
@@ -105,21 +88,20 @@ function ModelSettingsPanel({
       defaultModelId: existing?.default_model_id ?? '',
     })
     setApiKey('')
-  }
+  }, [providers])
 
   useEffect(() => {
     if (didSyncProviders.current || providers.length === 0) return
     didSyncProviders.current = true
     const savedProvider = providers.find((provider) => provider.enabled) ?? providers[0]
-    if (!savedProvider) return
-    setForm({
-      providerId: savedProvider.provider_id,
-      displayName: savedProvider.display_name,
-      apiFormat: toApiFormat(savedProvider.api_format) ?? 'openai_compatible',
-      baseUrl: savedProvider.base_url ?? '',
-      defaultModelId: savedProvider.default_model_id ?? '',
-    })
-  }, [providers])
+    if (savedProvider) selectProvider(savedProvider.provider_id)
+  }, [providers, selectProvider])
+
+  const openModal = () => {
+    const providerToEdit = activeProvider ?? providers[0]
+    if (providerToEdit) selectProvider(providerToEdit.provider_id)
+    setIsOpen(true)
+  }
 
   const submit = async () => {
     try {
@@ -131,8 +113,18 @@ function ModelSettingsPanel({
         apiKey,
       })
       setApiKey('')
+      setIsOpen(false)
     } catch {
-      // 后端错误会显示在工作区顶部状态区，密钥仍保留以便用户修正后重试。
+      // 工作区顶部状态区会显示后端错误，密钥仍保留以便修正后重试。
+    }
+  }
+
+  const activate = async () => {
+    try {
+      await activateModelProvider(form.providerId)
+      setIsOpen(false)
+    } catch {
+      // 工作区顶部状态区会显示后端错误。
     }
   }
 
@@ -143,147 +135,121 @@ function ModelSettingsPanel({
           <p className="eyebrow">模型 API 设置</p>
           <h2>供应商、模型与安全密钥</h2>
         </div>
-        <span
-          className="status-pill"
-          data-tone={isActiveProvider || isValidated ? 'success' : configuredProvider ? 'info' : 'warning'}
-        >
+        <span className="status-pill" data-tone={isActiveProvider || isValidated ? 'success' : configuredProvider ? 'info' : 'warning'}>
           {isActiveProvider ? '当前使用' : isValidated ? '配置已校验' : configuredProvider ? '已保存' : '待配置'}
         </span>
       </div>
 
-      <div className="model-settings-form">
-        <label className="field">
-          <span>模型供应商</span>
-          <select value={form.providerId} onChange={(event) => selectProvider(event.target.value)}>
-            {providerOptions.map(([providerId, displayName]) => (
-              <option key={providerId} value={providerId}>
-                {displayName}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className="field">
-          <span>供应商名称</span>
-          <input
-            value={form.displayName}
-            onChange={(event) => setForm((current) => ({
-              ...current,
-              displayName: event.target.value,
-            }))}
-          />
-        </label>
-
-        <label className="field">
-          <span>API 格式</span>
-          <select
-            value={form.apiFormat}
-            onChange={(event) => setForm((current) => ({
-              ...current,
-              apiFormat: event.target.value as ApiFormat,
-            }))}
-          >
-            {Object.entries(apiFormatLabels).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className="field">
-          <span>Base URL</span>
-          <input
-            placeholder={needsBaseUrl ? 'OpenAI 兼容格式必填' : '使用供应商默认地址'}
-            type="url"
-            value={form.baseUrl}
-            onChange={(event) => setForm((current) => ({
-              ...current,
-              baseUrl: event.target.value,
-            }))}
-          />
-        </label>
-
-        <label className="field">
-          <span>默认模型 ID</span>
-          <input
-            placeholder="例如 gpt-4.1-mini"
-            value={form.defaultModelId}
-            onChange={(event) => setForm((current) => ({
-              ...current,
-              defaultModelId: event.target.value,
-            }))}
-          />
-        </label>
-
-        <label className="field">
-          <span>API Key</span>
-          <input
-            autoComplete="new-password"
-            placeholder={configuredProvider ? '留空以复用已保存密钥' : '只保存到系统安全存储'}
-            type="password"
-            value={apiKey}
-            onChange={(event) => setApiKey(event.target.value)}
-          />
-        </label>
-      </div>
-
-      <div className="model-security-note">
-        <ShieldCheck size={17} aria-hidden="true" />
-        <p>
-          API Key 只写入 macOS 系统安全存储，应用数据库仅保存密钥引用。当前操作校验配置完整性，不会发起真实模型请求。
-        </p>
-      </div>
-
-      <div className="model-settings-footer">
-        <div className="model-config-summary">
-          <Bot size={17} aria-hidden="true" />
-          <span>
-            {configuredProvider
-              ? `${configuredProvider.display_name} · ${configuredProvider.default_model_id ?? '未设置默认模型'}`
-              : '尚未保存该供应商配置'}
-          </span>
+      <div className="settings-summary">
+        <div className="settings-summary-copy">
+          <div className="connection-icon" data-tone={isActiveProvider ? 'success' : 'info'}>
+            <Bot size={17} aria-hidden="true" />
+          </div>
+          <div>
+            <strong>{activeProvider?.display_name ?? '尚未配置模型 API'}</strong>
+            <span>{activeProvider?.default_model_id ?? '保存后可在弹窗中切换供应商'}</span>
+          </div>
         </div>
-        <button
-          className="ghost-button"
-          disabled={isPending || isActiveProvider || !configuredProvider?.default_model_id}
-          type="button"
-          onClick={() => {
-            void activateModelProvider(form.providerId).catch(() => undefined)
-          }}
-        >
-          {isActiveProvider
-            ? '当前使用'
-            : configuredProvider?.default_model_id
-              ? '切换到此配置'
-              : '先配置默认模型'}
-        </button>
-        <button
-          className="primary-button"
-          disabled={isPending || !canSubmit}
-          type="button"
-          onClick={() => {
-            void submit()
-          }}
-        >
+        <button className="primary-button" type="button" onClick={openModal}>
           <KeyRound size={16} aria-hidden="true" />
-          {isPending ? '正在保存' : '保存并校验'}
+          {providers.length > 0 ? '管理模型 API' : '配置模型 API'}
         </button>
       </div>
+
+      <div className="model-config-summary settings-summary-detail">
+        <ShieldCheck size={17} aria-hidden="true" />
+        <span>API Key 只写入 macOS 系统安全存储，应用数据库仅保存密钥引用。</span>
+      </div>
+
+      {isOpen ? (
+        <div
+          className="settings-modal-backdrop"
+          role="presentation"
+          onMouseDown={() => {
+            if (!isPending) setIsOpen(false)
+          }}
+        >
+          <div
+            aria-labelledby="model-settings-dialog-title"
+            aria-modal="true"
+            className="settings-modal settings-modal-wide"
+            role="dialog"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="settings-modal-header">
+              <div>
+                <p className="eyebrow">模型 API</p>
+                <h2 id="model-settings-dialog-title">保存配置并切换供应商</h2>
+              </div>
+              <button
+                aria-label="关闭模型 API 配置弹窗"
+                className="toolbar-icon-button"
+                disabled={isPending}
+                type="button"
+                onClick={() => setIsOpen(false)}
+              >
+                <X size={17} aria-hidden="true" />
+              </button>
+            </div>
+            <div className="settings-modal-body">
+              <div className="model-settings-form">
+                <label className="field">
+                  <span>模型供应商</span>
+                  <select value={form.providerId} onChange={(event) => selectProvider(event.target.value)}>
+                    {providerOptions.map(([providerId, displayName]) => (
+                      <option key={providerId} value={providerId}>{displayName}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>供应商名称</span>
+                  <input value={form.displayName} onChange={(event) => setForm((current) => ({ ...current, displayName: event.target.value }))} />
+                </label>
+                <label className="field">
+                  <span>API 格式</span>
+                  <select value={form.apiFormat} onChange={(event) => setForm((current) => ({ ...current, apiFormat: event.target.value as ApiFormat }))}>
+                    {Object.entries(apiFormatLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Base URL</span>
+                  <input placeholder={needsBaseUrl ? 'OpenAI 兼容格式必填' : '使用供应商默认地址'} type="url" value={form.baseUrl} onChange={(event) => setForm((current) => ({ ...current, baseUrl: event.target.value }))} />
+                </label>
+                <label className="field">
+                  <span>默认模型 ID</span>
+                  <input placeholder="例如 gpt-4.1-mini" value={form.defaultModelId} onChange={(event) => setForm((current) => ({ ...current, defaultModelId: event.target.value }))} />
+                </label>
+                <label className="field">
+                  <span>API Key</span>
+                  <input autoComplete="new-password" autoFocus={Boolean(configuredProvider)} placeholder={configuredProvider ? '留空以复用已保存密钥' : '只保存到系统安全存储'} type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} />
+                </label>
+              </div>
+              <div className="model-security-note">
+                <ShieldCheck size={17} aria-hidden="true" />
+                <p>API Key 只写入 macOS 系统安全存储，当前操作校验配置完整性，不会发起真实模型请求。</p>
+              </div>
+            </div>
+            <div className="settings-modal-footer">
+              <button className="ghost-button" disabled={isPending} type="button" onClick={() => void activate()}>
+                {isActiveProvider ? '当前使用' : configuredProvider?.default_model_id ? '切换到此配置' : '先保存配置'}
+              </button>
+              <div className="settings-modal-footer-actions">
+                <button className="ghost-button" disabled={isPending} type="button" onClick={() => setIsOpen(false)}>取消</button>
+                <button className="primary-button" disabled={isPending || !canSubmit} type="button" onClick={() => void submit()}>
+                  <KeyRound size={16} aria-hidden="true" />
+                  {isPending ? '正在保存' : '保存并校验'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   )
 }
 
 function toApiFormat(value?: string): ApiFormat | undefined {
-  if (
-    value === 'openai_compatible' ||
-    value === 'anthropic_messages' ||
-    value === 'gemini' ||
-    value === 'ollama'
-  ) {
-    return value
-  }
-
+  if (value === 'openai_compatible' || value === 'anthropic_messages' || value === 'gemini' || value === 'ollama') return value
   return undefined
 }
 
