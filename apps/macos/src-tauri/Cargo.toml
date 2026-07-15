@@ -35,3 +35,7 @@ uuid = { version = "1.23.4", features = ["v4", "serde"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store = { version = "1.0.0", features = ["keychain"] }
 keyring-core = "1.0.0"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-process = "2.3.1"
+tauri-plugin-updater = "2.10.1"
