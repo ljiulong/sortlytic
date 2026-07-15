@@ -91,7 +91,15 @@ If macOS shows the alert in the screenshot:
 1. Delete the rejected copy and download the correct DMG again from the [official Sortlytic Releases page](https://github.com/ljiulong/sortlytic/releases). Do not use a mirror or a file forwarded through chat.
 2. Confirm that `_aarch64.dmg` matches Apple Silicon or `_x64.dmg` matches an Intel Mac.
 3. Try to open Sortlytic once, then open **System Settings → Privacy & Security**. If **Open Anyway** is available, use it only after confirming the download source. Apple notes that this exception is normally offered for about one hour after an attempted launch.
-4. If macOS still reports that the app is damaged, does not offer **Open Anyway**, or moves it to the Trash, do not disable Gatekeeper globally. Run the app from source or wait for a Developer ID-signed and notarized release.
+4. If macOS still reports that the app is damaged or does not offer **Open Anyway**, and you have verified that the app came from the official Release, remove the quarantine attribute from Sortlytic only and launch it again:
+
+   ```bash
+   xattr -dr com.apple.quarantine "/Applications/Sortlytic.app"
+   open "/Applications/Sortlytic.app"
+   ```
+
+   These commands do not disable Gatekeeper globally. They remove the download quarantine attribute only from this app bundle. `sudo` is normally unnecessary; if Terminal reports `Permission denied`, run only the `xattr` command again with `sudo`.
+5. If the app still cannot open after the targeted removal, delete it and recheck the architecture and download integrity. Run from source or wait for a Developer ID-signed and notarized release instead of using `sudo spctl --master-disable` or another system-wide bypass.
 
 See [Apple’s Gatekeeper guidance](https://support.apple.com/102445) and [Tauri’s macOS signing guide](https://v2.tauri.app/distribute/sign/macos/) for the security model and release requirements.
 
@@ -192,7 +200,7 @@ Browser preview does not have update permission. Apple Developer ID signing and 
 | A plan cannot be confirmed | Generate the plan first, clear **Missing Conditions**, and verify that its validation status is valid. |
 | Export fails | Create a task first. Then read the message below the workspace title for the backend error and retry after the task data is available. |
 | The screen shows realistic records but no native features work | The app is running through `pnpm dev` in browser demonstration mode. Start it with `pnpm tauri dev` or use the packaged app. |
-| No **Open Anyway** button appears | Re-attempt the launch and check Privacy & Security within one hour. If macOS still rejects the file, do not disable Gatekeeper globally. |
+| No **Open Anyway** button appears | Re-attempt the launch and check Privacy & Security within one hour. For the verified official build, use the targeted `xattr` command above; do not disable Gatekeeper globally. |
 
 ### Data and security boundaries
 
