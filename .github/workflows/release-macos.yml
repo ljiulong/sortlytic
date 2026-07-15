@@ -1,17 +1,15 @@
 name: release-macos
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
-      version_bump:
-        description: 自动递增版号
-        required: true
-        default: patch
-        type: choice
-        options:
-          - patch
-          - minor
-          - major
+      rebuild_tag:
+        description: 可选，仅重新打包并上传已有 app-vX.Y.Z 标签
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -21,51 +19,103 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  prepare-release:
-    name: 准备版本
+  verify:
+    name: 发版前验证
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.event.head_commit.message, 'feat:') ||
+      startsWith(github.event.head_commit.message, 'feat(') ||
+      startsWith(github.event.head_commit.message, 'fix:') ||
+      startsWith(github.event.head_commit.message, 'fix(') ||
+      startsWith(github.event.head_commit.message, 'perf:') ||
+      startsWith(github.event.head_commit.message, 'perf(') ||
+      startsWith(github.event.head_commit.message, 'revert:') ||
+      startsWith(github.event.head_commit.message, 'revert(') ||
+      contains(github.event.head_commit.message, '!:') ||
+      contains(github.event.head_commit.message, 'BREAKING CHANGE:') ||
+      contains(github.event.head_commit.message, 'BREAKING CHANGES:')
+    uses: ./.github/workflows/ci.yml
+    with:
+      checkout_ref: ${{ inputs.rebuild_tag || github.sha }}
+
+  release:
+    name: 计算并创建版本
+    needs: verify
+    if: needs.verify.result == 'success'
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: apps/macos
     outputs:
-      version: ${{ steps.version.outputs.version }}
-      release_sha: ${{ steps.commit.outputs.release_sha }}
+      published: ${{ steps.recovery.outputs.published || steps.semantic.outputs.published }}
+      tag: ${{ steps.recovery.outputs.tag || steps.semantic.outputs.tag }}
+      version: ${{ steps.recovery.outputs.version || steps.semantic.outputs.version }}
     steps:
-      - name: Checkout
+      - name: Checkout release source
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: ${{ github.ref_name }}
+          ref: ${{ inputs.rebuild_tag || github.sha }}
+
+      - name: Validate recovery tag
+        id: recovery
+        if: github.event_name == 'workflow_dispatch' && inputs.rebuild_tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REBUILD_TAG: ${{ inputs.rebuild_tag }}
+        run: |
+          if [[ ! "$REBUILD_TAG" =~ ^app-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "无效标签：$REBUILD_TAG" >&2
+            exit 1
+          fi
+          git rev-parse --verify "refs/tags/$REBUILD_TAG^{commit}" >/dev/null
+          gh release view "$REBUILD_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+          echo "published=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$REBUILD_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${REBUILD_TAG#app-v}" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node.js
+        if: steps.recovery.outcome == 'skipped'
         uses: actions/setup-node@v6
         with:
-          node-version: lts/*
+          node-version: 24
 
-      - name: Bump and sync version
-        id: version
+      - name: Enable pnpm
+        if: steps.recovery.outcome == 'skipped'
         run: |
-          npm version "${{ inputs.version_bump }}" --no-git-tag-version
-          node -e "const fs=require('node:fs');const pkg=JSON.parse(fs.readFileSync('package.json','utf8'));const confPath='src-tauri/tauri.conf.json';const conf=JSON.parse(fs.readFileSync(confPath,'utf8'));conf.version=pkg.version;fs.writeFileSync(confPath,JSON.stringify(conf,null,2)+'\n');const cargoPath='src-tauri/Cargo.toml';const cargo=fs.readFileSync(cargoPath,'utf8').replace(/^(version\s*=\s*)\"[^\"]+\"/m,(_,prefix)=>prefix+'\"'+pkg.version+'\"');fs.writeFileSync(cargoPath,cargo);"
-          VERSION="$(node -p "JSON.parse(require('node:fs').readFileSync('package.json', 'utf8')).version")"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          corepack enable
+          corepack install
+          test "$(pnpm --version)" = "11.5.2"
 
-      - name: Commit version bump
-        id: commit
+      - name: Install Rust stable
+        if: steps.recovery.outcome == 'skipped'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install release dependencies
+        if: steps.recovery.outcome == 'skipped'
+        run: pnpm install --frozen-lockfile
+
+      - name: Run semantic-release
+        id: semantic
+        if: steps.recovery.outcome == 'skipped'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml
-          git commit -m "chore: release v$VERSION"
-          git push origin HEAD:${{ github.ref_name }}
-          git tag "app-v$VERSION"
-          git push origin "app-v$VERSION"
-          echo "release_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "published=false" >> "$GITHUB_OUTPUT"
+          BEFORE_TAG="$(git tag --list 'app-v*' --sort=-version:refname | head -n 1)"
+          pnpm exec semantic-release
+          git fetch --force --tags origin
+          AFTER_TAG="$(git tag --list 'app-v*' --sort=-version:refname | head -n 1)"
+          if [[ -n "$AFTER_TAG" && "$AFTER_TAG" != "$BEFORE_TAG" ]]; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$AFTER_TAG" >> "$GITHUB_OUTPUT"
+            echo "version=${AFTER_TAG#app-v}" >> "$GITHUB_OUTPUT"
+          fi
 
   build-and-release:
     name: 打包 macOS ${{ matrix.label }}
-    needs: prepare-release
+    needs: release
+    if: needs.release.outputs.published == 'true'
     runs-on: macos-latest
     strategy:
       fail-fast: false
@@ -76,21 +126,22 @@ jobs:
           - label: Intel
             target: x86_64-apple-darwin
     steps:
-      - name: Checkout release commit
+      - name: Checkout release tag
         uses: actions/checkout@v7
         with:
-          ref: ${{ needs.prepare-release.outputs.release_sha }}
+          ref: ${{ needs.release.outputs.tag }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: lts/*
+          node-version: 24
 
       - name: Enable pnpm
         working-directory: apps/macos
         run: |
           corepack enable
           corepack install
+          test "$(pnpm --version)" = "11.5.2"
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -106,7 +157,7 @@ jobs:
         working-directory: apps/macos
         run: pnpm install --frozen-lockfile
 
-      - name: Build and publish macOS release
+      - name: Build and upload macOS release assets
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -114,9 +165,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: apps/macos
-          tagName: app-v${{ needs.prepare-release.outputs.version }}
-          releaseName: Sortlytic v${{ needs.prepare-release.outputs.version }}
-          releaseBody: 本次自动发版只打包 macOS 客户端，包含 Apple Silicon 与 Intel 架构产物。
+          tagName: ${{ needs.release.outputs.tag }}
           releaseDraft: false
           prerelease: false
           args: --target ${{ matrix.target }} --bundles app,dmg
