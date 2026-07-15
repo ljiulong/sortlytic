@@ -18,6 +18,9 @@ use super::{
   task_error, TaskRunView,
 };
 
+mod runtime;
+use runtime::load_runtime_snapshot;
+
 struct RunStep {
   id: String,
   task_id: String,
@@ -63,32 +66,10 @@ pub fn execute_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRu
 }
 
 fn execute_claimed_run(root_path: &Path, run: &TaskRunView) -> AppResult<()> {
-  let connector = crate::tikhub::get_tikhub_connector(root_path)?
-    .ok_or_else(|| worker_error("TIKHUB_CONNECTOR_NOT_READY", "尚未配置 TikHub 连接器", true))?;
-  if !connector.enabled {
-    return Err(worker_error(
-      "TIKHUB_CONNECTOR_NOT_READY",
-      "TikHub 连接器尚未启用",
-      true,
-    ));
-  }
-  let Some(secret_ref_id) = connector.secret_ref_id.as_deref() else {
-    return Err(worker_error(
-      "TIKHUB_CONNECTOR_NOT_READY",
-      "TikHub 连接器缺少密钥引用",
-      true,
-    ));
-  };
-  if connector.last_test_status.as_deref() != Some("success") {
-    return Err(worker_error(
-      "TIKHUB_CONNECTOR_NOT_READY",
-      "TikHub 连接器尚未通过最新连通性测试",
-      true,
-    ));
-  }
-  let token = read_secret_for_backend(root_path, secret_ref_id, "tikhub")?;
+  let snapshot = load_runtime_snapshot(root_path, &run.id)?;
+  let token = read_secret_for_backend(root_path, &snapshot.secret_ref_id, "tikhub")?;
   execute_claimed_run_with_fetcher(root_path, run, |request| {
-    send_collection_request(Some(connector.base_url.clone()), &token, request)
+    send_collection_request(Some(snapshot.base_url.clone()), &token, request)
   })
 }
 
@@ -602,7 +583,7 @@ mod tests {
     assert_eq!(run.status, "failed");
     assert_eq!(
       run.error_code.as_deref(),
-      Some("TIKHUB_CONNECTOR_NOT_READY")
+      Some("RUNTIME_SNAPSHOT_NOT_READY")
     );
     assert!(run.retryable);
     let retry =
@@ -781,3 +762,7 @@ mod tests {
     (task, plan)
   }
 }
+
+#[cfg(test)]
+#[path = "worker_snapshot_tests.rs"]
+mod snapshot_tests;
