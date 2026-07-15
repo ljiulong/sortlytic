@@ -12,6 +12,7 @@ use super::recovery::{
   gate_queued_run_for_claim, quarantine_queued_request_uncertainty, recovery_stage,
   run_snapshot_allows_plan_reconfirmation,
 };
+use super::snapshot::create_runtime_snapshot;
 use super::validation::validate_plan_for_task;
 use super::{
   database_error, get_task_by_id, get_task_run, latest_plan_for_task, map_task_run,
@@ -60,6 +61,7 @@ pub fn enqueue_task(root_path: impl AsRef<Path>, task_id: &str) -> AppResult<Tas
     )
     .map_err(database_error)?;
   materialize_run_steps(&transaction, &run_id, &plan_id, &now)?;
+  create_runtime_snapshot(&transaction, &run_id, &plan_id, &now)?;
   transaction
     .execute(
       "UPDATE collection_task
@@ -211,6 +213,7 @@ pub fn retry_task(
     )
     .map_err(database_error)?;
   materialize_run_steps(&transaction, &run_id, &plan_id, &now)?;
+  create_runtime_snapshot(&transaction, &run_id, &plan_id, &now)?;
   transaction
     .execute(
       "UPDATE collection_task SET status = 'queued', updated_at = ?1 WHERE id = ?2",

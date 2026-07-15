@@ -12,6 +12,7 @@ use crate::workspace::{open_workspace_database, DATABASE_FILE_NAME};
 mod execution;
 mod plans;
 mod recovery;
+mod snapshot;
 mod validation;
 mod worker;
 
