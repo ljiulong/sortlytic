@@ -294,6 +294,37 @@ describe('TikHub connector 后端 API', () => {
     })
     expect(invokeMock.mock.calls.map(([command]) => command)).not.toContain('update_secret')
   })
+
+  it('已有 TikHub 密钥时留空 Token 也能切换已保存域名', async () => {
+    const connector = connectorFixture()
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'get_tikhub_connector') return connector
+      if (command === 'list_secret_refs') return [tikhubSecret]
+      if (command === 'save_tikhub_connector') return { ...connector, base_url: 'https://api.tikhub.dev' }
+      if (command === 'test_tikhub_connector') {
+        return {
+          success: true,
+          base_url: 'https://api.tikhub.dev',
+          daily_usage_json: {},
+          message: 'TikHub Token 可用',
+        }
+      }
+      if (command === 'update_secret') throw new Error('切换域名不应覆盖已有 Token')
+      throw new Error(`意外命令：${command}`)
+    })
+
+    await saveAndTestTikhubToken({ token: '', baseUrl: 'https://api.tikhub.dev' })
+
+    expect(invokeMock).toHaveBeenCalledWith('save_tikhub_connector', {
+      input: {
+        secret_ref_id: tikhubSecret.id,
+        base_url: 'https://api.tikhub.dev',
+        enabled: true,
+      },
+      rootPath: null,
+    })
+    expect(invokeMock).not.toHaveBeenCalledWith('update_secret', expect.anything())
+  })
 })
 
 describe('模型供应商密钥引用', () => {
@@ -361,6 +392,57 @@ describe('模型供应商密钥引用', () => {
       providerId: 'ollama',
       rootPath: null,
     })
+    vi.unstubAllGlobals()
+  })
+
+  it('已有模型供应商留空 API Key 时复用安全存储密钥', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    const existingProvider = {
+      provider_id: 'openai',
+      display_name: 'OpenAI',
+      enabled: true,
+      auth_type: 'api_key',
+      secret_ref_id: 'model-secret-1',
+      base_url: 'https://api.openai.com/v1',
+      api_format: 'openai_compatible',
+      region: null,
+      default_model_id: 'gpt-4.1-mini',
+      cost_policy_json: {},
+      rate_limit_policy_json: {},
+      health_check_json: {},
+      id: 'provider-1',
+      created_at: '2026-07-13T00:00:00Z',
+      updated_at: '2026-07-13T00:00:00Z',
+    }
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'list_model_providers') return [existingProvider]
+      if (command === 'test_secret_connection') return { success: true }
+      if (command === 'update_model_provider') return existingProvider
+      if (command === 'upsert_model_profile') return { id: 'profile-1' }
+      if (command === 'set_default_model' || command === 'set_active_model_provider') return true
+      if (command === 'test_model_provider') {
+        return { provider_id: 'openai', success: true, message: '配置完整' }
+      }
+      if (command === 'update_secret') throw new Error('留空 API Key 不应覆盖已有密钥')
+      if (command === 'save_secret') throw new Error('已有供应商不应新建密钥')
+      throw new Error(`意外命令：${command}`)
+    })
+
+    const result = renderWorkbenchHook()
+    await result.saveAndValidateModelProvider({
+      providerId: 'openai',
+      displayName: 'OpenAI',
+      apiFormat: 'openai_compatible',
+      baseUrl: 'https://api.openai.com/v1',
+      defaultModelId: 'gpt-4.1-mini',
+      apiKey: '',
+    })
+
+    expect(invokeMock).toHaveBeenCalledWith('test_secret_connection', {
+      secretRefId: 'model-secret-1',
+      rootPath: null,
+    })
+    expect(invokeMock).not.toHaveBeenCalledWith('update_secret', expect.anything())
     vi.unstubAllGlobals()
   })
 })
