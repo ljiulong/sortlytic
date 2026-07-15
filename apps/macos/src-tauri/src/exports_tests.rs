@@ -34,7 +34,9 @@ fn report_exports_xlsx_and_pdf_files() {
   assert_eq!(xlsx.status, "success");
   assert_eq!(pdf.status, "success");
   assert!(xlsx.file_path.expect("xlsx path").is_file());
-  assert!(pdf.file_path.expect("pdf path").is_file());
+  let pdf_path = pdf.file_path.expect("pdf path");
+  assert!(pdf_path.is_file());
+  assert_pdf_xref_is_well_formed(&fs::read(pdf_path).expect("pdf should be readable"));
   assert!(xlsx.file_hash.is_some());
   assert!(pdf.file_size.unwrap_or_default() > 0);
 
@@ -133,4 +135,48 @@ fn test_report(label: &str) -> (std::path::PathBuf, ReportView) {
 
 fn unique_temp_workspace(label: &str) -> std::path::PathBuf {
   std::env::temp_dir().join(format!("smart-data-workbench-{label}-{}", Uuid::new_v4()))
+}
+
+fn assert_pdf_xref_is_well_formed(bytes: &[u8]) {
+  let text = std::str::from_utf8(bytes).expect("generated PDF should be UTF-8 in this fixture");
+  let startxref_marker = "\nstartxref\n";
+  let startxref_position = text
+    .find(startxref_marker)
+    .expect("PDF should declare startxref");
+  let xref_offset = text[startxref_position + startxref_marker.len()..]
+    .lines()
+    .next()
+    .expect("startxref should contain an offset")
+    .parse::<usize>()
+    .expect("startxref should contain a numeric offset");
+  assert_eq!(text.get(xref_offset..xref_offset + 5), Some("xref\n"));
+
+  let mut lines = text[xref_offset..].lines();
+  assert_eq!(lines.next(), Some("xref"));
+  let subsection = lines.next().expect("xref should declare a subsection");
+  let mut subsection_parts = subsection.split_whitespace();
+  assert_eq!(subsection_parts.next(), Some("0"));
+  let object_count = subsection_parts
+    .next()
+    .expect("xref should declare an object count")
+    .parse::<usize>()
+    .expect("xref object count should be numeric");
+  assert_eq!(object_count, 6);
+  assert_eq!(lines.next(), Some("0000000000 65535 f "));
+
+  for object_number in 1..object_count {
+    let entry = lines
+      .next()
+      .expect("xref should contain every object entry");
+    let offset = entry[..10]
+      .parse::<usize>()
+      .expect("xref object offset should be numeric");
+    let header = format!("{object_number} 0 obj");
+    assert!(
+      text
+        .get(offset..)
+        .is_some_and(|object| object.starts_with(&header)),
+      "xref entry should point to object {object_number}"
+    );
+  }
 }
