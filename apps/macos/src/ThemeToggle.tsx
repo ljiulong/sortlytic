@@ -47,6 +47,7 @@ function ThemeToggle() {
   return (
     <button
       aria-label={label}
+      aria-pressed={theme === 'dark'}
       className="toolbar-icon-button theme-toggle"
       title={label}
       type="button"
