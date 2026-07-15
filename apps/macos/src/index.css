@@ -126,26 +126,12 @@ body::-webkit-scrollbar,
 }
 
 .app-shell {
-  position: relative;
-  isolation: isolate;
   height: 100vh;
   overflow: hidden;
   background: var(--canvas);
-  border: 1px solid var(--border-subtle);
+  border: 0;
   border-radius: 16px;
-  box-shadow: 0 14px 40px rgb(15 18 24 / 14%);
-}
-.app-shell::before {
-  position: fixed;
-  z-index: 0;
-  inset: 0;
-  content: '';
-  background: var(--canvas);
-  border-radius: 16px;
-}
-.app-shell > * {
-  position: relative;
-  z-index: 1;
+  box-shadow: none;
 }
 .workspace {
   height: 100vh;
