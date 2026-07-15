@@ -18,7 +18,11 @@ use super::{
   task_error, TaskRunView,
 };
 
+mod recovery;
 mod runtime;
+use recovery::{
+  ensure_record_limit, mark_response_checkpoint_completed, parse_response_checkpoint,
+};
 use runtime::load_runtime_snapshot;
 
 struct RunStep {
@@ -37,10 +41,16 @@ struct Checkpoint {
   id: String,
   page_index: i64,
   status: String,
+  request_attempt_count: i64,
   idempotency_key: String,
   input_cursor: Option<Value>,
   next_cursor: Option<Value>,
   has_more: Option<bool>,
+  provider_response_json: Option<String>,
+  provider_response_hash: Option<String>,
+  provider_response_size: Option<i64>,
+  record_count_received: i64,
+  response_received_at: Option<String>,
 }
 
 pub fn execute_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRunView>> {
@@ -145,6 +155,10 @@ where
     .last()
     .filter(|checkpoint| checkpoint.status == "prepared")
     .cloned();
+  let mut response_checkpoint = existing
+    .last()
+    .filter(|checkpoint| checkpoint.status == "response_received")
+    .cloned();
   if step.status == "success" {
     if existing
       .last()
@@ -172,6 +186,46 @@ where
         "TikHub 续页请求次数达到计划上限",
         false,
       ));
+    }
+    if let Some(checkpoint) = response_checkpoint.take() {
+      let page = parse_response_checkpoint(step, &checkpoint)?;
+      ensure_record_limit(&connection, &run_id, step.record_limit, page.records.len())?;
+      let persisted = persist_collection_page(
+        root_path,
+        PersistCollectionPageInput {
+          task_id: task_id.clone(),
+          task_run_id: run_id.clone(),
+          platform: step.platform.clone(),
+          data_type: step.data_type.clone(),
+          records: page.records.clone(),
+          collected_at: checkpoint.response_received_at.clone(),
+        },
+      )?;
+      let persisted_count = persisted
+        .inserted_count
+        .checked_add(persisted.existing_count)
+        .ok_or_else(|| task_error("已持久化记录数溢出"))?;
+      if persisted_count != page.records.len() {
+        return Err(worker_error(
+          "RECORD_PERSISTENCE_INCOMPLETE",
+          "TikHub 响应未能全部写入本地存储",
+          false,
+        ));
+      }
+      let committed_at = Utc::now().to_rfc3339();
+      mark_response_checkpoint_completed(
+        &connection,
+        &checkpoint.id,
+        i64::try_from(persisted_count).map_err(|_| task_error("持久化记录数超出数据库范围"))?,
+        &committed_at,
+      )?;
+      if !page.has_more {
+        mark_step_success(&connection, &step.id, &committed_at)?;
+        return Ok(());
+      }
+      cursor = page.next_cursor;
+      page_index += 1;
+      continue;
     }
     let request = build_collection_request(
       &step.platform,
@@ -207,34 +261,18 @@ where
       }
     };
     let response_received_at = Utc::now().to_rfc3339();
-    let persisted_before: i64 = connection
-      .query_row(
-        "SELECT COALESCE(SUM(checkpoint.record_count_persisted), 0)
-         FROM collection_page_checkpoint AS checkpoint
-         JOIN task_run_step AS run_step
-           ON run_step.id = checkpoint.task_run_step_id
-         WHERE run_step.task_run_id = ?1",
-        params![run_id],
-        |row| row.get(0),
-      )
-      .map_err(database_error)?;
-    let page_count = i64::try_from(page.records.len())
-      .map_err(|_| task_error("TikHub 响应记录数超出数据库范围"))?;
-    let persisted_after = persisted_before
-      .checked_add(page_count)
-      .ok_or_else(|| task_error("累计记录数溢出"))?;
-    if persisted_after > step.record_limit {
-      mark_checkpoint_failed(
-        &connection,
-        &checkpoint_id,
-        "RECORD_LIMIT_REACHED",
-        "响应记录数将超过已确认的记录上限",
-      )?;
-      return Err(worker_error(
-        "RECORD_LIMIT_REACHED",
-        "TikHub 响应记录数将超过计划上限",
-        false,
-      ));
+    if let Err(error) =
+      ensure_record_limit(&connection, &run_id, step.record_limit, page.records.len())
+    {
+      if error.safe_details.get("worker_code").map(String::as_str) == Some("RECORD_LIMIT_REACHED") {
+        mark_checkpoint_failed(
+          &connection,
+          &checkpoint_id,
+          "RECORD_LIMIT_REACHED",
+          "响应记录数将超过已确认的记录上限",
+        )?;
+      }
+      return Err(error);
     }
     let persisted = match persist_collection_page(
       root_path,
@@ -315,6 +353,13 @@ fn resume_position(checkpoints: &[Checkpoint]) -> AppResult<(i64, Option<Value>)
         false,
       ));
     }
+    if index == 0 && checkpoint.input_cursor.is_some() {
+      return Err(worker_error(
+        "CHECKPOINT_CHAIN_INVALID",
+        "首个检查点不能携带续页游标",
+        false,
+      ));
+    }
     if index > 0 {
       let previous = &checkpoints[index - 1];
       if previous.has_more != Some(true) || previous.next_cursor != checkpoint.input_cursor {
@@ -340,6 +385,7 @@ fn resume_position(checkpoints: &[Checkpoint]) -> AppResult<(i64, Option<Value>)
   };
   match last.status.as_str() {
     "prepared" => Ok((last.page_index, last.input_cursor.clone())),
+    "response_received" => Ok((last.page_index, last.input_cursor.clone())),
     "completed" if last.has_more == Some(false) => Ok((last.page_index + 1, None)),
     "completed" if last.has_more == Some(true) && last.next_cursor.is_some() => {
       Ok((last.page_index + 1, last.next_cursor.clone()))
@@ -363,8 +409,10 @@ fn load_checkpoints(
 ) -> AppResult<Vec<Checkpoint>> {
   let mut statement = connection
     .prepare(
-      "SELECT id, page_index, status, idempotency_key, input_cursor_json,
-              next_cursor_json, has_more
+      "SELECT id, page_index, status, request_attempt_count, idempotency_key, input_cursor_json,
+              next_cursor_json, has_more, provider_response_json,
+              provider_response_hash, provider_response_size,
+              record_count_received, response_received_at
        FROM collection_page_checkpoint
        WHERE task_run_step_id = ?1
        ORDER BY page_index, id",
@@ -372,24 +420,15 @@ fn load_checkpoints(
     .map_err(database_error)?;
   let rows = statement
     .query_map(params![run_step_id], |row| {
-      let input_cursor: Option<String> = row.get(4)?;
-      let next_cursor: Option<String> = row.get(5)?;
+      let input_cursor: Option<String> = row.get(5)?;
+      let next_cursor: Option<String> = row.get(6)?;
       Ok(Checkpoint {
         id: row.get(0)?,
         page_index: row.get(1)?,
         status: row.get(2)?,
-        idempotency_key: row.get(3)?,
+        request_attempt_count: row.get(3)?,
+        idempotency_key: row.get(4)?,
         input_cursor: input_cursor
-          .map(|value| serde_json::from_str(&value))
-          .transpose()
-          .map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(
-              4,
-              rusqlite::types::Type::Text,
-              Box::new(error),
-            )
-          })?,
-        next_cursor: next_cursor
           .map(|value| serde_json::from_str(&value))
           .transpose()
           .map_err(|error| {
@@ -399,7 +438,22 @@ fn load_checkpoints(
               Box::new(error),
             )
           })?,
-        has_more: row.get::<_, Option<i64>>(6)?.map(|value| value != 0),
+        next_cursor: next_cursor
+          .map(|value| serde_json::from_str(&value))
+          .transpose()
+          .map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+              6,
+              rusqlite::types::Type::Text,
+              Box::new(error),
+            )
+          })?,
+        has_more: row.get::<_, Option<i64>>(7)?.map(|value| value != 0),
+        provider_response_json: row.get(8)?,
+        provider_response_hash: row.get(9)?,
+        provider_response_size: row.get(10)?,
+        record_count_received: row.get(11)?,
+        response_received_at: row.get(12)?,
       })
     })
     .map_err(database_error)?;
