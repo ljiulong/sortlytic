@@ -4,7 +4,7 @@
 
 ## 1. 文档目的
 
-本文档用于指导智能数据整理平台 macOS 本地应用的实机 UI 测试。测试对象必须是打包后的桌面应用产物，而不是浏览器开发服务器页面。
+本文档用于指导 Sortlytic macOS 本地应用的实机 UI 测试。测试对象必须是打包后的桌面应用产物，而不是浏览器开发服务器页面。
 
 核心方法采用“猜测-测试-修复”闭环：
 
@@ -15,7 +15,7 @@
 
 ## 2. 测试对象
 
-应用名称：智能数据整理平台
+应用名称：Sortlytic
 
 应用类型：Tauri v2 macOS 本地桌面应用
 
@@ -30,7 +30,7 @@ pnpm tauri build --bundles app
 打包产物：
 
 ```text
-apps/macos/src-tauri/target/release/bundle/macos/智能数据整理平台.app
+apps/macos/src-tauri/target/release/bundle/macos/Sortlytic.app
 ```
 
 判断标准：
@@ -63,12 +63,12 @@ pnpm tauri build --bundles app
 4. 打开打包产物：
 
 ```bash
-open "src-tauri/target/release/bundle/macos/智能数据整理平台.app"
+open "src-tauri/target/release/bundle/macos/Sortlytic.app"
 ```
 
 5. 确认测试对象：
 
-- 应用窗口标题为“智能数据整理平台”。
+- 应用窗口标题为“Sortlytic”。
 - 应用内容来自 `tauri://localhost`。
 - 不依赖正在运行的 Vite dev server。
 
@@ -180,7 +180,7 @@ open "src-tauri/target/release/bundle/macos/智能数据整理平台.app"
 测试步骤：
 
 1. 执行 `pnpm tauri build --bundles app`。
-2. 打开 `src-tauri/target/release/bundle/macos/智能数据整理平台.app`。
+2. 打开 `src-tauri/target/release/bundle/macos/Sortlytic.app`。
 3. 检查窗口标题与页面地址。
 
 预期结果：
@@ -342,7 +342,7 @@ open "src-tauri/target/release/bundle/macos/智能数据整理平台.app"
 
 操作步骤：
 
-1. 打开 `src-tauri/target/release/bundle/macos/智能数据整理平台.app`。
+1. 打开 `src-tauri/target/release/bundle/macos/Sortlytic.app`。
 2. 使用实机 UI 检查应用窗口。
 3. 确认页面地址。
 
@@ -417,4 +417,3 @@ open "src-tauri/target/release/bundle/macos/智能数据整理平台.app"
 - 视觉回归测试：桌面默认窗口、最小窗口、全屏窗口截图对比。
 - 导出安全测试：确认导出前检查不会上传密钥、Header、完整原始数据。
 - 数据一致性测试：记录表、证据面板、导出内容使用同一条记录 ID 作为关联键。
-

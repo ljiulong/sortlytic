@@ -8,14 +8,14 @@
 
 本次可交付产物位于：
 
-- 应用包：`apps/macos/src-tauri/target/release/bundle/macos/智能数据整理平台.app`
-- 安装包：`apps/macos/src-tauri/target/release/bundle/dmg/智能数据整理平台_0.1.0_aarch64.dmg`
+- 应用包：`apps/macos/src-tauri/target/release/bundle/macos/Sortlytic.app`
+- 安装包：`apps/macos/src-tauri/target/release/bundle/dmg/Sortlytic_0.1.0_aarch64.dmg`
 
 建议给非开发用户分发 `.dmg`。测试机打开后，如 macOS 提示来自未认证开发者，可在“系统设置 > 隐私与安全性”中允许打开。
 
 ## 2. 首次使用流程
 
-1. 打开 `智能数据整理平台.app`。
+1. 打开 `Sortlytic.app`。
 2. 应用会自动创建默认本地工作区。
 3. 首页应显示“本地研究工作区”，并展示任务、记录、预计请求、证据覆盖等指标。
 4. 右侧面板应显示“TikHub 设置 / 免费额度可行性测试”。
@@ -77,8 +77,8 @@
 
 本次导出验证产物：
 
-- Excel：`~/Library/Application Support/com.steven.smart-data-workbench/default-workspace/exports/excel/88efd279-4da3-4811-887f-5971b57e47e6.xlsx`
-- PDF：`~/Library/Application Support/com.steven.smart-data-workbench/default-workspace/exports/pdf/88efd279-4da3-4811-887f-5971b57e47e6.pdf`
+- Excel：`~/Library/Application Support/com.steven.sortlytic/default-workspace/exports/excel/88efd279-4da3-4811-887f-5971b57e47e6.xlsx`
+- PDF：`~/Library/Application Support/com.steven.sortlytic/default-workspace/exports/pdf/88efd279-4da3-4811-887f-5971b57e47e6.pdf`
 
 文件校验：
 
