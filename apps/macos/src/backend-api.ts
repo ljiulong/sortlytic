@@ -7,6 +7,18 @@ export type BackendStatus = {
   uptime_ms: number
 }
 
+export type AppUpdateInfo = {
+  version: string
+  date?: string
+  body?: string
+}
+
+type PendingAppUpdate = AppUpdateInfo & {
+  downloadAndInstall: () => Promise<void>
+}
+
+let pendingAppUpdate: PendingAppUpdate | null = null
+
 export type WorkspaceSummary = {
   id: string
   name: string
@@ -434,6 +446,35 @@ export function createExportJob(reportId: string, exportType: 'xlsx' | 'pdf') {
     targetPath: null,
     rootPath: null,
   })
+}
+
+export async function checkForAppUpdate(): Promise<AppUpdateInfo | null> {
+  const { check } = await import('@tauri-apps/plugin-updater')
+  const update = await check()
+  pendingAppUpdate = update
+    ? {
+        version: update.version,
+        date: update.date,
+        body: update.body,
+        downloadAndInstall: () => update.downloadAndInstall(),
+      }
+    : null
+  return pendingAppUpdate
+    ? {
+        version: pendingAppUpdate.version,
+        date: pendingAppUpdate.date,
+        body: pendingAppUpdate.body,
+      }
+    : null
+}
+
+export async function installAppUpdate() {
+  if (!pendingAppUpdate) {
+    throw new Error('请先检查更新')
+  }
+  await pendingAppUpdate.downloadAndInstall()
+  const { relaunch } = await import('@tauri-apps/plugin-process')
+  await relaunch()
 }
 
 export function backendErrorMessage(error: unknown) {

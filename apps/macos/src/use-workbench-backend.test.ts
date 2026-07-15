@@ -3,9 +3,11 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   backendErrorMessage,
+  checkForAppUpdate,
   type CollectionPlanView,
   type CollectionTaskView,
   getTikhubConnector,
+  installAppUpdate,
   saveTikhubConnector,
   type SecretRefView,
   testTikhubConnector,
@@ -28,6 +30,9 @@ type CapturedMutationOptions = {
 }
 
 const invokeMock = vi.hoisted(() => vi.fn())
+const updaterCheckMock = vi.hoisted(() => vi.fn())
+const updaterInstallMock = vi.hoisted(() => vi.fn())
+const relaunchMock = vi.hoisted(() => vi.fn())
 const invalidateQueriesMock = vi.hoisted(() => vi.fn())
 const mutationOptionsMock = vi.hoisted(() => ({ current: [] as CapturedMutationOptions[] }))
 const stateSettersMock = vi.hoisted(() => ({ current: [] as ReturnType<typeof vi.fn>[] }))
@@ -41,6 +46,10 @@ const queryMock = vi.hoisted(() => ({
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }))
+
+vi.mock('@tauri-apps/plugin-updater', () => ({ check: updaterCheckMock }))
+
+vi.mock('@tauri-apps/plugin-process', () => ({ relaunch: relaunchMock }))
 
 vi.mock('react', async () => {
   const actual = await vi.importActual<typeof import('react')>('react')
@@ -147,6 +156,40 @@ beforeEach(() => {
     isLoading: true,
     isSuccess: false,
   }
+  updaterCheckMock.mockReset()
+  updaterInstallMock.mockReset()
+  relaunchMock.mockReset()
+})
+
+describe('应用更新 API', () => {
+  it('检查到新版本后可下载安装并重启应用', async () => {
+    const update = {
+      version: '0.1.4',
+      date: '2026-07-15T08:00:00Z',
+      body: '修复稳定性问题',
+      downloadAndInstall: updaterInstallMock,
+    }
+    updaterCheckMock.mockResolvedValue(update)
+    updaterInstallMock.mockResolvedValue(undefined)
+    relaunchMock.mockResolvedValue(undefined)
+
+    await expect(checkForAppUpdate()).resolves.toEqual({
+      version: update.version,
+      date: update.date,
+      body: update.body,
+    })
+    await installAppUpdate()
+
+    expect(updaterInstallMock).toHaveBeenCalledOnce()
+    expect(relaunchMock).toHaveBeenCalledOnce()
+  })
+
+  it('没有新版本时清空待安装版本并阻止误安装', async () => {
+    updaterCheckMock.mockResolvedValue(null)
+
+    await expect(checkForAppUpdate()).resolves.toBeNull()
+    await expect(installAppUpdate()).rejects.toThrow('请先检查更新')
+  })
 })
 
 describe('TikHub connector 后端 API', () => {
