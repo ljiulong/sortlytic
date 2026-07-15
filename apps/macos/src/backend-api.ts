@@ -360,6 +360,13 @@ export function setDefaultModel(providerId: string, modelId: string) {
   })
 }
 
+export function setActiveModelProvider(providerId: string) {
+  return invoke<boolean>('set_active_model_provider', {
+    providerId,
+    rootPath: null,
+  })
+}
+
 export function testModelProvider(providerId: string, modelId?: string) {
   return invoke<ProviderTestResult>('test_model_provider', {
     providerId,

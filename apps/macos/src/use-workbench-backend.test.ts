@@ -325,6 +325,7 @@ describe('模型供应商密钥引用', () => {
       if (command === 'update_model_provider') return existingProvider
       if (command === 'upsert_model_profile') return { id: 'profile-1' }
       if (command === 'set_default_model') return true
+      if (command === 'set_active_model_provider') return true
       if (command === 'test_model_provider') {
         return { provider_id: 'openai', success: true, message: '配置完整' }
       }
@@ -346,6 +347,20 @@ describe('模型供应商密钥引用', () => {
 
     expect(commands).toContain('update_secret')
     expect(commands).not.toContain('save_secret')
+    vi.unstubAllGlobals()
+  })
+
+  it('使用独立 command 持久化切换当前模型供应商', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    invokeMock.mockResolvedValue(true)
+
+    const result = renderWorkbenchHook()
+    await result.activateModelProvider('ollama')
+
+    expect(invokeMock).toHaveBeenCalledWith('set_active_model_provider', {
+      providerId: 'ollama',
+      rootPath: null,
+    })
     vi.unstubAllGlobals()
   })
 })

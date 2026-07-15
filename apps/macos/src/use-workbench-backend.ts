@@ -19,6 +19,7 @@ import {
   saveCollectionPlan,
   saveSecret,
   saveTikhubConnector,
+  setActiveModelProvider,
   setDefaultModel,
   type CollectionPlanView,
   type CollectionTaskView,
@@ -183,6 +184,7 @@ export function useWorkbenchBackend() {
   const [tikhubTestResult, setTikhubTestResult] = useState<TikhubConnectionTestResult>()
   const [modelValidationResult, setModelValidationResult] = useState<ProviderTestResult>()
   const [isModelSettingsPending, setIsModelSettingsPending] = useState(false)
+  const [isModelActivationPending, setIsModelActivationPending] = useState(false)
   const appUpdater = useAppUpdater()
 
   const dataQuery = useQuery({
@@ -319,6 +321,7 @@ export function useWorkbenchBackend() {
         enabled: true,
       })
       await setDefaultModel(input.providerId, input.defaultModelId)
+      await setActiveModelProvider(input.providerId)
 
       const result = await testModelProvider(input.providerId, input.defaultModelId)
       setModelValidationResult(result)
@@ -330,6 +333,21 @@ export function useWorkbenchBackend() {
       throw error
     } finally {
       setIsModelSettingsPending(false)
+    }
+  }
+
+  const activateModelProvider = async (providerId: string) => {
+    assertTauriRuntime()
+    setIsModelActivationPending(true)
+    try {
+      await setActiveModelProvider(providerId)
+      setActionMessage('模型 API 配置已切换')
+      await queryClient.invalidateQueries({ queryKey })
+    } catch (error) {
+      setActionMessage(backendErrorMessage(error))
+      throw error
+    } finally {
+      setIsModelActivationPending(false)
     }
   }
 
@@ -355,6 +373,7 @@ export function useWorkbenchBackend() {
       exportMutation.isPending ||
       saveTikhubTokenMutation.isPending ||
       isModelSettingsPending ||
+      isModelActivationPending ||
       appUpdater.isUpdateBusy,
     generateFormPlan: generateFormPlanMutation.mutateAsync,
     generateNaturalPlan: generateNaturalPlanMutation.mutateAsync,
@@ -365,6 +384,8 @@ export function useWorkbenchBackend() {
     saveAndValidateModelProvider,
     modelValidationResult,
     isModelSettingsPending,
+    isModelActivationPending,
+    activateModelProvider,
     ...appUpdater,
     refresh: () => queryClient.invalidateQueries({ queryKey }),
   }
