@@ -50,14 +50,18 @@ English · <a href="README-zh.md">中文</a>
 
 ## Quick Start
 
-### Prerequisites
+### Download the macOS app
 
-- macOS
-- Node.js 24, matching the CI baseline
-- pnpm 11.5.2 through Corepack
-- Rust 1.77.2 or newer
+1. Open the [latest GitHub Release](https://github.com/ljiulong/sortlytic/releases/latest).
+2. Check your Mac architecture from **Apple menu → About This Mac**, or run `uname -m` in Terminal.
+3. Download the DMG whose name ends in `_aarch64.dmg` for Apple Silicon (`arm64`), or `_x64.dmg` for an Intel Mac (`x86_64`). The `.app.tar.gz` and `.sig` files are updater artifacts, not the normal installer.
+4. Open the DMG, drag Sortlytic into **Applications**, eject the disk image, and launch Sortlytic from the Applications folder.
 
-### Install
+The current release workflow does not yet apply Apple Developer ID signing and notarization. Read [First launch and the “damaged” alert](#first-launch-and-the-damaged-alert) before overriding any macOS security warning.
+
+### Run from source
+
+Source development requires macOS, Node.js 24, pnpm 11.5.2 through Corepack, and Rust 1.77.2 or newer.
 
 ```bash
 git clone https://github.com/ljiulong/sortlytic.git
@@ -65,28 +69,138 @@ cd sortlytic/apps/macos
 corepack enable
 corepack install
 pnpm install --frozen-lockfile
-```
-
-### Run the desktop app
-
-```bash
 pnpm tauri dev
 ```
 
-### Run the frontend only
+For interface preview without the native backend, run:
 
 ```bash
 pnpm dev
 ```
 
+The browser preview uses demonstration data. It cannot use macOS Keychain, execute native collection tasks, create local exports, or install application updates.
+
 ## Usage
 
-1. **Configure local connections.** Open Settings, save a TikHub token, select the appropriate TikHub API domain, and run the connection test. Model provider profiles can also be stored and tested from the same page.
-2. **Create and confirm a plan.** Use the form planner or the local natural-language parser, review platform scope and limits, then confirm the plan before execution.
-3. **Run and inspect the task.** The local worker processes queued steps, persists checkpoints and raw records, and exposes task logs, runtime snapshots, and validation status.
-4. **Export deliverables.** Build a report model, pass the export integrity gate, and generate XLSX and PDF files under the local workspace.
+### First launch and the “damaged” alert
 
-The current natural-language planner uses `local-rule-engine/rule-parser-v1`. Model provider configuration and health checks are implemented, but provider-backed plan generation is not connected yet.
+The current `v0.1.5` release contains Tauri updater signatures, but the GitHub Actions workflow does not yet contain the Apple Developer ID certificate and notarization credentials required by macOS Gatekeeper. Tauri documents that browser-downloaded macOS apps need code signing to avoid the “application is damaged and can’t be opened” warning. Updater signatures verify update artifacts inside Sortlytic; they do not replace Apple code signing or notarization.
+
+If macOS shows the alert in the screenshot:
+
+1. Delete the rejected copy and download the correct DMG again from the [official Sortlytic Releases page](https://github.com/ljiulong/sortlytic/releases). Do not use a mirror or a file forwarded through chat.
+2. Confirm that `_aarch64.dmg` matches Apple Silicon or `_x64.dmg` matches an Intel Mac.
+3. Try to open Sortlytic once, then open **System Settings → Privacy & Security**. If **Open Anyway** is available, use it only after confirming the download source. Apple notes that this exception is normally offered for about one hour after an attempted launch.
+4. If macOS still reports that the app is damaged, does not offer **Open Anyway**, or moves it to the Trash, do not disable Gatekeeper globally. Run the app from source or wait for a Developer ID-signed and notarized release.
+
+See [Apple’s Gatekeeper guidance](https://support.apple.com/102445) and [Tauri’s macOS signing guide](https://v2.tauri.app/distribute/sign/macos/) for the security model and release requirements.
+
+### Interface map
+
+| Area | Use it for |
+|---|---|
+| Workbench | Create plans, confirm collection, follow task status, review data and evidence, and export deliverables. |
+| Settings | Inspect the local workspace, configure TikHub and model providers, retest connections, and install updates. |
+| Guide button | Open the book icon in the top-right corner for TikHub registration, token, domain, cost, and safety guidance. |
+| Theme button | Switch between light and dark themes; the preference is retained locally. |
+
+### Configure TikHub
+
+TikHub is required for real collection. Create and verify an account before building a task:
+
+1. [Register a TikHub account](https://user.tikhub.io/register), verify the email address, then [sign in to the user center](https://user.tikhub.io/login).
+2. Create an API Token in the user center and copy it when shown. Check the [TikHub pricing page](https://tikhub.io/pricing) before using paid endpoints.
+3. In Sortlytic, open **Settings → TikHub Settings → Configure TikHub API**.
+4. Select a domain, paste the token, and choose **Save and Test**.
+
+| Network | API domain |
+|---|---|
+| International network | `https://api.tikhub.io` |
+| Mainland China network | `https://api.tikhub.dev` |
+
+A successful test displays the masked account email, available free credit, and email verification status. The token is written to macOS Keychain; the SQLite workspace stores only a scoped secret reference. When editing an existing configuration, leave the token field empty to reuse the saved token.
+
+Start the first collection with 10–50 records. This makes it easier to verify the platform, data type, region, keyword, and endpoint cost before expanding the task.
+
+### Configure a model provider (optional)
+
+Open **Settings → Model API Settings** to store an OpenAI, Anthropic, Gemini, or custom OpenAI-compatible profile. Select the API format, fill in the Base URL when required, enter the default model ID and API key, then choose **Save and Validate**. The available API formats also include Ollama for saved local-provider configurations. Saved keys use macOS Keychain and can be reused without re-entering them.
+
+This configuration is optional in the current MVP. Natural-language planning still uses `local-rule-engine/rule-parser-v1`; provider-backed plan generation and real model inference are not connected yet.
+
+### Create and confirm a collection plan
+
+Open **Workbench → Collection Builder** and choose an entry method:
+
+| Method | When to use it | Required review |
+|---|---|---|
+| Form | You already know the platform, data type, region, keyword, time range, record limit, and budget. | Confirm every field before generating the plan. |
+| Natural language | You want to describe the research goal in Chinese and let the local parser structure it. | Check inferred platforms, data types, missing conditions, record limits, and budget. |
+
+The form supports TikTok, Douyin, and Xiaohongshu with keyword search, public account information, comment collection, and item details. A single task accepts 10–5,000 records and a budget value from 1–500.
+
+After selecting **Generate Plan** or **Parse into Plan**:
+
+1. Review the plan preview, especially platform, data type, region, time range, maximum records, request estimate, and amount limit.
+2. Resolve any value shown under **Missing Conditions**. A plan cannot be confirmed until backend validation reports it as valid.
+3. Select **Confirm Run**. Planning itself does not start paid collection; confirmation adds the task to the local queue.
+4. Follow the task in **Task Queue**. Possible states include queued, running, waiting for confirmation, partially successful, successful, and failed.
+
+### Review results and evidence
+
+Select a row under **Data Assets** to inspect its source link, evidence summary, validation state, confidence, model run, and transformation reason in the right-hand panel. Records marked **Manual Confirmation** or **Insufficient Evidence** should be checked before they are used in a report.
+
+Current MVP boundary: native tasks and raw-record storage are implemented, but the workbench’s real-record query is not connected yet. In a packaged backend session, **Data Assets** may therefore remain empty even after a task runs. Browser preview rows are demonstration data and are not collection results.
+
+### Export Excel and PDF
+
+1. Create at least one collection task.
+2. In the right-hand **Export Center**, select **Run Export Check**.
+3. Sortlytic builds a report snapshot, validates the export request, and creates both XLSX and PDF jobs.
+4. When both jobs show **Passed**, use the paths displayed under **Excel Workbook** and **PDF Report** to locate the files.
+
+Files are written under the active workspace:
+
+```text
+default-workspace/
+├── app.sqlite
+├── raw/tikhub/
+├── reports/
+├── exports/excel/
+└── exports/pdf/
+```
+
+Use XLSX for the structured report payload. The current PDF writer produces a short summary that points readers to the workbook for complete structured data. **Webhook Summary** is visible in the interface but is not enabled and does not send data.
+
+### Update the app
+
+Packaged releases can update from **Settings → Automatic Updates**:
+
+1. Select **Check for Updates**.
+2. Review the version number and release notes.
+3. Select **Download and Restart**. Sortlytic verifies the Tauri updater artifact signature, installs the update, and relaunches.
+
+Browser preview does not have update permission. Apple Developer ID signing and notarization are separate from updater signature verification and still need to be added to the release workflow.
+
+### Troubleshooting
+
+| Symptom | Check |
+|---|---|
+| “Sortlytic is damaged and can’t be opened” | Re-download the matching DMG from the official release, then follow [First launch and the “damaged” alert](#first-launch-and-the-damaged-alert). |
+| TikHub test fails | Check that the token is complete, the email is verified, the domain matches the current network, and the account has enough credit. |
+| **Save and Test** is disabled | A new TikHub token must contain at least 8 characters. An existing saved token can be reused by leaving the field empty. |
+| A plan cannot be confirmed | Generate the plan first, clear **Missing Conditions**, and verify that its validation status is valid. |
+| Export fails | Create a task first. Then read the message below the workspace title for the backend error and retry after the task data is available. |
+| The screen shows realistic records but no native features work | The app is running through `pnpm dev` in browser demonstration mode. Start it with `pnpm tauri dev` or use the packaged app. |
+| No **Open Anyway** button appears | Re-attempt the launch and check Privacy & Security within one hour. If macOS still rejects the file, do not disable Gatekeeper globally. |
+
+### Data and security boundaries
+
+- Sortlytic currently creates one local `default-workspace`; it does not provide user accounts, a remote database, remote synchronization, or multi-device synchronization.
+- Workspace data, raw responses, prompt snapshots, logs, reports, and exports remain under the macOS application data directory.
+- TikHub and model API secrets remain in macOS Keychain. They are not written into reports or exports.
+- Deleting the application does not necessarily remove the workspace or Keychain entries. Back up required XLSX, PDF, and raw files before manually deleting application data.
+- Only collect public data that you are permitted to access, and follow platform terms, privacy requirements, and applicable law.
 
 ## Architecture
 
