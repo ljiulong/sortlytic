@@ -1,0 +1,57 @@
+use super::*;
+
+#[test]
+fn default_workspace_initialization_preserves_an_explicit_workspace() {
+  let active_root = std::env::temp_dir().join(format!("active-workspace-{}", uuid::Uuid::new_v4()));
+  let default_root =
+    std::env::temp_dir().join(format!("default-workspace-{}", uuid::Uuid::new_v4()));
+  let active = workspace::create_workspace("显式工作区", &active_root)
+    .expect("active workspace should be created");
+  let state = AppState::new();
+  state.set_active_workspace(workspace_context_from_summary(&active));
+
+  let summary = ensure_default_workspace_for_state(default_root.clone(), &state)
+    .expect("active workspace should remain open");
+
+  assert_eq!(summary.id, active.id);
+  assert_eq!(summary.root_path, active.root_path);
+  assert!(!default_root.exists());
+
+  std::fs::remove_dir_all(active_root).ok();
+  std::fs::remove_dir_all(default_root).ok();
+}
+
+#[test]
+fn command_root_must_match_the_active_workspace() {
+  let active_root = std::env::temp_dir().join(format!("active-root-{}", uuid::Uuid::new_v4()));
+  let other_root = std::env::temp_dir().join(format!("other-root-{}", uuid::Uuid::new_v4()));
+  std::fs::create_dir_all(&active_root).expect("active root should exist");
+  std::fs::create_dir_all(&other_root).expect("other root should exist");
+  let state = AppState::new();
+  state.set_active_workspace(WorkspaceContext {
+    id: "active-workspace".to_string(),
+    name: "活动工作区".to_string(),
+    root_path: active_root.clone(),
+    schema_version: workspace::CURRENT_SCHEMA_VERSION,
+  });
+
+  let matching = resolve_workspace_root(Some(active_root.to_string_lossy().to_string()), &state);
+  let mismatched = resolve_workspace_root(Some(other_root.to_string_lossy().to_string()), &state);
+
+  assert_eq!(matching.expect("matching root should pass"), active_root);
+  assert_eq!(
+    mismatched.expect_err("other root must be rejected").code,
+    domain::AppErrorCode::PermissionError
+  );
+  std::fs::remove_dir_all(active_root).ok();
+  std::fs::remove_dir_all(other_root).ok();
+}
+
+#[test]
+fn command_root_cannot_replace_a_missing_active_workspace() {
+  let state = AppState::new();
+  let error = resolve_workspace_root(Some("/tmp/arbitrary-workspace".to_string()), &state)
+    .expect_err("commands require an active workspace");
+
+  assert_eq!(error.code, domain::AppErrorCode::ValidationError);
+}
