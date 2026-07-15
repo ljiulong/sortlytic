@@ -91,9 +91,10 @@ jobs:
         working-directory: apps/macos/src-tauri
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
-
       - name: Audit Rust dependencies
-        working-directory: apps/macos/src-tauri
-        run: cargo audit
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          manifest-path: apps/macos/src-tauri/Cargo.toml
+          arguments: --locked
+          command: check
+          command-arguments: advisories

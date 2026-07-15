@@ -1,0 +1,12 @@
+[graph]
+targets = [
+  "aarch64-apple-darwin",
+  "x86_64-apple-darwin",
+]
+all-features = true
+
+[advisories]
+unmaintained = "workspace"
+unsound = "all"
+yanked = "deny"
+ignore = []
