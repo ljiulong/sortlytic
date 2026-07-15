@@ -63,32 +63,27 @@ pub fn execute_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRu
 }
 
 fn execute_claimed_run(root_path: &Path, run: &TaskRunView) -> AppResult<()> {
-  let connector = crate::tikhub::get_tikhub_connector(root_path)?.ok_or_else(|| {
-    worker_error(
-      "TIKHUB_CONNECTOR_NOT_READY",
-      "尚未配置 TikHub 连接器",
-      false,
-    )
-  })?;
+  let connector = crate::tikhub::get_tikhub_connector(root_path)?
+    .ok_or_else(|| worker_error("TIKHUB_CONNECTOR_NOT_READY", "尚未配置 TikHub 连接器", true))?;
   if !connector.enabled {
     return Err(worker_error(
       "TIKHUB_CONNECTOR_NOT_READY",
       "TikHub 连接器尚未启用",
-      false,
+      true,
     ));
   }
   let Some(secret_ref_id) = connector.secret_ref_id.as_deref() else {
     return Err(worker_error(
       "TIKHUB_CONNECTOR_NOT_READY",
       "TikHub 连接器缺少密钥引用",
-      false,
+      true,
     ));
   };
   if connector.last_test_status.as_deref() != Some("success") {
     return Err(worker_error(
       "TIKHUB_CONNECTOR_NOT_READY",
       "TikHub 连接器尚未通过最新连通性测试",
-      false,
+      true,
     ));
   }
   let token = read_secret_for_backend(root_path, secret_ref_id, "tikhub")?;
@@ -548,7 +543,7 @@ fn serialized_error_code(code: &AppErrorCode) -> String {
 mod tests {
   use super::*;
   use crate::tasks::{
-    claim_next_task, confirm_collection_plan, create_collection_task, enqueue_task,
+    claim_next_task, confirm_collection_plan, create_collection_task, enqueue_task, retry_task,
     save_collection_plan, CreateCollectionTaskInput, SaveCollectionPlanInput,
   };
   use crate::workspace::create_workspace;
@@ -609,6 +604,10 @@ mod tests {
       run.error_code.as_deref(),
       Some("TIKHUB_CONNECTOR_NOT_READY")
     );
+    assert!(run.retryable);
+    let retry =
+      retry_task(&root, &task.id, None).expect("connector setup failure should be retryable");
+    assert_eq!(retry.status, "queued");
     std::fs::remove_dir_all(root).ok();
   }
 
