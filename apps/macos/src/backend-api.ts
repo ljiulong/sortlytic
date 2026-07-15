@@ -226,6 +226,8 @@ export type GenerateFormPlanInput = {
   data_type: string
   params: Record<string, unknown>
   request_limit?: number
+  record_limit?: number
+  budget_limit_micros?: number
 }
 
 export type SavePlanInput = {

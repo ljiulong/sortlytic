@@ -426,6 +426,8 @@ async function createFormPlan(values: CollectionFormPayload): Promise<RuntimeCol
     data_type: dataType,
     params,
     request_limit: requestLimit,
+    record_limit: values.maxRecords,
+    budget_limit_micros: Math.round(values.budget * 1_000_000),
   })
   const task = await createCollectionTask({
     name: values.keyword.trim(),
