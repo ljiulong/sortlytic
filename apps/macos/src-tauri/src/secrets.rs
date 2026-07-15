@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 use crate::workspace::{open_workspace_database, DATABASE_FILE_NAME};
 
-const KEYCHAIN_SERVICE: &str = "com.steven.smart-data-workbench";
+const KEYCHAIN_SERVICE: &str = "com.steven.sortlytic";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SecretRefView {
@@ -353,10 +353,10 @@ fn build_secret_store_key(
   secret_ref_id: &str,
 ) -> String {
   let digest = hash_components(
-    "smart-data-workbench-secret-store-v2",
+    "sortlytic-secret-store-v2",
     &[workspace_scope, provider_type, provider_id, secret_ref_id],
   );
-  format!("smart-data-workbench:v2:{digest}")
+  format!("sortlytic:v2:{digest}")
 }
 
 fn keychain_entry(secret_store_key: &str) -> AppResult<Entry> {
@@ -450,7 +450,7 @@ fn ensure_secret_store_key(metadata: &SecretMetadata, workspace_scope: &str) -> 
 
 fn build_legacy_secret_store_key(metadata: &SecretMetadata) -> String {
   format!(
-    "smart-data-workbench:{}:{}:{}",
+    "sortlytic:{}:{}:{}",
     metadata.provider_type, metadata.provider_id, metadata.id
   )
 }
@@ -491,7 +491,7 @@ fn workspace_secret_scope(root_path: &Path, connection: &Connection) -> AppResul
       }
       let canonical_root = canonical_root.to_string_lossy();
       Ok(hash_components(
-        "smart-data-workbench-workspace-scope-v1",
+        "sortlytic-workspace-scope-v1",
         &[&workspace_id, &canonical_root],
       ))
     }
@@ -623,8 +623,8 @@ mod tests {
       "secret-ref-id",
     );
 
-    assert!(key.starts_with("smart-data-workbench:v2:"));
-    assert_eq!(key.len(), "smart-data-workbench:v2:".len() + 64);
+    assert!(key.starts_with("sortlytic:v2:"));
+    assert_eq!(key.len(), "sortlytic:v2:".len() + 64);
     assert!(!key.contains("sk-"));
   }
 
@@ -639,7 +639,7 @@ mod tests {
   #[test]
   fn rejects_a_tampered_secret_store_key_before_keychain_access() {
     let root_path = std::env::temp_dir().join(format!(
-      "smart-data-workbench-secret-tamper-{}",
+      "sortlytic-secret-tamper-{}",
       Uuid::new_v4()
     ));
     create_workspace("密钥隔离测试", &root_path).expect("workspace should be created");
@@ -649,7 +649,7 @@ mod tests {
         "INSERT INTO secret_ref (
           id, provider_type, provider_id, secret_store_key, masked_hint, created_at, updated_at
         ) VALUES ('tampered-secret', 'tikhub', 'default',
-                  'smart-data-workbench:tikhub:default:foreign-secret',
+                  'sortlytic:tikhub:default:foreign-secret',
                   '[REDACTED]', '2026-07-13T00:00:00Z', '2026-07-13T00:00:00Z')",
         [],
       )
@@ -667,7 +667,7 @@ mod tests {
   #[test]
   fn published_legacy_secret_reference_requires_an_explicit_rebind() {
     let root_path = std::env::temp_dir().join(format!(
-      "smart-data-workbench-secret-legacy-{}",
+      "sortlytic-secret-legacy-{}",
       Uuid::new_v4()
     ));
     create_workspace("旧密钥升级测试", &root_path).expect("workspace should be created");
@@ -677,7 +677,7 @@ mod tests {
         "INSERT INTO secret_ref (
           id, provider_type, provider_id, secret_store_key, masked_hint, created_at, updated_at
         ) VALUES ('legacy-secret', 'tikhub', 'default',
-                  'smart-data-workbench:tikhub:default:legacy-secret',
+                  'sortlytic:tikhub:default:legacy-secret',
                   '[REDACTED]', '2026-07-07T00:00:00Z', '2026-07-07T00:00:00Z')",
         [],
       )
@@ -697,13 +697,13 @@ mod tests {
   #[test]
   fn updating_a_legacy_reference_rebinds_it_without_reading_the_old_account() {
     let root_path = std::env::temp_dir().join(format!(
-      "smart-data-workbench-secret-rebind-{}",
+      "sortlytic-secret-rebind-{}",
       Uuid::new_v4()
     ));
     create_workspace("旧密钥重绑测试", &root_path).expect("workspace should be created");
     let connection = open_workspace_connection(&root_path).expect("database should open");
     let secret_ref_id = format!("legacy-secret-{}", Uuid::new_v4());
-    let legacy_key = format!("smart-data-workbench:tikhub:default:{secret_ref_id}");
+    let legacy_key = format!("sortlytic:tikhub:default:{secret_ref_id}");
     connection
       .execute(
         "INSERT INTO secret_ref (
@@ -727,11 +727,11 @@ mod tests {
   #[test]
   fn workspace_scope_rejects_a_database_registered_for_another_root() {
     let root_path = std::env::temp_dir().join(format!(
-      "smart-data-workbench-secret-root-{}",
+      "sortlytic-secret-root-{}",
       Uuid::new_v4()
     ));
     let other_root = std::env::temp_dir().join(format!(
-      "smart-data-workbench-secret-other-root-{}",
+      "sortlytic-secret-other-root-{}",
       Uuid::new_v4()
     ));
     create_workspace("密钥路径测试", &root_path).expect("workspace should be created");
