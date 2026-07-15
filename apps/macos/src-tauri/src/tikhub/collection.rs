@@ -32,6 +32,7 @@ pub struct TikHubCollectionRequest {
   data_type: String,
   source_params: Value,
   input_cursor: Option<Value>,
+  idempotency_key: Option<String>,
 }
 
 impl TikHubCollectionRequest {
@@ -53,6 +54,22 @@ impl TikHubCollectionRequest {
 
   pub fn source_params(&self) -> &Value {
     &self.source_params
+  }
+
+  pub fn idempotency_key(&self) -> Option<&str> {
+    self.idempotency_key.as_deref()
+  }
+
+  pub fn with_idempotency_key(mut self, idempotency_key: String) -> AppResult<Self> {
+    let idempotency_key = idempotency_key.trim();
+    if idempotency_key.is_empty() || idempotency_key.len() > 128 {
+      return Err(AppError::validation(
+        "TikHub 幂等键不能为空且长度不能超过 128 个字符",
+        AppErrorStage::Collection,
+      ));
+    }
+    self.idempotency_key = Some(idempotency_key.to_string());
+    Ok(self)
   }
 }
 
@@ -96,6 +113,7 @@ pub fn build_collection_request(
     data_type: data_type.trim().to_string(),
     source_params: params.clone(),
     input_cursor: normalized_cursor.clone(),
+    idempotency_key: None,
   };
   let cursor = normalized_cursor.as_ref();
 
@@ -443,6 +461,10 @@ fn send_single_request(
         None => builder,
       }
     }
+  };
+  let request_builder = match request.idempotency_key.as_deref() {
+    Some(idempotency_key) => request_builder.header("Idempotency-Key", idempotency_key),
+    None => request_builder,
   };
   let response = request_builder.send().map_err(reqwest_request_error)?;
   let status = response.status();

@@ -177,8 +177,9 @@ where
       &step.params,
       cursor.as_ref(),
     )?;
-    let checkpoint_id =
+    let (checkpoint_id, idempotency_key) =
       insert_prepared_checkpoint(&connection, &step.id, page_index, cursor.as_ref())?;
+    let request = request.with_idempotency_key(idempotency_key)?;
     let requested_at = Utc::now().to_rfc3339();
     mark_checkpoint_requesting(&connection, &checkpoint_id, &requested_at)?;
 
@@ -370,8 +371,9 @@ fn insert_prepared_checkpoint(
   run_step_id: &str,
   page_index: i64,
   cursor: Option<&Value>,
-) -> AppResult<String> {
+) -> AppResult<(String, String)> {
   let checkpoint_id = Uuid::new_v4().to_string();
+  let idempotency_key = Uuid::new_v4().to_string();
   let now = Utc::now().to_rfc3339();
   connection
     .execute(
@@ -383,13 +385,13 @@ fn insert_prepared_checkpoint(
         checkpoint_id,
         run_step_id,
         page_index,
-        Uuid::new_v4().to_string(),
+        idempotency_key.clone(),
         cursor.map(Value::to_string),
         now
       ],
     )
     .map_err(database_error)?;
-  Ok(checkpoint_id)
+  Ok((checkpoint_id, idempotency_key))
 }
 
 fn mark_checkpoint_requesting(
@@ -640,7 +642,8 @@ mod tests {
       .expect("worker should claim the task")
       .expect("queued task should exist");
 
-    execute_claimed_run_with_fetcher(&root, &run, |_request| {
+    execute_claimed_run_with_fetcher(&root, &run, |request| {
+      assert!(request.idempotency_key().is_some());
       Ok(CollectionPage {
         records: vec![json!({"aweme_id": "video-1", "desc": "test"})],
         next_cursor: None,
