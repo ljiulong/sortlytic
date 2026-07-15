@@ -510,17 +510,93 @@ fn cancelling_a_running_task_preserves_claim_audit_time() {
   let running = claim_next_task(&root_path)
     .expect("claim should succeed")
     .expect("task should be claimed");
+  let run_step_id = set_run_step_status(
+    &root_path,
+    &running.id,
+    &running.plan_id.clone().unwrap(),
+    "running",
+  );
+  let checkpoint_id = insert_requesting_checkpoint(&root_path, &run_step_id);
 
   cancel_task(&root_path, &task.id).expect("running task should cancel");
-  let cancelled = get_task_run(
-    &open_workspace_connection(&root_path).expect("database should open"),
-    &running.id,
-  )
-  .expect("cancelled run should load");
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  let cancelled = get_task_run(&connection, &running.id).expect("cancelled run should load");
+  let child_state: (String, Option<String>, String, Option<String>) = connection
+    .query_row(
+      "SELECT run_step.status, run_step.stop_reason, checkpoint.status,
+              checkpoint.last_error_code
+       FROM task_run_step AS run_step
+       JOIN collection_page_checkpoint AS checkpoint
+         ON checkpoint.task_run_step_id = run_step.id
+       WHERE run_step.id = ?1 AND checkpoint.id = ?2",
+      params![run_step_id, checkpoint_id],
+      |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )
+    .expect("cancelled child state should load");
 
   assert_eq!(cancelled.status, "cancelled");
   assert_eq!(cancelled.claimed_at, running.claimed_at);
+  assert_eq!(
+    child_state,
+    (
+      "cancelled".to_string(),
+      Some("user_cancelled".to_string()),
+      "uncertain".to_string(),
+      Some("UNCERTAIN_REQUEST_AFTER_CANCEL".to_string())
+    )
+  );
 
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn failing_a_run_closes_active_child_state_and_blocks_retry() {
+  let (root_path, task, _) = prepared_task_workspace("execution-fail-child-state");
+  enqueue_task(&root_path, &task.id).expect("task should enqueue");
+  let running = claim_next_task(&root_path)
+    .expect("claim should succeed")
+    .expect("task should be claimed");
+  let run_step_id = set_run_step_status(
+    &root_path,
+    &running.id,
+    &running.plan_id.clone().unwrap(),
+    "running",
+  );
+  let checkpoint_id = insert_requesting_checkpoint(&root_path, &run_step_id);
+
+  let failed = fail_task_run(
+    &root_path,
+    &running.id,
+    "TIKHUB_REQUEST_ERROR",
+    "请求失败",
+    true,
+  )
+  .expect("running task should fail");
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  let child_state: (String, Option<String>, String, Option<String>) = connection
+    .query_row(
+      "SELECT run_step.status, run_step.stop_reason, checkpoint.status,
+              checkpoint.last_error_code
+       FROM task_run_step AS run_step
+       JOIN collection_page_checkpoint AS checkpoint
+         ON checkpoint.task_run_step_id = run_step.id
+       WHERE run_step.id = ?1 AND checkpoint.id = ?2",
+      params![run_step_id, checkpoint_id],
+      |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )
+    .expect("failed child state should load");
+
+  assert_eq!(failed.status, "failed");
+  assert!(!failed.retryable);
+  assert_eq!(
+    child_state,
+    (
+      "failed".to_string(),
+      Some("terminal_error".to_string()),
+      "uncertain".to_string(),
+      Some("UNCERTAIN_REQUEST_AFTER_FAILURE".to_string())
+    )
+  );
   std::fs::remove_dir_all(root_path).ok();
 }
 

@@ -502,23 +502,46 @@ pub fn fail_task_run(
   let code = normalize_required("错误代码", error_code)?;
   let message = redact_sensitive_text(&normalize_required("错误信息", error_message)?);
   let now = Utc::now().to_rfc3339();
+  let has_request_evidence = run_has_request_evidence(&transaction, run_id)?;
 
-  transaction
+  let run_changed = transaction
     .execute(
       "UPDATE task_run
        SET status = 'failed', ended_at = ?1, current_stage = '执行失败', error_code = ?2,
            error_message = ?3, retryable = ?4
        WHERE id = ?5 AND status = 'running'",
-      params![now, code, message, i64::from(retryable), run_id],
+      params![
+        now,
+        code,
+        message,
+        i64::from(retryable && !has_request_evidence),
+        run_id
+      ],
     )
     .map_err(database_error)?;
-  transaction
+  if run_changed != 1 {
+    return Err(task_error("运行记录状态已变化，无法标记失败"));
+  }
+  settle_active_children(
+    &transaction,
+    run_id,
+    "failed",
+    "terminal_error",
+    "UNCERTAIN_REQUEST_AFTER_FAILURE",
+    "CHECKPOINT_TERMINAL_FAILURE",
+    &message,
+    &now,
+  )?;
+  let task_changed = transaction
     .execute(
       "UPDATE collection_task SET status = 'failed', updated_at = ?1
        WHERE id = ?2 AND status = 'running'",
       params![now, run.task_id],
     )
     .map_err(database_error)?;
+  if task_changed != 1 {
+    return Err(task_error("父任务状态已变化，无法标记失败"));
+  }
   append_task_log(&transaction, run_id, "执行失败", "error", &message)?;
   transaction.commit().map_err(database_error)?;
 
@@ -549,6 +572,16 @@ pub fn cancel_task(root_path: impl AsRef<Path>, task_id: &str) -> AppResult<Coll
     )
     .map_err(database_error)?;
   for run_id in active_runs {
+    settle_active_children(
+      &transaction,
+      &run_id,
+      "cancelled",
+      "user_cancelled",
+      "UNCERTAIN_REQUEST_AFTER_CANCEL",
+      "RUN_CANCELLED",
+      "任务已由用户取消",
+      &now,
+    )?;
     append_task_log(
       &transaction,
       &run_id,
@@ -567,6 +600,69 @@ fn require_running(run: &TaskRunView) -> AppResult<()> {
   } else {
     Err(task_error("只有运行中的任务记录可以结束"))
   }
+}
+
+fn run_has_request_evidence(connection: &Connection, run_id: &str) -> AppResult<bool> {
+  connection
+    .query_row(
+      "SELECT EXISTS(
+         SELECT 1 FROM collection_page_checkpoint AS checkpoint
+         JOIN task_run_step AS run_step
+           ON run_step.id = checkpoint.task_run_step_id
+         WHERE run_step.task_run_id = ?1 AND (
+           checkpoint.status IN ('requesting', 'response_received', 'completed', 'uncertain')
+           OR checkpoint.request_attempt_count > 0
+           OR checkpoint.requested_at IS NOT NULL
+           OR checkpoint.provider_response_json IS NOT NULL
+         )
+       )",
+      params![run_id],
+      |row| row.get::<_, i64>(0),
+    )
+    .map(|exists| exists != 0)
+    .map_err(database_error)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn settle_active_children(
+  connection: &Connection,
+  run_id: &str,
+  step_status: &str,
+  stop_reason: &str,
+  uncertain_error_code: &str,
+  terminal_error_code: &str,
+  error_message: &str,
+  now: &str,
+) -> AppResult<()> {
+  connection
+    .execute(
+      "UPDATE collection_page_checkpoint
+       SET status = CASE WHEN status = 'requesting' THEN 'uncertain' ELSE 'failed' END,
+           retryable = 0,
+           last_error_code = CASE WHEN status = 'requesting' THEN ?1 ELSE ?2 END,
+           last_error_message = ?3, updated_at = ?4
+       WHERE task_run_step_id IN (
+         SELECT id FROM task_run_step WHERE task_run_id = ?5
+       ) AND status IN ('prepared', 'requesting', 'response_received')",
+      params![
+        uncertain_error_code,
+        terminal_error_code,
+        error_message,
+        now,
+        run_id
+      ],
+    )
+    .map_err(database_error)?;
+  connection
+    .execute(
+      "UPDATE task_run_step
+       SET status = ?1, stop_reason = ?2,
+           completed_at = COALESCE(completed_at, ?3), updated_at = ?3
+       WHERE task_run_id = ?4 AND status IN ('pending', 'running')",
+      params![step_status, stop_reason, now, run_id],
+    )
+    .map_err(database_error)?;
+  Ok(())
 }
 
 fn active_run_ids(connection: &Connection, task_id: &str) -> AppResult<Vec<String>> {
