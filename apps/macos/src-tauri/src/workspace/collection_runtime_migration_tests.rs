@@ -581,8 +581,7 @@ fn v6_marker_or_structure_damage_is_rejected_before_repair() {
         let fixture = insert_runtime_fixture(&connection, "rootpage-swap");
         let snapshot = SnapshotInput::from_fixture(&fixture);
         assert_eq!(
-          insert_runtime_snapshot(&connection, &snapshot)
-            .expect("initial snapshot should insert"),
+          insert_runtime_snapshot(&connection, &snapshot).expect("initial snapshot should insert"),
           1
         );
         connection
@@ -622,9 +621,7 @@ fn v6_marker_or_structure_damage_is_rejected_before_repair() {
       "swapped_secret_primary_key_rootpage" => {
         let fixture = insert_runtime_fixture(&connection, "secret-rootpage-swap");
         connection
-          .execute_batch(
-            "CREATE INDEX idx_secret_ref_rootpage_decoy ON secret_ref(provider_id);",
-          )
+          .execute_batch("CREATE INDEX idx_secret_ref_rootpage_decoy ON secret_ref(provider_id);")
           .expect("secret decoy index should create");
         swap_index_rootpages(
           &connection,
