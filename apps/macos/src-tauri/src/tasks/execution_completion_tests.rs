@@ -885,6 +885,8 @@ fn complete_persists_cost_derived_from_checkpoint_evidence() {
     serde_json::from_str::<Value>(&persisted).expect("persisted cost should be JSON"),
     serde_json::json!({
       "currency": "USD",
+      "billing_status": "quoted_not_final",
+      "quoted_cost_micros": 100,
       "amount_micros": 100,
       "request_count": 1,
       "record_count": 1

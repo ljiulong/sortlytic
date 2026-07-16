@@ -76,6 +76,8 @@ pub fn complete_task_run(
 
   let actual_cost_json = serde_json::json!({
     "currency": "USD",
+    "billing_status": "quoted_not_final",
+    "quoted_cost_micros": totals.cost_micros,
     "amount_micros": totals.cost_micros,
     "request_count": totals.request_count,
     "record_count": totals.persisted_records
