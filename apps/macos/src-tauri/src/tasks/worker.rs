@@ -76,18 +76,34 @@ pub fn execute_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRu
 fn execute_claimed_run(root_path: &Path, run: &TaskRunView) -> AppResult<()> {
   let snapshot = load_runtime_snapshot(root_path, &run.id)?;
   let token = read_secret_for_backend(root_path, &snapshot.secret_ref_id, "tikhub")?;
-  execute_claimed_run_with_fetcher(root_path, run, |request| {
-    pricing::guard_request(root_path, &run.id, request)?;
-    send_collection_request(Some(snapshot.base_url.clone()), &token, request)
-  })
+  execute_claimed_run_with_guard(
+    root_path,
+    run,
+    |request| pricing::guard_request(root_path, &run.id, request).map(|_| ()),
+    |request| send_collection_request(Some(snapshot.base_url.clone()), &token, request),
+  )
 }
 
+#[cfg(test)]
 fn execute_claimed_run_with_fetcher<F>(
   root_path: &Path,
   run: &TaskRunView,
   fetch_page: F,
 ) -> AppResult<()>
 where
+  F: Fn(&TikHubCollectionRequest) -> AppResult<CollectionPage>,
+{
+  execute_claimed_run_with_guard(root_path, run, |_| Ok(()), fetch_page)
+}
+
+fn execute_claimed_run_with_guard<G, F>(
+  root_path: &Path,
+  run: &TaskRunView,
+  guard_request: G,
+  fetch_page: F,
+) -> AppResult<()>
+where
+  G: Fn(&TikHubCollectionRequest) -> AppResult<()>,
   F: Fn(&TikHubCollectionRequest) -> AppResult<CollectionPage>,
 {
   let connection = open_workspace_connection(root_path)?;
@@ -97,7 +113,7 @@ where
   }
 
   for step in steps {
-    execute_step(root_path, &step, &fetch_page)?;
+    execute_step(root_path, &step, &guard_request, &fetch_page)?;
   }
   Ok(())
 }
@@ -164,12 +180,18 @@ fn load_run_steps(connection: &rusqlite::Connection, run: &TaskRunView) -> AppRe
     .map_err(database_error)
 }
 
-fn execute_step<F>(root_path: &Path, step: &RunStep, fetch_page: &F) -> AppResult<()>
+fn execute_step<G, F>(
+  root_path: &Path,
+  step: &RunStep,
+  guard_request: &G,
+  fetch_page: &F,
+) -> AppResult<()>
 where
+  G: Fn(&TikHubCollectionRequest) -> AppResult<()>,
   F: Fn(&TikHubCollectionRequest) -> AppResult<CollectionPage>,
 {
   if step.schema_version == 3 {
-    return pipeline::execute_pipeline_step(root_path, step, fetch_page);
+    return pipeline::execute_pipeline_step(root_path, step, guard_request, fetch_page);
   }
   let connection = open_workspace_connection(root_path)?;
   let existing = load_checkpoints(&connection, &step.id)?;
@@ -265,6 +287,7 @@ where
       &step.params,
       cursor.as_ref(),
     )?;
+    guard_request(&request)?;
     let (checkpoint_id, idempotency_key) = if let Some(checkpoint) = prepared_checkpoint.take() {
       if checkpoint.page_index != page_index || checkpoint.input_cursor != cursor {
         return Err(worker_error(

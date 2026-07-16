@@ -20,12 +20,14 @@ use crate::domain::{AppError, AppErrorCode};
 use crate::records::{persist_collection_page, PersistCollectionPageInput};
 use crate::tikhub::{build_collection_request, CollectionPage, TikHubCollectionRequest};
 
-pub(super) fn execute_pipeline_step<F>(
+pub(super) fn execute_pipeline_step<G, F>(
   root_path: &Path,
   step: &RunStep,
+  guard_request: &G,
   fetch_page: &F,
 ) -> AppResult<()>
 where
+  G: Fn(&TikHubCollectionRequest) -> AppResult<()>,
   F: Fn(&TikHubCollectionRequest) -> AppResult<CollectionPage>,
 {
   let connection = open_workspace_connection(root_path)?;
@@ -95,6 +97,7 @@ where
       &run_id,
       page_index,
       &mut target,
+      guard_request,
       fetch_page,
     )?;
     page_index += 1;
@@ -112,16 +115,18 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-fn execute_target_page<F>(
+fn execute_target_page<G, F>(
   root_path: &Path,
   connection: &Connection,
   step: &RunStep,
   run_id: &str,
   page_index: i64,
   target: &mut PipelineTarget,
+  guard_request: &G,
   fetch_page: &F,
 ) -> AppResult<()>
 where
+  G: Fn(&TikHubCollectionRequest) -> AppResult<()>,
   F: Fn(&TikHubCollectionRequest) -> AppResult<CollectionPage>,
 {
   let request = build_collection_request(
@@ -130,6 +135,7 @@ where
     &target.params,
     target.cursor.as_ref(),
   )?;
+  guard_request(&request)?;
   let current_cursor = target.cursor.clone();
   update_target(connection, target, "running", current_cursor)?;
   let (checkpoint_id, idempotency_key) =

@@ -593,6 +593,50 @@ fn worker_persists_a_page_and_completes_the_run() {
 }
 
 #[test]
+fn worker_rejects_cost_before_recording_an_outbound_request() {
+  let root = std::env::temp_dir().join(format!("worker-cost-gate-{}", Uuid::new_v4()));
+  create_workspace("执行器成本门禁测试", &root).expect("workspace should be created");
+  let (task, _plan) = create_confirmed_item_detail_task(&root);
+  enqueue_task(&root, &task.id).expect("task should be queued");
+  let run = claim_next_task(&root)
+    .expect("worker should claim the task")
+    .expect("queued task should exist");
+  let fetch_called = std::cell::Cell::new(false);
+
+  let error = execute_claimed_run_with_guard(
+    &root,
+    &run,
+    |_request| {
+      Err(AppError::new(
+        AppErrorCode::CostLimitError,
+        "本次报价超过预算",
+        AppErrorStage::Collection,
+        false,
+      ))
+    },
+    |_request| {
+      fetch_called.set(true);
+      unreachable!("成本门禁失败后不得调用供应商")
+    },
+  )
+  .expect_err("成本门禁应拒绝请求");
+
+  assert_eq!(error.code, AppErrorCode::CostLimitError);
+  assert!(!fetch_called.get());
+  let connection = super::open_workspace_connection(&root).expect("database should open");
+  let checkpoint_count: i64 = connection
+    .query_row(
+      "SELECT COUNT(*) FROM collection_page_checkpoint
+       WHERE task_run_step_id IN (SELECT id FROM task_run_step WHERE task_run_id = ?1)",
+      [&run.id],
+      |row| row.get(0),
+    )
+    .expect("checkpoint count should be readable");
+  assert_eq!(checkpoint_count, 0, "未调用供应商时不得留下请求检查点");
+  std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn worker_marks_checkpoint_uncertain_when_record_persistence_fails() {
   let root = std::env::temp_dir().join(format!("worker-persist-failure-{}", Uuid::new_v4()));
   create_workspace("执行器落库失败测试", &root).expect("workspace should be created");
