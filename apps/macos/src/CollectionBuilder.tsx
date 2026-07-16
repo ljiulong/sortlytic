@@ -360,6 +360,9 @@ function confirmationBlocker(plan: RuntimeCollectionPlan, isBusy: boolean) {
   if (isBusy) return '正在处理计划，请稍候'
   if (!plan.taskId || !plan.planId) return '请先生成并保存采集计划'
   if (plan.validationStatus !== 'valid') return plan.missing[0] ?? '计划校验未通过'
+  if (plan.pricingReady !== true) {
+    return plan.pricingBlocker ?? '实时计价或 TikHub 双额度尚未完成校验'
+  }
   if (plan.status !== '等待确认') {
     if (plan.status === '已排队' || plan.status === '运行中') return '任务已进入运行队列'
     return `计划状态为“${plan.status}”`

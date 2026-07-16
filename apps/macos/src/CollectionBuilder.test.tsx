@@ -58,6 +58,47 @@ describe('CollectionPlanPreview', () => {
     expect(markup).toMatch(/<button[^>]*disabled=""/)
   })
 
+  it('实时计价或双额度预检未通过时禁用确认并显示原因', () => {
+    const markup = renderToStaticMarkup(
+      createElement(CollectionPlanPreview, {
+        actionMessage: '等待确认',
+        isBusy: false,
+        onConfirmPlan: vi.fn(),
+        plan: {
+          ...draftPlan,
+          taskId: 'task-1',
+          planId: 'plan-1',
+          validationStatus: 'valid',
+          pricingReady: false,
+          pricingBlocker: 'TikHub 免费额度与充值余额合计不足',
+        },
+      }),
+    )
+
+    expect(markup).toContain('暂不能运行：TikHub 免费额度与充值余额合计不足')
+    expect(markup).toMatch(/<button[^>]*disabled=""/)
+  })
+
+  it('计划和实时计价均有效时允许确认运行', () => {
+    const markup = renderToStaticMarkup(
+      createElement(CollectionPlanPreview, {
+        actionMessage: '等待确认',
+        isBusy: false,
+        onConfirmPlan: vi.fn(),
+        plan: {
+          ...draftPlan,
+          taskId: 'task-1',
+          planId: 'plan-1',
+          validationStatus: 'valid',
+          pricingReady: true,
+        },
+      }),
+    )
+
+    expect(markup).toContain('确认运行')
+    expect(markup).not.toMatch(/<button[^>]*disabled=""/)
+  })
+
   it('确认前展示已启用的明确性别筛选', () => {
     const markup = renderToStaticMarkup(
       createElement(CollectionPlanPreview, {
