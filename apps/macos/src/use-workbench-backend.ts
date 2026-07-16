@@ -712,17 +712,19 @@ function toUiPlatform(platform: string): Platform {
 }
 
 function toBackendDataType(dataType: DataType) {
-  if (dataType === '关键词搜索') return 'keyword_search'
+  if (dataType === '搜索结果账号' || dataType === '关键词搜索') return 'keyword_search'
   if (dataType === '账号公开信息') return 'account_profile'
-  if (dataType === '笔记详情') return 'item_detail'
+  if (dataType === '作品/笔记作者' || dataType === '笔记详情') return 'item_detail'
+  if (dataType === '账号作品所属账号') return 'account_posts'
   return 'comments'
 }
 
 function toUiDataType(dataType: string): DataType {
-  if (dataType === 'keyword_search') return '关键词搜索'
+  if (dataType === 'keyword_search') return '搜索结果账号'
   if (dataType === 'account_profile') return '账号公开信息'
-  if (dataType === 'item_detail') return '笔记详情'
-  return '评论采集'
+  if (dataType === 'item_detail') return '作品/笔记作者'
+  if (dataType === 'account_posts') return '账号作品所属账号'
+  return '评论用户'
 }
 
 function toUiTaskStatus(status: string): TaskStatus {

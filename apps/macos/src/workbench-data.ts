@@ -1,5 +1,15 @@
 export const platformOptions = ['TikTok', '抖音', '小红书'] as const
-export const dataTypeOptions = ['关键词搜索', '账号公开信息', '评论采集', '笔记详情'] as const
+export const dataTypeOptions = [
+  '搜索结果账号',
+  '作品/笔记作者',
+  '账号公开信息',
+  '账号作品所属账号',
+  '评论用户',
+  // 旧工作区与旧自然语言计划的展示值继续可读。
+  '关键词搜索',
+  '评论采集',
+  '笔记详情',
+] as const
 
 export type Platform = (typeof platformOptions)[number]
 export type DataType = (typeof dataTypeOptions)[number]

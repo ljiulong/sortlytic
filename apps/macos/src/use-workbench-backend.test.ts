@@ -606,7 +606,7 @@ describe('planFromBackend', () => {
       schema_version: 1,
       plan_json: {
         platforms: ['tiktok', 'douyin'],
-        data_types: ['comments', 'keyword_search'],
+        data_types: ['comments', 'keyword_search', 'account_posts'],
         region: {
           value: 'US',
           source: 'natural_language',
@@ -639,7 +639,7 @@ describe('planFromBackend', () => {
     )
 
     expect(result.platforms).toEqual(['TikTok', '抖音'])
-    expect(result.dataTypes).toEqual(['评论采集', '关键词搜索'])
+    expect(result.dataTypes).toEqual(['评论用户', '搜索结果账号', '账号作品所属账号'])
     expect(result.regionCode).toBe('US')
     expect(result.keyword).toBe('electric-car')
     expect(result.range).toBe('未提供时间范围')
