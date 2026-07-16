@@ -21,11 +21,13 @@ use super::{
 
 mod recovery;
 mod runtime;
+mod targets;
 use recovery::{
   ensure_record_limit, load_checkpoints, mark_response_checkpoint_completed,
   parse_response_checkpoint, resume_position,
 };
 use runtime::load_runtime_snapshot;
+use targets::{materialize_targets, TargetStepInput};
 
 struct RunStep {
   id: String,
@@ -39,6 +41,8 @@ struct RunStep {
   schema_version: i64,
   output_selected: bool,
   age_range: Option<AgeRange>,
+  step_key: String,
+  depends_on_step_key: Option<String>,
 }
 
 pub fn execute_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRunView>> {
@@ -111,7 +115,15 @@ fn load_run_steps(connection: &rusqlite::Connection, run: &TaskRunView) -> AppRe
                 1
               ),
               json_extract(plan.plan_json, '$.age_range.min'),
-              json_extract(plan.plan_json, '$.age_range.max')
+              json_extract(plan.plan_json, '$.age_range.max'),
+              COALESCE(
+                json_extract(plan.plan_json, '$.steps[' || api_step.step_order || '].step_key'),
+                api_step.data_type
+              ),
+              json_extract(
+                plan.plan_json,
+                '$.steps[' || api_step.step_order || '].depends_on_step_key'
+              )
        FROM task_run_step AS run_step
        JOIN task_run ON task_run.id = run_step.task_run_id
        JOIN collection_plan AS plan ON plan.id = task_run.plan_id
@@ -140,6 +152,8 @@ fn load_run_steps(connection: &rusqlite::Connection, run: &TaskRunView) -> AppRe
           .get::<_, Option<i64>>(10)?
           .zip(row.get::<_, Option<i64>>(11)?)
           .map(|(min, max)| AgeRange { min, max }),
+        step_key: row.get(12)?,
+        depends_on_step_key: row.get(13)?,
       })
     })
     .map_err(database_error)?;
@@ -153,6 +167,26 @@ where
   F: Fn(&TikHubCollectionRequest) -> AppResult<CollectionPage>,
 {
   let connection = open_workspace_connection(root_path)?;
+  if step.schema_version == 3 {
+    materialize_targets(
+      &connection,
+      &TargetStepInput {
+        task_run_id: connection
+          .query_row(
+            "SELECT task_run_id FROM task_run_step WHERE id = ?1",
+            params![step.id],
+            |row| row.get(0),
+          )
+          .map_err(database_error)?,
+        step_key: step.step_key.clone(),
+        platform: step.platform.clone(),
+        data_type: step.data_type.clone(),
+        params: step.params.clone(),
+        output_selected: step.output_selected,
+        depends_on_step_key: step.depends_on_step_key.clone(),
+      },
+    )?;
+  }
   let existing = load_checkpoints(&connection, &step.id)?;
   let (mut page_index, mut cursor) = resume_position(&existing)?;
   let mut prepared_checkpoint = existing
