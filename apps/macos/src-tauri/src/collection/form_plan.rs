@@ -88,6 +88,7 @@ pub fn generate_form_collection_plan(
       endpoint.time_range_filter
     });
   let age_range = request.age_range.as_ref().map(age_range_json);
+  let gender_filter = normalized_gender_filter(request.params.get("genders"))?;
 
   let plan_json = serde_json::json!({
     "schema_version": 3,
@@ -99,6 +100,7 @@ pub fn generate_form_collection_plan(
     "accounts": value_to_array(request.params.get("account")),
     "time_range": time_range,
     "age_range": age_range,
+    "gender_filter": gender_filter,
     "steps": steps,
     "record_limit": record_limit,
     "request_limit": requested_limit,
@@ -248,4 +250,30 @@ fn filter_value_for_plan(
 
 fn age_range_json(age_range: &AgeRangeInput) -> Value {
   serde_json::json!({ "min": age_range.min, "max": age_range.max })
+}
+
+fn normalized_gender_filter(value: Option<&Value>) -> AppResult<Value> {
+  let Some(value) = value.filter(|value| !value.is_null()) else {
+    return Ok(Value::Null);
+  };
+  let values = value.as_array().ok_or_else(|| {
+    AppError::validation("genders 必须是性别规范值数组", AppErrorStage::Collection)
+  })?;
+  if values.is_empty() {
+    return Ok(Value::Null);
+  }
+  let mut normalized = BTreeSet::new();
+  for value in values {
+    let value = value
+      .as_str()
+      .ok_or_else(|| AppError::validation("genders 只能包含字符串", AppErrorStage::Collection))?;
+    if !matches!(value, "male" | "female" | "other") {
+      return Err(AppError::validation(
+        "genders 只能包含 male、female、other",
+        AppErrorStage::Collection,
+      ));
+    }
+    normalized.insert(value.to_string());
+  }
+  Ok(serde_json::json!(normalized))
 }

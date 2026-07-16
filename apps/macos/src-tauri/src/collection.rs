@@ -289,6 +289,7 @@ pub fn validate_collection_plan_v3(plan_json: &Value) -> CollectionPlanValidatio
   }
   validate_budget_limit(plan_json, &mut errors);
   validate_age_range(plan_json.get("age_range"), &mut errors);
+  validate_gender_filter(plan_json.get("gender_filter"), &mut errors);
 
   let mut prior_steps = std::collections::BTreeSet::new();
   if let Some(steps) = plan_json.get("steps").and_then(Value::as_array) {
@@ -364,6 +365,26 @@ fn validate_age_range(age_range: Option<&Value>, errors: &mut Vec<String>) {
     .zip(age_range.get("max").and_then(Value::as_i64));
   if !bounds.is_some_and(|(min, max)| (0..=130).contains(&min) && min <= max && max <= 130) {
     errors.push("age_range 必须是 0–130 内且 min <= max 的整数闭区间".to_string());
+  }
+}
+
+fn validate_gender_filter(gender_filter: Option<&Value>, errors: &mut Vec<String>) {
+  let Some(gender_filter) = gender_filter.filter(|value| !value.is_null()) else {
+    return;
+  };
+  let Some(values) = gender_filter.as_array() else {
+    errors.push("gender_filter 必须是性别规范值数组".to_string());
+    return;
+  };
+  let mut seen = std::collections::BTreeSet::new();
+  if values.is_empty()
+    || values.iter().any(|value| {
+      value
+        .as_str()
+        .is_none_or(|value| !matches!(value, "male" | "female" | "other") || !seen.insert(value))
+    })
+  {
+    errors.push("gender_filter 只能包含不重复的 male、female、other".to_string());
   }
 }
 
@@ -622,7 +643,8 @@ mod tests {
       data_types: vec!["item_detail".to_string(), "comments".to_string()],
       params: serde_json::json!({
         "keyword": "新能源汽车",
-        "time_range": "近 30 天"
+        "time_range": "近 30 天",
+        "genders": ["female", "other"]
       }),
       age_range: Some(AgeRangeInput { min: 18, max: 35 }),
       request_limit: Some(4),
@@ -639,6 +661,10 @@ mod tests {
     assert_eq!(
       plan.plan_json["age_range"],
       serde_json::json!({ "min": 18, "max": 35 })
+    );
+    assert_eq!(
+      plan.plan_json["gender_filter"],
+      serde_json::json!(["female", "other"])
     );
     assert_eq!(
       plan.plan_json["internal_data_types"],
