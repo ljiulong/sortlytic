@@ -1181,6 +1181,15 @@ fn opening_v1_workspace_migrates_record_observations_without_data_loss() {
   insert_task_and_runs(&connection, &task_id, &[&run_id]);
   replace_record_tables_with_v1_schema(&connection);
   connection
+    .execute_batch(
+      "DROP TABLE IF EXISTS pricing_quote_snapshot;
+       DROP TABLE IF EXISTS collection_failure_evidence;
+       DROP TABLE IF EXISTS collected_account;
+       DROP TABLE IF EXISTS collection_pipeline_target;
+       DELETE FROM schema_migrations WHERE version = 7;",
+    )
+    .expect("v7 流水线结构应从 v1 测试夹具移除");
+  connection
     .execute(
       "INSERT INTO raw_record (
         id, task_id, platform, platform_record_id, raw_file_path, raw_hash,

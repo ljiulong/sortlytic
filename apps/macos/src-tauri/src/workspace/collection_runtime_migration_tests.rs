@@ -16,8 +16,8 @@ fn fresh_workspace_creates_v6_collection_runtime_snapshot_contract() {
   let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME))
     .expect("workspace database should open");
 
-  assert_eq!(summary.schema_version, 6);
-  assert_eq!(CURRENT_SCHEMA_VERSION, 6);
+  assert_eq!(summary.schema_version, CURRENT_SCHEMA_VERSION);
+  assert_eq!(CURRENT_SCHEMA_VERSION, 7);
   assert_eq!(
     migration_marker(&connection, 6).0,
     "collection_runtime_snapshot"
@@ -332,7 +332,7 @@ fn v5_workspace_migrates_without_fabricating_historical_runtime_snapshots() {
   let summary = open_workspace(&root_path).expect("v5 workspace should migrate to v6");
   let migrated = open_workspace_database(root_path.join(DATABASE_FILE_NAME))
     .expect("migrated database should open");
-  assert_eq!(summary.schema_version, 6);
+  assert_eq!(summary.schema_version, CURRENT_SCHEMA_VERSION);
   assert_eq!(
     migration_marker(&migrated, 6).0,
     "collection_runtime_snapshot"

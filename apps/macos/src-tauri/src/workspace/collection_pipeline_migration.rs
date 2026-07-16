@@ -204,6 +204,25 @@ pub(super) fn apply_collection_pipeline_migration(connection: &mut Connection) -
     return ensure_foreign_key_integrity(connection);
   }
   if migration_artifacts_present(connection)? {
+    if schema_is_current(connection)? {
+      let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(database_error)?;
+      transaction
+        .execute(
+          "INSERT INTO schema_migrations (version, name, applied_at, checksum)
+           VALUES (7, ?1, ?2, ?3)",
+          params![
+            MIGRATION_NAME,
+            Utc::now().to_rfc3339(),
+            migration_checksum()
+          ],
+        )
+        .map_err(database_error)?;
+      update_workspace_schema_version(&transaction, 7)?;
+      transaction.commit().map_err(database_error)?;
+      return ensure_foreign_key_integrity(connection);
+    }
     return Err(workspace_error(
       "数据库迁移 v7 发现未标记或不完整的采集流水线结构，已拒绝自动修复",
     ));
@@ -256,21 +275,41 @@ fn validate_marker_and_schema(
 }
 
 fn schema_is_current(connection: &Connection) -> AppResult<bool> {
-  let required_tables = [
-    "collection_pipeline_target",
-    "collected_account",
-    "collection_failure_evidence",
-    "pricing_quote_snapshot",
+  let required_columns = [
+    (
+      "collection_pipeline_target",
+      "id,task_run_id,step_key,data_type,target_key,resolved_params_json,cursor_json,status,request_count,output_selected,failure_json,created_at,updated_at",
+    ),
+    (
+      "collected_account",
+      "id,task_run_id,platform,identity_key,username,account,platform_user_id,profile_text,country_region,region_source,region_confidence,gender,age,followers_count,posts_count,last_posted_at,profile_url,data_source,collected_at,notes,merged_record_json,source_priority_json,output_included,created_at,updated_at",
+    ),
+    (
+      "collection_failure_evidence",
+      "id,task_run_id,target_id,step_key,endpoint_key,target_key,error_code,error_message,retryable,evidence_json,created_at",
+    ),
+    (
+      "pricing_quote_snapshot",
+      "id,task_run_id,endpoint_key,currency,quoted_cost_micros,accumulated_quote_micros,balance_micros,free_credit_micros,available_micros,quote_json,quoted_at",
+    ),
   ];
-  if required_tables
-    .iter()
-    .any(|table| !object_exists(connection, "table", table).unwrap_or(false))
-  {
+  if required_columns.iter().any(|(table, expected)| {
+    columns(connection, table)
+      .map(|value| value.join(",") != *expected)
+      .unwrap_or(true)
+  }) {
     return Ok(false);
   }
   let normalized_columns = columns(connection, "normalized_record")?;
   let raw_sql = object_sql(connection, "table", "raw_record")?.unwrap_or_default();
-  Ok(normalized_columns.iter().any(|column| column == "age") && raw_sql.contains("'account_posts'"))
+  let normalized_sql = object_sql(connection, "table", "normalized_record")?.unwrap_or_default();
+  let pricing_sql = object_sql(connection, "table", "pricing_quote_snapshot")?.unwrap_or_default();
+  Ok(
+    normalized_columns.iter().any(|column| column == "age")
+      && raw_sql.contains("'account_posts'")
+      && normalized_sql.contains("age BETWEEN 0 AND 130")
+      && pricing_sql.contains("available_micros = balance_micros + free_credit_micros"),
+  )
 }
 
 fn migration_artifacts_present(connection: &Connection) -> AppResult<bool> {
