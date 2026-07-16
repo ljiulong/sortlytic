@@ -38,7 +38,9 @@ use tasks::{
   SaveCollectionPlanInput, TaskLogView, TaskRunView, UpdateCollectionTaskInput,
 };
 use tauri::Manager;
-use tikhub::{TikhubConnectionTestResult, TikhubConnectorInput, TikhubConnectorView};
+use tikhub::{
+  TikhubConnectionTestResult, TikhubConnectorInput, TikhubConnectorView, TikhubPriceQuote,
+};
 use workspace::{WorkspaceHealthCheck, WorkspaceSummary};
 
 #[tauri::command]
@@ -222,6 +224,20 @@ async fn test_tikhub_connector(
 ) -> AppResult<TikhubConnectionTestResult> {
   let root_path = resolve_workspace_root(root_path, &state)?;
   run_tikhub_blocking(move || tikhub::test_tikhub_connector(root_path)).await
+}
+
+#[tauri::command]
+async fn quote_tikhub_connector_price(
+  endpoint: String,
+  request_per_day: i64,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<TikhubPriceQuote> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  run_tikhub_blocking(move || {
+    tikhub::quote_tikhub_connector_price(root_path, &endpoint, request_per_day)
+  })
+  .await
 }
 
 async fn run_tikhub_blocking<T, F>(task: F) -> AppResult<T>
@@ -804,6 +820,7 @@ pub fn run() {
       get_tikhub_connector,
       save_tikhub_connector,
       test_tikhub_connector,
+      quote_tikhub_connector_price,
       list_model_providers,
       create_model_provider,
       update_model_provider,

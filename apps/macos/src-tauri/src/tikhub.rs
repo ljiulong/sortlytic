@@ -13,8 +13,11 @@ use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 use crate::secrets::{read_secret_for_backend, validate_secret_ref_provider};
 use crate::workspace::{open_workspace_database, DATABASE_FILE_NAME};
 
+mod account;
 mod collection;
 
+use account::parse_account_quota;
+pub use account::{quote_tikhub_connector_price, TikhubPriceQuote};
 pub use collection::{
   build_collection_request, parse_collection_page, send_collection_request, CollectionPage,
   RequestMethod, TikHubCollectionRequest,
@@ -31,6 +34,7 @@ pub struct TikhubConnectionTestResult {
   pub masked_email: Option<String>,
   pub balance: Option<f64>,
   pub free_credit: Option<f64>,
+  pub available_credit: Option<f64>,
   pub email_verified: Option<bool>,
   pub api_key_status: Option<i64>,
   pub daily_usage_json: Value,
@@ -190,16 +194,22 @@ pub fn test_tikhub_connection(
   let user_data = user_info.get("user_data").unwrap_or(&Value::Null);
   let api_key_data = user_info.get("api_key_data").unwrap_or(&Value::Null);
   let email_verified = user_data.get("email_verified").and_then(Value::as_bool);
-  let balance = number_field(user_data, "balance");
-  let free_credit = number_field(user_data, "free_credit");
+  let quota = parse_account_quota(&user_info);
   let api_key_status = api_key_data.get("api_key_status").and_then(Value::as_i64);
   let masked_email = user_data
     .get("email")
     .and_then(Value::as_str)
     .map(mask_email);
-  let message = match (email_verified, free_credit) {
-    (Some(false), _) => "TikHub Token 可用，但账号邮箱尚未验证".to_string(),
-    (_, Some(value)) => format!("TikHub Token 可用，当前免费额度 {value}"),
+  let message = match (
+    email_verified,
+    quota.balance,
+    quota.free_credit,
+    quota.available_credit,
+  ) {
+    (Some(false), _, _, _) => "TikHub Token 可用，但账号邮箱尚未验证".to_string(),
+    (_, Some(balance), Some(free_credit), Some(available)) => {
+      format!("TikHub Token 可用，充值余额 {balance}，免费额度 {free_credit}，合计 {available}")
+    }
     _ => "TikHub Token 可用".to_string(),
   };
 
@@ -207,8 +217,9 @@ pub fn test_tikhub_connection(
     success: true,
     base_url,
     masked_email,
-    balance,
-    free_credit,
+    balance: quota.balance,
+    free_credit: quota.free_credit,
+    available_credit: quota.available_credit,
     email_verified,
     api_key_status,
     daily_usage_json: daily_usage,
@@ -461,6 +472,7 @@ fn number_field(value: &Value, key: &str) -> Option<f64> {
     value
       .as_f64()
       .or_else(|| value.as_i64().map(|number| number as f64))
+      .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
   })
 }
 
