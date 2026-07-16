@@ -26,6 +26,57 @@ pub(super) fn guard_request(
   persist_guarded_quotes(root_path, run_id, quota, quotes)
 }
 
+pub(super) fn checkpoint_quote_json(
+  connection: &rusqlite::Connection,
+  run_id: &str,
+  request: &TikHubCollectionRequest,
+) -> AppResult<String> {
+  let expected_count =
+    i64::try_from(request.paths().len()).map_err(|_| cost_error("计价 endpoint 数量超出范围"))?;
+  let mut statement = connection
+    .prepare(
+      "SELECT id, quoted_cost_micros
+       FROM pricing_quote_snapshot
+       WHERE task_run_id = ?1
+       ORDER BY rowid DESC LIMIT ?2",
+    )
+    .map_err(database_error)?;
+  let rows = statement
+    .query_map(params![run_id, expected_count], |row| {
+      Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+    })
+    .map_err(database_error)?
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .map_err(database_error)?;
+  if rows.len() != request.paths().len() {
+    #[cfg(test)]
+    return Ok(
+      serde_json::json!({
+        "currency": "USD",
+        "amount_micros": 0,
+        "billing_status": "unquoted_test_fixture"
+      })
+      .to_string(),
+    );
+    #[cfg(not(test))]
+    return Err(cost_error("采集请求缺少对应的实时计价快照"));
+  }
+  let quoted_cost_micros = rows.iter().try_fold(0_i64, |total, (_, cost)| {
+    total
+      .checked_add(*cost)
+      .ok_or_else(|| cost_error("检查点报价金额溢出"))
+  })?;
+  Ok(
+    serde_json::json!({
+      "currency": "USD",
+      "amount_micros": quoted_cost_micros,
+      "billing_status": "quoted_not_final",
+      "pricing_snapshot_ids": rows.into_iter().map(|(id, _)| id).collect::<Vec<_>>()
+    })
+    .to_string(),
+  )
+}
+
 fn persist_guarded_quotes(
   root_path: &Path,
   run_id: &str,

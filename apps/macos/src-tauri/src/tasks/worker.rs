@@ -360,11 +360,7 @@ where
       .map_err(|_| task_error("TikHub 响应体大小超出数据库范围"))?;
     let next_cursor_json = page.next_cursor.as_ref().map(Value::to_string);
     let input_cursor_json = cursor.as_ref().map(Value::to_string);
-    let cost_actual_json = serde_json::json!({
-      "currency": "USD",
-      "amount_micros": 0
-    })
-    .to_string();
+    let cost_actual_json = pricing::checkpoint_quote_json(&connection, &run_id, &request)?;
     mark_checkpoint_response_received(
       &connection,
       &checkpoint_id,

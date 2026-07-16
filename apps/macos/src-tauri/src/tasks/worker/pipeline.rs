@@ -6,6 +6,7 @@ use rusqlite::{params, Connection};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use super::pricing::checkpoint_quote_json;
 use super::targets::{materialize_targets, PipelineTarget, TargetStepInput};
 use super::{
   database_error, insert_prepared_checkpoint, mark_checkpoint_completed,
@@ -200,7 +201,7 @@ where
     input_cursor_json.as_deref(),
     &page,
     persisted_count,
-    &serde_json::json!({ "currency": "USD", "amount_micros": 0 }).to_string(),
+    &checkpoint_quote_json(connection, run_id, &request)?,
     &response_received_at,
     next_cursor_json.as_deref(),
   )?;
