@@ -49,6 +49,17 @@ describe('semantic-release 配置', () => {
     }
   })
 
+  it('容器型 cargo-deny Action 只在 Linux runner 上运行', async () => {
+    const workflow = await readFile(
+      new URL('../../../.github/workflows/ci.yml', import.meta.url),
+      'utf8',
+    )
+
+    expect(workflow).toMatch(
+      /audit-rust-dependencies:\n[\s\S]*?runs-on: ubuntu-latest[\s\S]*?uses: EmbarkStudios\/cargo-deny-action@/,
+    )
+  })
+
   it('为功能与修复提交生成非空发版说明', async () => {
     const semanticReleaseEntry = require.resolve('semantic-release')
     const generatorEntry = require.resolve('@semantic-release/release-notes-generator', {
