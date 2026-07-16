@@ -43,10 +43,12 @@ pub(super) fn normalize_provider_cursor(
 fn canonical_cursor_value(platform: &str, data_type: &str, cursor: &Value) -> Option<Value> {
   match (platform.trim(), data_type.trim()) {
     ("tiktok", "keyword_search") => canonical_scalar(cursor, &["offset", "cursor"]),
+    ("tiktok" | "douyin", "account_posts") => canonical_scalar(cursor, &["max_cursor", "cursor"]),
     ("tiktok" | "douyin", "comments") => canonical_scalar(cursor, &["cursor"]),
     ("douyin", "keyword_search") => canonical_douyin_search(cursor),
     ("xiaohongshu", "keyword_search") => canonical_xiaohongshu_search(cursor),
     ("xiaohongshu", "comments") => canonical_xiaohongshu_comments(cursor),
+    ("xiaohongshu", "account_posts") => canonical_text_or_integer(cursor, &["cursor"]),
     _ => None,
   }
 }
@@ -55,10 +57,13 @@ fn endpoint_key(platform: &str, data_type: &str) -> Option<&'static str> {
   match (platform.trim(), data_type.trim()) {
     ("tiktok", "keyword_search") => Some("tiktok.keyword_search"),
     ("tiktok", "comments") => Some("tiktok.comments"),
+    ("tiktok", "account_posts") => Some("tiktok.account_posts"),
     ("douyin", "keyword_search") => Some("douyin.keyword_search"),
     ("douyin", "comments") => Some("douyin.comments"),
+    ("douyin", "account_posts") => Some("douyin.account_posts"),
     ("xiaohongshu", "keyword_search") => Some("xiaohongshu.keyword_search"),
     ("xiaohongshu", "comments") => Some("xiaohongshu.comments"),
+    ("xiaohongshu", "account_posts") => Some("xiaohongshu.account_posts"),
     _ => None,
   }
 }
@@ -84,6 +89,21 @@ fn canonical_scalar(cursor: &Value, object_keys: &[&str]) -> Option<Value> {
     _ => return None,
   };
   Some(Value::from(number))
+}
+
+fn canonical_text_or_integer(cursor: &Value, object_keys: &[&str]) -> Option<Value> {
+  let cursor = match cursor {
+    Value::Object(object)
+      if object.len() == 1 && object.keys().all(|key| object_keys.contains(&key.as_str())) =>
+    {
+      object_keys.iter().find_map(|key| object.get(*key))?
+    }
+    value => value,
+  };
+  if let Some(number) = nonnegative_integer(cursor) {
+    return Some(Value::from(number));
+  }
+  nonempty_string(cursor).map(Value::String)
 }
 
 fn canonical_douyin_search(cursor: &Value) -> Option<Value> {
@@ -253,6 +273,11 @@ pub(super) fn extract_next_cursor(
         let count = request_query_i64(request, "count")?;
         Some(Value::from(offset.checked_add(count)?))
       });
+  }
+  if request.data_type == "account_posts" && request.platform != "xiaohongshu" {
+    return continuation_field(data, response, "max_cursor")
+      .or_else(|| continuation_field(data, response, "cursor"))
+      .cloned();
   }
   continuation_field(data, response, "cursor").cloned()
 }

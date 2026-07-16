@@ -170,6 +170,28 @@ pub fn build_collection_request(
         required_string(&params, "account_id")?,
       );
     }
+    ("tiktok", "account_posts") => {
+      request
+        .paths
+        .push("/api/v1/tiktok/app/v3/fetch_user_post_videos".to_string());
+      push_query(
+        &mut request,
+        "sec_user_id",
+        required_string(&params, "account_id")?,
+      );
+      push_query(
+        &mut request,
+        "max_cursor",
+        cursor_primary(cursor, &["max_cursor", "cursor"])
+          .and_then(|value| value_to_text(&value))
+          .unwrap_or_else(|| "0".to_string()),
+      );
+      push_query(&mut request, "count", page_size(&params, 20)?.to_string());
+      push_query(&mut request, "sort_type", "0".to_string());
+      if let Some(region) = params.get("region").and_then(Value::as_str) {
+        push_query(&mut request, "region", region.to_string());
+      }
+    }
     ("tiktok", "item_detail") => {
       request
         .paths
@@ -228,6 +250,25 @@ pub fn build_collection_request(
         "sec_user_id",
         required_string(&params, "account_id")?,
       );
+    }
+    ("douyin", "account_posts") => {
+      request
+        .paths
+        .push("/api/v1/douyin/app/v3/fetch_user_post_videos".to_string());
+      push_query(
+        &mut request,
+        "sec_user_id",
+        required_string(&params, "account_id")?,
+      );
+      push_query(
+        &mut request,
+        "max_cursor",
+        cursor_primary(cursor, &["max_cursor", "cursor"])
+          .and_then(|value| value_to_text(&value))
+          .unwrap_or_else(|| "0".to_string()),
+      );
+      push_query(&mut request, "count", page_size(&params, 20)?.to_string());
+      push_query(&mut request, "sort_type", "0".to_string());
     }
     ("douyin", "item_detail") => {
       request
@@ -293,6 +334,21 @@ pub fn build_collection_request(
         "user_id",
         required_string(&params, "account_id")?,
       );
+    }
+    ("xiaohongshu", "account_posts") => {
+      request
+        .paths
+        .push("/api/v1/xiaohongshu/app_v2/get_user_posted_notes".to_string());
+      push_query(
+        &mut request,
+        "user_id",
+        required_string(&params, "account_id")?,
+      );
+      if let Some(cursor) =
+        cursor_primary(cursor, &["cursor"]).and_then(|value| value_to_text(&value))
+      {
+        push_query(&mut request, "cursor", cursor);
+      }
     }
     ("xiaohongshu", "item_detail") => {
       request.paths.extend([
@@ -601,6 +657,7 @@ fn extract_records(request: &TikHubCollectionRequest, data: &Value) -> AppResult
       }
       required_array_field(data, &["aweme_list", "items", "notes", "item_list"])
     }
+    "account_posts" => required_array_field(data, &["aweme_list", "items", "notes", "item_list"]),
     "account_profile" | "item_detail" if is_non_empty_record(data) => Ok(vec![data.clone()]),
     "account_profile" => Err(response_shape_error(
       "empty_record_data",

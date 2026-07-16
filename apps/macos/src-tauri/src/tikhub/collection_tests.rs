@@ -23,6 +23,12 @@ fn maps_every_mvp_platform_and_data_type_to_official_endpoint() {
     ),
     (
       "tiktok",
+      "account_posts",
+      RequestMethod::Get,
+      "/api/v1/tiktok/app/v3/fetch_user_post_videos",
+    ),
+    (
+      "tiktok",
       "item_detail",
       RequestMethod::Get,
       "/api/v1/tiktok/app/v3/fetch_one_video",
@@ -47,6 +53,12 @@ fn maps_every_mvp_platform_and_data_type_to_official_endpoint() {
     ),
     (
       "douyin",
+      "account_posts",
+      RequestMethod::Get,
+      "/api/v1/douyin/app/v3/fetch_user_post_videos",
+    ),
+    (
+      "douyin",
       "item_detail",
       RequestMethod::Get,
       "/api/v1/douyin/app/v3/fetch_one_video",
@@ -68,6 +80,12 @@ fn maps_every_mvp_platform_and_data_type_to_official_endpoint() {
       "account_profile",
       RequestMethod::Get,
       "/api/v1/xiaohongshu/app_v2/get_user_info",
+    ),
+    (
+      "xiaohongshu",
+      "account_posts",
+      RequestMethod::Get,
+      "/api/v1/xiaohongshu/app_v2/get_user_posted_notes",
     ),
     (
       "xiaohongshu",
@@ -152,6 +170,50 @@ fn maps_business_params_to_platform_specific_names_and_pagination() {
   assert!(xhs_profile
     .query()
     .contains(&("user_id".to_string(), "user-1".to_string())));
+}
+
+#[test]
+fn maps_and_parses_account_post_pagination_for_all_platforms() {
+  for (platform, account_param, cursor_param) in [
+    ("tiktok", "sec_user_id", "max_cursor"),
+    ("douyin", "sec_user_id", "max_cursor"),
+    ("xiaohongshu", "user_id", "cursor"),
+  ] {
+    let endpoint_key = format!("{platform}.account_posts");
+    let request = build_collection_request(
+      platform,
+      "account_posts",
+      &params_for("account_posts"),
+      Some(&cursor_for(&endpoint_key, serde_json::json!(20))),
+    )
+    .expect("账号作品请求应支持续页");
+
+    assert!(request
+      .query()
+      .contains(&(account_param.to_string(), "account-1".to_string())));
+    assert!(request
+      .query()
+      .contains(&(cursor_param.to_string(), "20".to_string())));
+
+    let page = parse_collection_page(
+      &request,
+      serde_json::json!({
+        "code": 200,
+        "data": {
+          "aweme_list": [{ "aweme_id": "post-1" }],
+          "cursor": 40,
+          "has_more": true
+        }
+      }),
+    )
+    .expect("账号作品响应应解析为作品记录");
+
+    assert_eq!(page.records.len(), 1);
+    assert_eq!(
+      page.next_cursor,
+      Some(cursor_for(&endpoint_key, serde_json::json!(40)))
+    );
+  }
 }
 
 #[test]
@@ -746,6 +808,7 @@ fn params_for(data_type: &str) -> Value {
       "time_range": "近 7 天"
     }),
     "account_profile" => serde_json::json!({ "account_id": "account-1", "region": "US" }),
+    "account_posts" => serde_json::json!({ "account_id": "account-1" }),
     _ => serde_json::json!({ "item_id": "item-1", "region": "US" }),
   }
 }
