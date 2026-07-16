@@ -177,10 +177,18 @@ jobs:
           RELEASE_JSON="$WORKDIR/release.json"
 
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir "$WORKDIR"
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > "$RELEASE_JSON"
-          jq --slurpfile release "$RELEASE_JSON" '
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets,body > "$RELEASE_JSON"
+          jq \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg tag "$TAG" \
+            --slurpfile release "$RELEASE_JSON" '
             ($release[0].assets
-              | map({ key: .url, value: .browser_download_url })
+              | map({
+                  key: .apiUrl,
+                  value: (
+                    "https://github.com/\($repository)/releases/download/\($tag)/\(.name | @uri)"
+                  )
+                })
               | from_entries) as $downloads
             | .notes = ($release[0].body // .notes)
             | .platforms |= with_entries(

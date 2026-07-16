@@ -42,7 +42,11 @@ describe('semantic-release 配置', () => {
       'utf8',
     )
 
-    expect(workflow).toContain('.browser_download_url')
+    expect(workflow).toContain('.apiUrl')
+    expect(workflow).toContain(
+      'gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets,body',
+    )
+    expect(workflow).not.toContain('gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG"')
     expect(workflow).toContain('Normalize updater manifest')
     expect(workflow).toContain('gh release upload "$TAG" "$MANIFEST" --clobber')
     expect(workflow).toContain('startswith("https://github.com/")')
