@@ -61,20 +61,24 @@ fn version_three_worker_executes_each_materialized_dependency_target() {
   execute_claimed_run_with_fetcher(&root, &run, |request| {
     if let Some(keyword) = request.source_params().get("keyword") {
       calls.borrow_mut().push(format!("search:{keyword}"));
+      let records = vec![
+        json!({
+          "aweme_id": "video-a",
+          "author": { "user_id": "account-a", "nickname": "账号 A" }
+        }),
+        json!({
+          "aweme_id": "video-b",
+          "author": { "user_id": "account-b", "nickname": "账号 B" }
+        }),
+      ];
       return Ok(CollectionPage {
-        records: vec![
-          json!({
-            "aweme_id": "video-a",
-            "author": { "user_id": "account-a", "nickname": "账号 A" }
-          }),
-          json!({
-            "aweme_id": "video-b",
-            "author": { "user_id": "account-b", "nickname": "账号 B" }
-          }),
-        ],
+        records: records.clone(),
         next_cursor: None,
         has_more: false,
-        raw_response: json!({ "data": { "aweme_list": [] }, "has_more": false }),
+        raw_response: json!({
+          "code": 200,
+          "data": { "aweme_list": records, "has_more": false }
+        }),
       });
     }
     let item_id = request
@@ -83,21 +87,25 @@ fn version_three_worker_executes_each_materialized_dependency_target() {
       .and_then(Value::as_str)
       .expect("target request should contain resolved item_id");
     calls.borrow_mut().push(format!("detail:{item_id}"));
+    let record = json!({
+      "aweme_id": item_id,
+      "author": {
+        "user_id": format!("author-{item_id}"),
+        "nickname": format!("作者 {item_id}")
+      }
+    });
     Ok(CollectionPage {
-      records: vec![json!({
-        "aweme_id": item_id,
-        "author": {
-          "user_id": format!("author-{item_id}"),
-          "nickname": format!("作者 {item_id}")
-        }
-      })],
+      records: vec![record.clone()],
       next_cursor: None,
       has_more: false,
-      raw_response: json!({ "data": { "aweme_id": item_id }, "has_more": false }),
+      raw_response: json!({ "code": 200, "data": record, "has_more": false }),
     })
   })
   .expect("worker should execute every materialized detail target");
+  let completed = complete_task_run(&root, &run.id, Value::Null)
+    .expect("v3 multi-target evidence should complete the run");
 
+  assert_eq!(completed.status, "success");
   assert_eq!(
     calls.into_inner(),
     vec!["search:\"car\"", "detail:video-a", "detail:video-b"]

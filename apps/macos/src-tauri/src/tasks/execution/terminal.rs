@@ -16,6 +16,8 @@ struct CompletionStep {
   stop_reason: Option<String>,
   started_at: Option<String>,
   completed_at: Option<String>,
+  schema_version: i64,
+  step_key: String,
 }
 
 struct CompletionCheckpoint {
@@ -42,6 +44,7 @@ struct CompletionCheckpoint {
 struct CompletionLimits {
   record_limit: i64,
   budget_micros: i64,
+  schema_version: i64,
 }
 
 struct CompletionTotals {
@@ -162,8 +165,16 @@ fn require_run_completion_evidence(
       .run_step_id
       .as_deref()
       .ok_or_else(|| task_error("运行步骤快照缺少计划步骤，不能标记成功"))?;
+    let valid_stop_reason = step.stop_reason.is_none()
+      || (step.schema_version == 3
+        && step.stop_reason.as_deref().is_some_and(|reason| {
+          matches!(
+            reason,
+            "provider_exhausted" | "request_limit" | "record_limit" | "budget_limit"
+          )
+        }));
     if step.status.as_deref() != Some("success")
-      || step.stop_reason.is_some()
+      || !valid_stop_reason
       || !valid_step_time_range(step, run_started_at, completion_at)
     {
       return Err(task_error(format!(
@@ -178,9 +189,17 @@ fn require_run_completion_evidence(
         step.order + 1
       )));
     };
-    if totals.request_count > step.request_limit {
+    if step.schema_version == 2 && totals.request_count > step.request_limit {
       return Err(task_error(format!(
         "运行步骤 {} 的请求次数超过确认上限",
+        step.order + 1
+      )));
+    }
+    if step.schema_version == 3
+      && !pipeline_requests_match_targets(connection, &run.id, step, totals.request_count)?
+    {
+      return Err(task_error(format!(
+        "运行步骤 {} 的目标请求证据与检查点不一致",
         step.order + 1
       )));
     }
@@ -194,8 +213,21 @@ fn require_run_completion_evidence(
       .checked_add(totals.cost_micros)
       .ok_or_else(|| task_error("完成证据的成本金额溢出"))?;
   }
-  if persisted_records > limits.record_limit {
+  if limits.schema_version == 2 && persisted_records > limits.record_limit {
     return Err(task_error("完成证据的持久化记录数超过确认上限"));
+  }
+  if limits.schema_version == 3 {
+    let output_count = connection
+      .query_row(
+        "SELECT COUNT(*) FROM collected_account
+         WHERE task_run_id = ?1 AND output_included = 1",
+        params![run.id],
+        |row| row.get::<_, i64>(0),
+      )
+      .map_err(database_error)?;
+    if output_count > limits.record_limit {
+      return Err(task_error("合并后的输出账号数超过确认上限"));
+    }
   }
   if cost_micros > limits.budget_micros {
     return Err(task_error("完成证据的实际成本超过确认预算"));
@@ -210,12 +242,12 @@ fn require_run_completion_evidence(
 fn load_completion_limits(connection: &Connection, plan_id: &str) -> AppResult<CompletionLimits> {
   let plan_json = connection
     .query_row(
-      "SELECT plan_json FROM collection_plan WHERE id = ?1",
+      "SELECT schema_version, plan_json FROM collection_plan WHERE id = ?1",
       params![plan_id],
-      |row| row.get::<_, String>(0),
+      |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
     )
     .map_err(database_error)?;
-  let plan_json = serde_json::from_str::<Value>(&plan_json)
+  let plan_json = serde_json::from_str::<Value>(&plan_json.1)
     .map_err(|_| task_error("采集计划限制不是合法 JSON"))?;
   let record_limit = plan_json
     .get("record_limit")
@@ -237,6 +269,10 @@ fn load_completion_limits(connection: &Connection, plan_id: &str) -> AppResult<C
   Ok(CompletionLimits {
     record_limit,
     budget_micros,
+    schema_version: plan_json
+      .get("schema_version")
+      .and_then(Value::as_i64)
+      .unwrap_or(2),
   })
 }
 
@@ -249,8 +285,13 @@ fn load_completion_steps(
     .prepare(
       "SELECT api_step.step_order, api_step.platform, api_step.data_type, api_step.params_json,
               api_step.request_count_estimate, run_step.id, run_step.status, run_step.stop_reason,
-              run_step.started_at, run_step.completed_at
+              run_step.started_at, run_step.completed_at, plan.schema_version,
+              COALESCE(
+                json_extract(plan.plan_json, '$.steps[' || api_step.step_order || '].step_key'),
+                api_step.data_type
+              )
        FROM api_call_step AS api_step
+       JOIN collection_plan AS plan ON plan.id = api_step.plan_id
        LEFT JOIN task_run_step AS run_step
          ON run_step.api_call_step_id = api_step.id AND run_step.task_run_id = ?1
        WHERE api_step.plan_id = ?2
@@ -270,6 +311,8 @@ fn load_completion_steps(
         stop_reason: row.get(7)?,
         started_at: row.get(8)?,
         completed_at: row.get(9)?,
+        schema_version: row.get(10)?,
+        step_key: row.get(11)?,
       })
     })
     .map_err(database_error)?;
@@ -328,7 +371,12 @@ fn completion_chain_totals(
   checkpoints: &[CompletionCheckpoint],
 ) -> Option<CompletionTotals> {
   if checkpoints.is_empty() {
-    return None;
+    return (step.schema_version == 3 && step.stop_reason.as_deref() == Some("provider_exhausted"))
+      .then_some(CompletionTotals {
+        request_count: 0,
+        persisted_records: 0,
+        cost_micros: 0,
+      });
   }
   let (Some(step_started_at), Some(step_completed_at)) = (
     valid_timestamp(step.started_at.as_deref()),
@@ -351,23 +399,26 @@ fn completion_chain_totals(
     {
       return None;
     }
-    if index == 0 && checkpoint.input_cursor_json.is_some() {
+    if step.schema_version == 2 && index == 0 && checkpoint.input_cursor_json.is_some() {
       return None;
     }
-    if let Some(previous) = previous {
-      let (Some(previous_next_cursor), Some(input_cursor)) = (
-        parsed_optional_json(previous.next_cursor_json.as_deref()),
-        parsed_optional_json(checkpoint.input_cursor_json.as_deref()),
-      ) else {
-        return None;
-      };
-      if previous.has_more != Some(true) || previous_next_cursor != input_cursor {
-        return None;
+    if step.schema_version == 2 {
+      if let Some(previous) = previous {
+        let (Some(previous_next_cursor), Some(input_cursor)) = (
+          parsed_optional_json(previous.next_cursor_json.as_deref()),
+          parsed_optional_json(checkpoint.input_cursor_json.as_deref()),
+        ) else {
+          return None;
+        };
+        if previous.has_more != Some(true) || previous_next_cursor != input_cursor {
+          return None;
+        }
       }
     }
     let is_last = index + 1 == checkpoints.len();
-    if (!is_last && checkpoint.has_more != Some(true))
-      || (is_last && checkpoint.has_more != Some(false))
+    if step.schema_version == 2
+      && ((!is_last && checkpoint.has_more != Some(true))
+        || (is_last && checkpoint.has_more != Some(false)))
     {
       return None;
     }
@@ -394,6 +445,27 @@ fn completion_chain_totals(
     persisted_records,
     cost_micros,
   })
+}
+
+fn pipeline_requests_match_targets(
+  connection: &Connection,
+  run_id: &str,
+  step: &CompletionStep,
+  checkpoint_requests: i64,
+) -> AppResult<bool> {
+  let evidence = connection
+    .query_row(
+      "SELECT COALESCE(SUM(request_count), 0),
+              COALESCE(SUM(CASE
+                WHEN request_count > ?1 OR status IN ('pending', 'running') THEN 1 ELSE 0
+              END), 0)
+       FROM collection_pipeline_target
+       WHERE task_run_id = ?2 AND step_key = ?3",
+      params![step.request_limit, run_id, step.step_key],
+      |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+    )
+    .map_err(database_error)?;
+  Ok(evidence.0 == checkpoint_requests && evidence.1 == 0)
 }
 
 fn checkpoint_evidence_is_complete(
