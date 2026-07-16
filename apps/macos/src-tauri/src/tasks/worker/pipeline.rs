@@ -5,6 +5,7 @@ use chrono::Utc;
 use rusqlite::{params, Connection};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 use super::pricing::checkpoint_quote_json;
 use super::targets::{materialize_targets, PipelineTarget, TargetStepInput};
@@ -15,6 +16,7 @@ use super::{
   persist_step_accounts, task_error, worker_error, RunStep,
 };
 use crate::domain::AppResult;
+use crate::domain::{AppError, AppErrorCode};
 use crate::records::{persist_collection_page, PersistCollectionPageInput};
 use crate::tikhub::{build_collection_request, CollectionPage, TikHubCollectionRequest};
 
@@ -135,6 +137,18 @@ where
   mark_checkpoint_requesting(connection, &checkpoint_id, &requested_at)?;
   let page = match fetch_page(&request) {
     Ok(page) => page,
+    Err(error) if is_isolated_target_failure(&error) => {
+      persist_target_failure(
+        connection,
+        step,
+        run_id,
+        &checkpoint_id,
+        target,
+        &request,
+        &error,
+      )?;
+      return Ok(());
+    }
     Err(error) => {
       mark_checkpoint_uncertain(connection, &checkpoint_id, &error.message)?;
       return Err(worker_error(
@@ -215,6 +229,80 @@ where
   } else {
     update_target(connection, target, "success", None)?;
   }
+  Ok(())
+}
+
+fn is_isolated_target_failure(error: &AppError) -> bool {
+  error.code == AppErrorCode::TikhubRequestError && !error.retryable
+}
+
+fn persist_target_failure(
+  connection: &Connection,
+  step: &RunStep,
+  run_id: &str,
+  checkpoint_id: &str,
+  target: &mut PipelineTarget,
+  request: &TikHubCollectionRequest,
+  error: &AppError,
+) -> AppResult<()> {
+  let now = Utc::now().to_rfc3339();
+  let error_code = serde_json::to_string(&error.code)
+    .unwrap_or_else(|_| "\"TIKHUB_REQUEST_ERROR\"".to_string())
+    .trim_matches('"')
+    .to_string();
+  let quote_json = checkpoint_quote_json(connection, run_id, request)?;
+  let transaction = connection.unchecked_transaction().map_err(database_error)?;
+  let checkpoint_changed = transaction
+    .execute(
+      "UPDATE collection_page_checkpoint
+       SET status = 'failed', retryable = 0, last_error_code = ?1,
+           last_error_message = ?2, cost_actual_json = ?3,
+           committed_at = ?4, updated_at = ?4
+       WHERE id = ?5 AND status = 'requesting'",
+      params![error_code, error.message, quote_json, now, checkpoint_id],
+    )
+    .map_err(database_error)?;
+  if checkpoint_changed != 1 {
+    return Err(task_error("逐目标失败检查点无法形成确定终态"));
+  }
+  target.request_count += 1;
+  transaction
+    .execute(
+      "UPDATE collection_pipeline_target
+       SET status = 'failed', request_count = ?1, updated_at = ?2
+       WHERE id = ?3 AND status IN ('pending', 'running')",
+      params![target.request_count, now, target.id],
+    )
+    .map_err(database_error)?;
+  let endpoint_key = format!("{}.{}", step.platform, step.data_type);
+  transaction
+    .execute(
+      "INSERT INTO collection_failure_evidence (
+         id, task_run_id, target_id, step_key, endpoint_key, target_key,
+         error_code, error_message, retryable, evidence_json, created_at
+       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9, ?10)",
+      params![
+        Uuid::new_v4().to_string(),
+        run_id,
+        target.id,
+        step.step_key,
+        endpoint_key,
+        target.target_key,
+        error_code,
+        error.message,
+        serde_json::json!({
+          "checkpoint_id": checkpoint_id,
+          "candidate_paths": request.paths(),
+          "source_params": request.source_params(),
+          "billing": serde_json::from_str::<Value>(&quote_json).unwrap_or(Value::Null)
+        })
+        .to_string(),
+        now
+      ],
+    )
+    .map_err(database_error)?;
+  transaction.commit().map_err(database_error)?;
+  target.status = "failed".to_string();
   Ok(())
 }
 

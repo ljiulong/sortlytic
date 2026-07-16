@@ -134,6 +134,122 @@ fn version_three_worker_executes_each_materialized_dependency_target() {
 }
 
 #[test]
+fn version_three_worker_records_one_target_failure_and_continues() {
+  let root = std::env::temp_dir().join(format!("worker-v3-partial-{}", Uuid::new_v4()));
+  create_workspace("v3 逐目标失败测试", &root).expect("workspace should be created");
+  let task = create_collection_task(
+    &root,
+    CreateCollectionTaskInput {
+      name: "部分目标失败".to_string(),
+      source_type: "form".to_string(),
+      platforms: vec!["tiktok".to_string()],
+      data_types: vec!["item_detail".to_string()],
+    },
+  )
+  .expect("task should create");
+  let draft = crate::collection::generate_form_collection_plan(
+    crate::collection::FormCollectionPlanRequest {
+      platform: "tiktok".to_string(),
+      data_type: None,
+      data_types: vec!["item_detail".to_string()],
+      params: json!({
+        "keyword": "car",
+        "region": "US",
+        "time_range": "30",
+        "page_size": 20
+      }),
+      age_range: None,
+      request_limit: Some(1),
+      record_limit: Some(2),
+      budget_limit_micros: Some(1_000_000),
+    },
+  )
+  .expect("v3 plan should generate");
+  let plan = save_collection_plan(
+    &root,
+    SaveCollectionPlanInput {
+      task_id: task.id.clone(),
+      source: draft.source,
+      plan_json: draft.plan_json,
+      validation_status: draft.validation_status,
+      validation_errors_json: Some(draft.validation_errors_json),
+      cost_estimate_json: Some(draft.cost_estimate_json),
+    },
+  )
+  .expect("v3 plan should save");
+  confirm_collection_plan(&root, &task.id, &plan.id).expect("v3 plan should confirm");
+  enqueue_task(&root, &task.id).expect("task should enqueue");
+  let run = claim_next_task(&root)
+    .expect("worker should claim task")
+    .expect("queued task should exist");
+
+  execute_claimed_run_with_fetcher(&root, &run, |request| {
+    if request.source_params().get("keyword").is_some() {
+      let records = vec![
+        json!({"aweme_id": "bad-video", "author": {"user_id": "bad-account"}}),
+        json!({"aweme_id": "good-video", "author": {"user_id": "good-account"}}),
+      ];
+      return Ok(CollectionPage {
+        records: records.clone(),
+        next_cursor: None,
+        has_more: false,
+        raw_response: json!({"code": 200, "data": {"aweme_list": records}}),
+      });
+    }
+    if request
+      .source_params()
+      .get("item_id")
+      .and_then(Value::as_str)
+      == Some("bad-video")
+    {
+      return Err(crate::domain::AppError::new(
+        crate::domain::AppErrorCode::TikhubRequestError,
+        "目标不存在",
+        crate::domain::AppErrorStage::Collection,
+        false,
+      ));
+    }
+    let record = json!({
+      "aweme_id": "good-video",
+      "author": {"user_id": "qualified-account", "nickname": "有效账号"}
+    });
+    Ok(CollectionPage {
+      records: vec![record.clone()],
+      next_cursor: None,
+      has_more: false,
+      raw_response: json!({"code": 200, "data": record}),
+    })
+  })
+  .expect("one target failure should not terminate remaining targets");
+
+  let connection = super::open_workspace_connection(&root).expect("database should open");
+  let state = connection
+    .query_row(
+      "SELECT
+         (SELECT COUNT(*) FROM collection_pipeline_target
+          WHERE task_run_id = ?1 AND status = 'failed'),
+         (SELECT COUNT(*) FROM collection_pipeline_target
+          WHERE task_run_id = ?1 AND status = 'success'),
+         (SELECT COUNT(*) FROM collection_failure_evidence WHERE task_run_id = ?1),
+         (SELECT COUNT(*) FROM collected_account
+          WHERE task_run_id = ?1 AND output_included = 1)",
+      [&run.id],
+      |row| {
+        Ok((
+          row.get::<_, i64>(0)?,
+          row.get::<_, i64>(1)?,
+          row.get::<_, i64>(2)?,
+          row.get::<_, i64>(3)?,
+        ))
+      },
+    )
+    .expect("partial target state should load");
+  assert_eq!(state, (1, 2, 1, 1));
+
+  std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn version_three_worker_counts_only_merged_age_qualified_accounts() {
   let root = std::env::temp_dir().join(format!("worker-v3-age-{}", Uuid::new_v4()));
   create_workspace("v3 年龄分页测试", &root).expect("workspace should be created");
