@@ -23,6 +23,19 @@ pub fn generate_form_collection_plan(
     data_types.clone()
   };
   let requested_limit = request.request_limit.unwrap_or(1).max(1);
+  let dependency_target_limit = if executable_data_types
+    .iter()
+    .any(|data_type| data_type == "keyword_search")
+  {
+    let search_endpoint = endpoint_for(&request.platform, "keyword_search")?;
+    let search_request_limit = match search_endpoint.pagination_mode {
+      PaginationMode::Single => 1,
+      PaginationMode::Cursor => requested_limit.clamp(1, search_endpoint.max_request_count),
+    };
+    Some(search_request_limit.saturating_mul(search_endpoint.max_page_size))
+  } else {
+    None
+  };
   let mut steps = Vec::new();
   let mut total_request_limit = 0_i64;
 
@@ -47,9 +60,21 @@ pub fn generate_form_collection_plan(
       PaginationMode::Single => 1,
       PaginationMode::Cursor => requested_limit.clamp(1, endpoint.max_request_count),
     };
-    total_request_limit = total_request_limit.saturating_add(step_request_limit);
     let depends_on_step_key =
       requires_step_search_dependency(data_type, &request.params).then_some("keyword_search");
+    let step_request_count = if depends_on_step_key.is_some() {
+      dependency_target_limit
+        .ok_or_else(|| {
+          AppError::validation(
+            format!("{data_type} 缺少 keyword_search 依赖步骤"),
+            AppErrorStage::Collection,
+          )
+        })?
+        .saturating_mul(step_request_limit)
+    } else {
+      step_request_limit
+    };
+    total_request_limit = total_request_limit.saturating_add(step_request_count);
     let input_binding = if depends_on_step_key.is_some() {
       dependency_binding(data_type)
     } else {

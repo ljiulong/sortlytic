@@ -636,6 +636,32 @@ mod tests {
   }
 
   #[test]
+  fn form_plan_prices_every_materialized_dependency_target() {
+    let plan = generate_form_collection_plan(FormCollectionPlanRequest {
+      platform: "tiktok".to_string(),
+      data_type: Some("item_detail".to_string()),
+      data_types: Vec::new(),
+      params: serde_json::json!({
+        "keyword": "car",
+        "region": "US",
+        "time_range": "30"
+      }),
+      age_range: None,
+      request_limit: Some(2),
+      record_limit: Some(2),
+      budget_limit_micros: None,
+    })
+    .expect("依赖型计划应生成");
+
+    assert_eq!(plan.plan_json["steps"][0]["step_key"], "keyword_search");
+    assert_eq!(plan.plan_json["steps"][1]["step_key"], "item_detail");
+    assert_eq!(
+      plan.cost_estimate_json["request_count_estimate"], 102,
+      "两页搜索最多产生 100 个目标，下游详情必须逐个计价"
+    );
+  }
+
+  #[test]
   fn form_plan_normalizes_multi_targets_dependencies_and_age_range() {
     let plan = generate_form_collection_plan(FormCollectionPlanRequest {
       platform: "xiaohongshu".to_string(),
