@@ -1,3 +1,4 @@
+pub mod accounts;
 pub mod ai;
 pub mod app_state;
 pub mod collection;
