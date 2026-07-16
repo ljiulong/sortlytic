@@ -163,12 +163,49 @@ jobs:
   finalize-release:
     name: 发布完整 macOS 稳定版
     needs: [release, build-and-release]
-    if: >-
-      needs.release.outputs.published == 'true' &&
-      (github.event_name != 'workflow_dispatch' || inputs.rebuild_tag == '')
+    if: needs.release.outputs.published == 'true'
     runs-on: ubuntu-latest
     steps:
+      - name: Normalize updater manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          WORKDIR="$(mktemp -d)"
+          MANIFEST="$WORKDIR/latest.json"
+          NORMALIZED_MANIFEST="$WORKDIR/latest.normalized.json"
+          RELEASE_JSON="$WORKDIR/release.json"
+
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir "$WORKDIR"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > "$RELEASE_JSON"
+          jq --slurpfile release "$RELEASE_JSON" '
+            ($release[0].assets
+              | map({ key: .url, value: .browser_download_url })
+              | from_entries) as $downloads
+            | .notes = ($release[0].body // .notes)
+            | .platforms |= with_entries(
+                .value.url = (
+                  $downloads[.value.url]
+                  // error("缺少更新包的直接下载地址：\(.value.url)")
+                )
+              )
+          ' "$MANIFEST" > "$NORMALIZED_MANIFEST"
+          mv "$NORMALIZED_MANIFEST" "$MANIFEST"
+
+          jq -e --arg tag "$TAG" '
+            .version == ($tag | ltrimstr("app-v")) and
+            (.platforms | length >= 2) and
+            all(
+              .platforms[];
+              (.signature | length) > 0 and
+              (.url | startswith("https://github.com/") and contains("/releases/download/"))
+            )
+          ' "$MANIFEST" >/dev/null
+          gh release upload "$TAG" "$MANIFEST" --clobber
+
       - name: Publish verified draft release
+        if: >-
+          github.event_name != 'workflow_dispatch' || inputs.rebuild_tag == ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.release.outputs.tag }}

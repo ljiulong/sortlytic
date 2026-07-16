@@ -36,6 +36,31 @@ describe('semantic-release 配置', () => {
     expect(workflow).toContain('gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest')
   })
 
+  it('公开稳定版前把更新清单改为直接下载地址', async () => {
+    const workflow = await readFile(
+      new URL('../../../.github/workflows/release-macos.yml', import.meta.url),
+      'utf8',
+    )
+
+    expect(workflow).toContain('.browser_download_url')
+    expect(workflow).toContain('Normalize updater manifest')
+    expect(workflow).toContain('gh release upload "$TAG" "$MANIFEST" --clobber')
+    expect(workflow).toContain('startswith("https://github.com/")')
+  })
+
+  it('重打包已有标签时仍修复更新清单但不重复发布', async () => {
+    const workflow = await readFile(
+      new URL('../../../.github/workflows/release-macos.yml', import.meta.url),
+      'utf8',
+    )
+    const finalizeJob = workflow.slice(workflow.indexOf('  finalize-release:'))
+
+    expect(finalizeJob).toContain("if: needs.release.outputs.published == 'true'")
+    expect(finalizeJob).toMatch(
+      /- name: Publish verified draft release\n\s+if: >-\n\s+github\.event_name != 'workflow_dispatch' \|\| inputs\.rebuild_tag == ''/,
+    )
+  })
+
   it('发版工作流把所有第三方 Action 固定到完整提交 SHA', async () => {
     const workflow = await readFile(
       new URL('../../../.github/workflows/release-macos.yml', import.meta.url),
