@@ -13,20 +13,17 @@ import {
   Wrench,
 } from 'lucide-react'
 import { useForm } from 'react-hook-form'
-import { z } from 'zod'
+import type { z } from 'zod'
 import './CollectionBuilder.css'
+import {
+  AGE_RANGE_LIMITS,
+  collectionFormSchema,
+  collectionDataTypeOptions,
+  countryRegionOptions,
+  supportsRegionSelection,
+} from './collection-options'
 import type { RuntimeCollectionPlan } from './use-workbench-backend'
-import { dataTypeOptions, platformOptions } from './workbench-data'
-
-const collectionFormSchema = z.object({
-  platform: z.enum(platformOptions),
-  dataType: z.enum(dataTypeOptions),
-  regionCode: z.string().min(2, '国家/地区代码至少 2 位').max(12, '代码过长'),
-  keyword: z.string().min(2, '请输入关键词或账号').max(80, '关键词过长'),
-  range: z.string().min(4, '请选择时间范围'),
-  maxRecords: z.coerce.number().min(10, '至少 10 条').max(5000, 'MVP 单任务上限为 5000 条'),
-  budget: z.coerce.number().min(1, '请输入成本上限').max(500, 'MVP 单任务上限为 500'),
-})
+import { platformOptions } from './workbench-data'
 
 export type CollectionFormInput = z.input<typeof collectionFormSchema>
 export type CollectionFormValues = z.output<typeof collectionFormSchema>
@@ -70,19 +67,31 @@ export function CollectionBuilder({
   const {
     register,
     handleSubmit,
+    setValue,
+    watch,
     formState: { errors },
   } = useForm<CollectionFormInput, unknown, CollectionFormValues>({
     resolver: zodResolver(collectionFormSchema),
     defaultValues: {
       platform: plan.platform,
       dataType: plan.dataType,
+      dataTypes: ['keyword_search'],
       regionCode: plan.regionCode,
       keyword: plan.keyword,
       range: plan.range,
       maxRecords: plan.maxRecords,
       budget: plan.budget,
+      ageRangeEnabled: false,
     },
   })
+  const selectedPlatform = watch('platform')
+  const selectedDataTypes = watch('dataTypes') ?? []
+  const ageRangeEnabled = watch('ageRangeEnabled')
+  const regionEnabled = supportsRegionSelection(selectedPlatform, selectedDataTypes)
+
+  useEffect(() => {
+    if (!regionEnabled) setValue('regionCode', '')
+  }, [regionEnabled, setValue])
 
   const submitForm = async (values: CollectionFormValues) => {
     const nextPlan = await onGenerateFormPlan(values)
@@ -128,22 +137,67 @@ export function CollectionBuilder({
               </select>
             </Field>
             <Field label="数据类型">
-              <select {...register('dataType')}>
-                {dataTypeOptions.map((item) => (
-                  <option key={item} value={item}>
-                    {item}
-                  </option>
+              <input type="hidden" {...register('dataType')} />
+              <div className="collection-type-grid">
+                {collectionDataTypeOptions.map((item) => (
+                  <label className="collection-type-option" key={item.value}>
+                    <input type="checkbox" value={item.value} {...register('dataTypes')} />
+                    <span>
+                      <strong>{item.label}</strong>
+                      <small>{item.description}</small>
+                    </span>
+                  </label>
                 ))}
-              </select>
+              </div>
+              {errors.dataTypes?.message ? <small>{errors.dataTypes.message}</small> : null}
             </Field>
             <Field error={errors.regionCode?.message} label="国家/地区">
-              <input {...register('regionCode')} placeholder="CN" />
+              <input
+                list="country-region-options"
+                disabled={!regionEnabled}
+                {...register('regionCode')}
+                placeholder={regionEnabled ? '输入名称或两位代码搜索' : '所选目标不支持地区筛选'}
+              />
+              <datalist id="country-region-options">
+                {countryRegionOptions.map((item) => (
+                  <option key={item.code} value={item.code}>{item.label}</option>
+                ))}
+              </datalist>
             </Field>
             <Field error={errors.keyword?.message} label="关键词或账号">
               <input {...register('keyword')} />
             </Field>
             <Field error={errors.range?.message} label="时间范围">
               <input {...register('range')} />
+            </Field>
+            <Field label="年龄范围">
+              <label className="inline-toggle">
+                <input type="checkbox" {...register('ageRangeEnabled')} />
+                仅保留明确公开年龄的账号
+              </label>
+              <div className="age-range-inputs">
+                <input
+                  aria-label="最小年龄"
+                  disabled={!ageRangeEnabled}
+                  min={AGE_RANGE_LIMITS.min}
+                  max={AGE_RANGE_LIMITS.max}
+                  placeholder="最小"
+                  type="number"
+                  {...register('ageMin', { valueAsNumber: true })}
+                />
+                <span>至</span>
+                <input
+                  aria-label="最大年龄"
+                  disabled={!ageRangeEnabled}
+                  min={AGE_RANGE_LIMITS.min}
+                  max={AGE_RANGE_LIMITS.max}
+                  placeholder="最大"
+                  type="number"
+                  {...register('ageMax', { valueAsNumber: true })}
+                />
+              </div>
+              {errors.ageMin?.message ? <small>{errors.ageMin.message}</small> : null}
+              {errors.ageMax?.message ? <small>{errors.ageMax.message}</small> : null}
             </Field>
             <Field error={errors.maxRecords?.message} label="最大记录数">
               <input type="number" {...register('maxRecords', { valueAsNumber: true })} />

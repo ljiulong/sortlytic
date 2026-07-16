@@ -58,3 +58,54 @@ export const countryRegionOptions = [
   code,
   label: `${regionNames.of(code) ?? code}（${code}）`,
 }))
+
+const optionalAge = z.preprocess(
+  (value) => (value === '' || Number.isNaN(value) ? undefined : value),
+  z.coerce.number().int('年龄必须是整数').min(AGE_RANGE_LIMITS.min).max(AGE_RANGE_LIMITS.max).optional(),
+)
+const knownRegionCodes = new Set(countryRegionOptions.map(({ code }) => code))
+
+export const collectionFormSchema = z
+  .object({
+    platform: z.enum(platformOptions),
+    dataType: z.enum(dataTypeOptions),
+    dataTypes: z.array(z.enum(collectionDataTypeOptions.map(({ value }) => value))).min(1, '至少选择一种目标数据'),
+    regionCode: z
+      .string()
+      .transform((value) => value.trim().toUpperCase())
+      .refine((value) => !value || knownRegionCodes.has(value), '请选择下拉表中的国家/地区'),
+    keyword: z.string().min(2, '请输入关键词或账号').max(80, '关键词过长'),
+    range: z.string().min(4, '请选择时间范围'),
+    maxRecords: z.coerce.number().min(10, '至少 10 条').max(5000, 'MVP 单任务上限为 5000 条'),
+    budget: z.coerce.number().min(1, '请输入成本上限').max(500, 'MVP 单任务上限为 500'),
+    ageRangeEnabled: z.boolean(),
+    ageMin: optionalAge,
+    ageMax: optionalAge,
+  })
+  .superRefine((values, context) => {
+    if (!values.ageRangeEnabled) return
+    if (values.ageMin === undefined) {
+      context.addIssue({ code: 'custom', path: ['ageMin'], message: '请输入最小年龄' })
+    }
+    if (values.ageMax === undefined) {
+      context.addIssue({ code: 'custom', path: ['ageMax'], message: '请输入最大年龄' })
+    }
+    if (values.ageMin !== undefined && values.ageMax !== undefined && values.ageMin > values.ageMax) {
+      context.addIssue({ code: 'custom', path: ['ageMax'], message: '最大年龄不能小于最小年龄' })
+    }
+  })
+
+const REGION_CAPABLE_TYPES: Record<(typeof platformOptions)[number], ReadonlySet<CollectionDataType>> = {
+  TikTok: new Set(['keyword_search', 'account_posts', 'comments']),
+  抖音: new Set(['keyword_search', 'comments']),
+  小红书: new Set(['keyword_search', 'comments']),
+}
+
+export function supportsRegionSelection(
+  platform: (typeof platformOptions)[number],
+  dataTypes: readonly CollectionDataType[],
+) {
+  return dataTypes.some((dataType) => REGION_CAPABLE_TYPES[platform].has(dataType))
+}
+import { z } from 'zod'
+import { dataTypeOptions, platformOptions } from './workbench-data'
