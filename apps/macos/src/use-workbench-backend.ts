@@ -40,7 +40,18 @@ import {
 } from './backend-api'
 import { useAppUpdater } from './use-app-updater'
 import { buildPlanParams } from './collection-plan-client'
+import {
+  preflightCollectionPlanPricing,
+  pricingEndpointsForPlan,
+} from './collection-pricing'
 import type { CollectionDataType } from './collection-options'
+import {
+  mapTaskRow,
+  numberFromJson,
+  stringArrayFromJson,
+  toUiDataType,
+  toUiPlatform,
+} from './workbench-task-mapper'
 import {
   type ConnectionIcon,
   type DataType,
@@ -88,6 +99,11 @@ export type RuntimeCollectionPlan = Omit<CollectionFormPayload, 'dataTypes'> & {
   planId?: string
   validationStatus?: string
   costEstimate?: string
+  pricingEndpoints?: string[]
+  requestCountEstimate?: number
+  budgetMicros?: number
+  pricingReady?: boolean
+  pricingBlocker?: string
 }
 
 export type WorkbenchRuntimeData = {
@@ -229,6 +245,7 @@ export function useWorkbenchBackend() {
       if (!activePlan?.taskId || !activePlan.planId) {
         throw new Error('请先生成采集计划')
       }
+      await preflightCollectionPlanPricing(activePlan)
       await confirmCollectionPlan(activePlan.taskId, activePlan.planId)
       const run = await enqueueTask(activePlan.taskId)
       return run
@@ -482,7 +499,7 @@ async function createFormPlan(values: CollectionFormPayload): Promise<RuntimeCol
     cost_estimate_json: draft.cost_estimate_json,
   })
 
-  return planFromBackend(values, plan)
+  return preparePlanPricing(planFromBackend(values, plan))
 }
 
 export function buildFormPlanRequest(values: CollectionFormPayload): GenerateFormPlanInput {
@@ -522,7 +539,7 @@ async function createNaturalPlan(intentText: string): Promise<RuntimeCollectionP
     model_id: null,
   })
 
-  return planFromBackend(
+  return preparePlanPricing(planFromBackend(
     {
       platform: toUiPlatform(hints.platform),
       dataType: toUiDataType(hints.dataType),
@@ -533,7 +550,7 @@ async function createNaturalPlan(intentText: string): Promise<RuntimeCollectionP
       budget: 0,
     },
     result.collection_plan,
-  )
+  ))
 }
 
 export function mapBackendData(
@@ -641,29 +658,13 @@ function isOfficialTikhubBaseUrl(baseUrl?: string | null) {
   return baseUrl === 'https://api.tikhub.io' || baseUrl === 'https://api.tikhub.dev'
 }
 
-function mapTaskRow(task: CollectionTaskView): WorkbenchRuntimeData['tasks'][number] {
-  const platforms = stringArrayFromJson(task.platforms_json)
-  const dataTypes = stringArrayFromJson(task.data_types_json)
-  const requestCount = numberFromJson(task.cost_estimate_json)
-
-  return {
-    id: task.id,
-    name: task.name,
-    platform: toUiPlatform(platforms[0] ?? 'xiaohongshu'),
-    status: toUiTaskStatus(task.status),
-    source: task.source_type === 'natural_language' ? '自然语言' : '表单式',
-    progress: progressForTaskStatus(task.status),
-    records: 0,
-    cost: `${requestCount ? `预计 ${requestCount} 次请求` : '尚无请求估算'} · ${toUiDataType(dataTypes[0] ?? 'comments')}`,
-  }
-}
-
 export function planFromBackend(values: CollectionFormPayload, plan: CollectionPlanView): RuntimeCollectionPlan {
   const missing = stringArrayFromJson(plan.validation_errors_json)
   const platforms = stringArrayFromJson(plan.plan_json.platforms).map(toUiPlatform)
   const dataTypes = stringArrayFromJson(plan.plan_json.data_types).map(toUiDataType)
   const recordLimit = positiveNumber(plan.plan_json.record_limit)
-  const budgetLimit = positiveNumber(plan.plan_json.budget_limit)
+  const budgetMicros = amountMicros(plan.plan_json.budget_limit)
+  const requestCountEstimate = numberFromJson(plan.cost_estimate_json)
   const useSubmittedLimits = plan.source === 'form_generated'
   const genders = stringArrayFromJson(plan.plan_json.gender_filter).filter(
     (value): value is 'male' | 'female' | 'other' => ['male', 'female', 'other'].includes(value),
@@ -680,7 +681,7 @@ export function planFromBackend(values: CollectionFormPayload, plan: CollectionP
     keyword: targetFromPlan(plan.plan_json) || '未提供采集对象',
     range: nonEmptyString(plan.plan_json.time_range) ?? '未提供时间范围',
     maxRecords: recordLimit ?? (useSubmittedLimits ? values.maxRecords : 0),
-    budget: budgetLimit ?? (useSubmittedLimits ? values.budget : 0),
+    budget: budgetMicros ? budgetMicros / 1_000_000 : (useSubmittedLimits ? values.budget : 0),
     genderFilterEnabled: genders.length > 0,
     genders,
     status: plan.validation_status === 'valid' ? '等待确认' : '待人工确认',
@@ -688,7 +689,25 @@ export function planFromBackend(values: CollectionFormPayload, plan: CollectionP
     taskId: plan.task_id,
     planId: plan.id,
     validationStatus: plan.validation_status,
-    costEstimate: `${numberFromJson(plan.cost_estimate_json)} 次请求`,
+    costEstimate: `${requestCountEstimate} 次请求`,
+    pricingEndpoints: pricingEndpointsForPlan(plan.plan_json),
+    requestCountEstimate,
+    budgetMicros,
+    pricingReady: false,
+  }
+}
+
+async function preparePlanPricing(plan: RuntimeCollectionPlan) {
+  try {
+    const preview = await preflightCollectionPlanPricing(plan)
+    return {
+      ...plan,
+      pricingReady: true,
+      pricingBlocker: undefined,
+      costEstimate: `${plan.requestCountEstimate ?? 0} 次请求，实时报价上限 $${(preview.quotedTotalMicros / 1_000_000).toFixed(4)}`,
+    }
+  } catch (error) {
+    return { ...plan, pricingReady: false, pricingBlocker: backendErrorMessage(error) }
   }
 }
 
@@ -712,12 +731,6 @@ function toBackendPlatform(platform: Platform) {
   return 'xiaohongshu'
 }
 
-function toUiPlatform(platform: string): Platform {
-  if (platform === 'tiktok') return 'TikTok'
-  if (platform === 'douyin') return '抖音'
-  return '小红书'
-}
-
 function toBackendDataType(dataType: DataType) {
   if (dataType === '搜索结果账号' || dataType === '关键词搜索') return 'keyword_search'
   if (dataType === '账号公开信息') return 'account_profile'
@@ -726,36 +739,13 @@ function toBackendDataType(dataType: DataType) {
   return 'comments'
 }
 
-function toUiDataType(dataType: string): DataType {
-  if (dataType === 'keyword_search') return '搜索结果账号'
-  if (dataType === 'account_profile') return '账号公开信息'
-  if (dataType === 'item_detail') return '作品/笔记作者'
-  if (dataType === 'account_posts') return '账号作品所属账号'
-  return '评论用户'
-}
-
-function toUiTaskStatus(status: string): TaskStatus {
-  if (status === 'success') return '成功'
-  if (status === 'failed') return '失败'
-  if (status === 'queued') return '已排队'
-  if (status === 'waiting_confirmation') return '等待确认'
-  if (status === 'draft') return '待人工确认'
-  if (status === 'cancelled') return '失败'
-  return '运行中'
-}
-
-function progressForTaskStatus(status: string) {
-  if (status === 'success') return 100
-  return 0
-}
-
-function numberFromJson(value: Record<string, unknown>) {
-  const estimate = value.request_count_estimate
-  return typeof estimate === 'number' ? estimate : 0
-}
-
 function positiveNumber(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined
+}
+
+function amountMicros(value: unknown) {
+  if (!value || typeof value !== 'object' || !('amount_micros' in value)) return undefined
+  return positiveNumber(value.amount_micros)
 }
 
 function nonEmptyString(value: unknown) {
@@ -786,13 +776,6 @@ function targetFromPlan(planJson: Record<string, unknown>) {
     }
   }
   return ''
-}
-
-function stringArrayFromJson(value: unknown) {
-  if (Array.isArray(value)) {
-    return value.filter((item): item is string => typeof item === 'string')
-  }
-  return []
 }
 
 function shortPath(path: string) {

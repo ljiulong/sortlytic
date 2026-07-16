@@ -660,6 +660,13 @@ describe('mapBackendData', () => {
     expect(result.tasks[0]?.progress).toBe(0)
   })
 
+  it('把 partial_success 映射为已结束的部分成功', () => {
+    const result = mapBackendData(workspace, [{ ...task, status: 'partial_success' }], [], null, [], 1_000)
+
+    expect(result.tasks[0]?.status).toBe('部分成功')
+    expect(result.tasks[0]?.progress).toBe(100)
+  })
+
   it('孤立 TikHub 密钥不会被当成已配置 connector', () => {
     const result = mapBackendData(workspace, [], [tikhubSecret], null, [], 1_000)
     const connection = result.connections[0]
@@ -695,6 +702,48 @@ describe('mapBackendData', () => {
 })
 
 describe('planFromBackend', () => {
+  it('恢复运行前实时计价所需的端点、请求上限和微美元预算', () => {
+    const plan: CollectionPlanView = {
+      id: 'plan-price',
+      task_id: 'task-1',
+      source: 'form_generated',
+      schema_version: 3,
+      plan_json: {
+        platforms: ['tiktok'],
+        data_types: ['comments'],
+        region: 'US',
+        time_range: '30',
+        record_limit: 100,
+        budget_limit: { currency: 'USD', amount_micros: 2_000_000 },
+        steps: [{ endpoint_key: 'tiktok.comments', params: { keyword: 'car' } }],
+      },
+      validation_status: 'valid',
+      validation_errors_json: [],
+      cost_estimate_json: { request_count_estimate: 3 },
+      confirmed_by_user: false,
+      created_at: '2026-07-12T00:00:00Z',
+      updated_at: '2026-07-12T00:00:00Z',
+    }
+
+    const result = planFromBackend(
+      {
+        platform: 'TikTok',
+        dataType: '评论采集',
+        regionCode: 'US',
+        keyword: 'car',
+        range: '近 30 天',
+        maxRecords: 100,
+        budget: 2,
+      },
+      plan,
+    )
+
+    expect(result.pricingEndpoints).toEqual(['/api/v1/tiktok/app/v3/fetch_video_comments'])
+    expect(result.requestCountEstimate).toBe(3)
+    expect(result.budgetMicros).toBe(2_000_000)
+    expect(result.pricingReady).toBe(false)
+  })
+
   it('确认视图使用后端多平台计划且不虚构记录数和金额预算', () => {
     const plan: CollectionPlanView = {
       id: 'plan-1',
