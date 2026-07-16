@@ -39,7 +39,7 @@ jobs:
       version: ${{ steps.recovery.outputs.version || steps.semantic.outputs.version }}
     steps:
       - name: Checkout release source
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           fetch-depth: 0
           ref: ${{ inputs.rebuild_tag || github.sha }}
@@ -63,7 +63,7 @@ jobs:
 
       - name: Setup Node.js
         if: steps.recovery.outcome == 'skipped'
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
 
@@ -76,7 +76,9 @@ jobs:
 
       - name: Install Rust stable
         if: steps.recovery.outcome == 'skipped'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: stable
 
       - name: Install release dependencies
         if: steps.recovery.outcome == 'skipped'
@@ -114,12 +116,12 @@ jobs:
             target: x86_64-apple-darwin
     steps:
       - name: Checkout release tag
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           ref: ${{ needs.release.outputs.tag }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
 
@@ -131,12 +133,13 @@ jobs:
           test "$(pnpm --version)" = "11.5.2"
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
       - name: Cache Rust build
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: apps/macos/src-tauri -> target
 
@@ -145,7 +148,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build and upload macOS release assets
-        uses: tauri-apps/tauri-action@v1
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

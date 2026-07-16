@@ -36,6 +36,19 @@ describe('semantic-release 配置', () => {
     expect(workflow).toContain('gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest')
   })
 
+  it('发版工作流把所有第三方 Action 固定到完整提交 SHA', async () => {
+    const workflow = await readFile(
+      new URL('../../../.github/workflows/release-macos.yml', import.meta.url),
+      'utf8',
+    )
+    const actionRefs = [...workflow.matchAll(/^\s*uses:\s+([^@\s]+)@([^\s#]+)/gm)]
+
+    expect(actionRefs.length).toBeGreaterThan(0)
+    for (const [, action, ref] of actionRefs) {
+      if (!action.startsWith('./')) expect(ref, action).toMatch(/^[a-f0-9]{40}$/)
+    }
+  })
+
   it('为功能与修复提交生成非空发版说明', async () => {
     const semanticReleaseEntry = require.resolve('semantic-release')
     const generatorEntry = require.resolve('@semantic-release/release-notes-generator', {
