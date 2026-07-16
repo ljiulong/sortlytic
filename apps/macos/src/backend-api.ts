@@ -52,6 +52,7 @@ export type TikhubConnectionTestResult = {
   masked_email?: string | null
   balance?: number | null
   free_credit?: number | null
+  available_credit?: number | null
   email_verified?: boolean | null
   api_key_status?: number | null
   daily_usage_json: Record<string, unknown>

@@ -1,4 +1,4 @@
-import { KeyRound, MonitorCheck, ShieldCheck, X } from 'lucide-react'
+import { ChartNoAxesCombined, KeyRound, MonitorCheck, ShieldCheck, WalletCards, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { TikhubConnectionTestResult, TikhubConnectorView } from './backend-api'
 
@@ -44,7 +44,7 @@ function TikhubSettingsPanel({ connector, isBusy, result, onSaveAndTest }: Tikhu
       <div className="section-heading">
         <div>
           <p className="eyebrow">TikHub 设置</p>
-          <h2>免费额度可行性测试</h2>
+          <h2>账户额度与可行性测试</h2>
         </div>
         <span className="status-pill" data-tone={result?.success ? 'success' : connector?.enabled ? 'info' : 'warning'}>
           {statusLabel}
@@ -69,7 +69,10 @@ function TikhubSettingsPanel({ connector, isBusy, result, onSaveAndTest }: Tikhu
 
       <div className="export-grid">
         <InfoItem icon={MonitorCheck} label="账号" value={result?.masked_email ?? '等待 Token 测试'} />
-        <InfoItem icon={ShieldCheck} label="免费额度" value={result?.free_credit == null ? '未知' : String(result.free_credit)} />
+        <InfoItem icon={WalletCards} label="充值余额" value={formatCredit(result?.balance)} />
+        <InfoItem icon={ShieldCheck} label="免费额度" value={formatCredit(result?.free_credit)} />
+        <InfoItem icon={WalletCards} label="可用额度合计" value={formatCredit(result?.available_credit)} />
+        <InfoItem icon={ChartNoAxesCombined} label="今日用量" value={formatDailyUsage(result?.daily_usage_json)} />
         <InfoItem icon={ShieldCheck} label="邮箱验证" value={result?.email_verified == null ? '未知' : result.email_verified ? '已验证' : '未验证'} />
       </div>
 
@@ -146,6 +149,18 @@ function TikhubSettingsPanel({ connector, isBusy, result, onSaveAndTest }: Tikhu
       ) : null}
     </section>
   )
+}
+
+function formatCredit(value?: number | null) {
+  return value == null || !Number.isFinite(value) ? '未知' : `$${value.toFixed(2)}`
+}
+
+function formatDailyUsage(value?: Record<string, unknown>) {
+  if (!value || 'warning' in value) return '未知'
+  const requestCount = ['total_requests', 'request_count', 'requests', 'used']
+    .map((key) => value[key])
+    .find((candidate): candidate is number => typeof candidate === 'number' && Number.isFinite(candidate))
+  return requestCount == null ? '已获取明细' : `${requestCount.toLocaleString()} 次请求`
 }
 
 function InfoItem({
