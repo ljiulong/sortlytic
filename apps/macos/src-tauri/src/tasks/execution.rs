@@ -5,7 +5,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBe
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::collection::validate_collection_plan_v2;
+use crate::collection::{validate_collection_plan_v2, validate_collection_plan_v3};
 use crate::domain::{redact_sensitive_text, AppErrorCode, AppResult};
 
 use super::recovery::{
@@ -145,7 +145,7 @@ pub fn claim_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRunV
            AND EXISTS (
              SELECT 1 FROM collection_plan AS plan
              WHERE plan.id = task_run.plan_id AND plan.task_id = task_run.task_id
-               AND plan.schema_version = 2 AND plan.validation_status = 'valid'
+               AND plan.schema_version IN (2, 3) AND plan.validation_status = 'valid'
            )",
         params![stage, now, queued.id],
       )
@@ -351,9 +351,9 @@ pub(super) fn require_executable_plan(
   if plan.0 != task_id {
     return Err(task_error("任务运行绑定了其他任务的采集计划"));
   }
-  if plan.1 != 2 {
+  if !matches!(plan.1, 2 | 3) {
     return Err(task_error(format!(
-      "schema_version={} 的采集计划不能执行，必须重新确认有效的 v2 计划",
+      "schema_version={} 的采集计划不能执行，必须重新确认有效的 v2/v3 计划",
       plan.1
     )));
   }
@@ -362,19 +362,23 @@ pub(super) fn require_executable_plan(
   }
 
   let plan_json = serde_json::from_str::<Value>(&plan.3)
-    .map_err(|_| task_error("采集计划 v2 不是合法 JSON，不能执行"))?;
+    .map_err(|_| task_error(format!("采集计划 v{} 不是合法 JSON，不能执行", plan.1)))?;
   let task = get_task_by_id(connection, task_id)?;
   let mut validation_errors = validate_plan_for_task(&task, &plan_json);
-  validation_errors.extend(validate_collection_plan_v2(&plan_json).errors);
+  validation_errors.extend(match plan.1 {
+    3 => validate_collection_plan_v3(&plan_json).errors,
+    _ => validate_collection_plan_v2(&plan_json).errors,
+  });
   validation_errors.sort();
   validation_errors.dedup();
   if !validation_errors.is_empty() {
     return Err(task_error(format!(
-      "采集计划 v2 已损坏或不再满足执行条件：{}",
+      "采集计划 v{} 已损坏或不再满足执行条件：{}",
+      plan.1,
       validation_errors.join("；")
     )));
   }
-  require_persisted_steps_match_plan(connection, plan_id, &plan_json)?;
+  require_persisted_steps_match_plan(connection, plan_id, &plan_json, plan.1)?;
 
   Ok(())
 }
@@ -383,15 +387,20 @@ fn require_persisted_steps_match_plan(
   connection: &Connection,
   plan_id: &str,
   plan_json: &Value,
+  schema_version: i64,
 ) -> AppResult<()> {
   let expected_steps = plan_json
     .get("steps")
     .and_then(Value::as_array)
-    .ok_or_else(|| task_error("采集计划 v2 缺少步骤，不能执行"))?;
+    .ok_or_else(|| task_error(format!("采集计划 v{schema_version} 缺少步骤，不能执行")))?;
   let request_limit = plan_json
     .get("request_limit")
     .and_then(Value::as_i64)
-    .ok_or_else(|| task_error("采集计划 v2 缺少有效请求上限，不能执行"))?;
+    .ok_or_else(|| {
+      task_error(format!(
+        "采集计划 v{schema_version} 缺少有效请求上限，不能执行"
+      ))
+    })?;
   let persisted_steps = {
     let mut statement = connection
       .prepare(
@@ -426,7 +435,15 @@ fn require_persisted_steps_match_plan(
   for (index, (persisted, expected)) in persisted_steps.iter().zip(expected_steps).enumerate() {
     let expected = expected
       .as_object()
-      .ok_or_else(|| task_error("采集计划 v2 包含无效步骤，不能执行"))?;
+      .ok_or_else(|| task_error(format!("采集计划 v{schema_version} 包含无效步骤，不能执行")))?;
+    let expected_request_limit = if schema_version == 3 {
+      expected
+        .get("request_limit")
+        .and_then(Value::as_i64)
+        .unwrap_or(request_limit)
+    } else {
+      request_limit
+    };
     let expected_params = expected
       .get("params")
       .cloned()
@@ -435,14 +452,14 @@ fn require_persisted_steps_match_plan(
       .map_err(|_| task_error("持久化采集步骤参数不是合法 JSON，不能执行"))?;
     let persisted_cost = serde_json::from_str::<Value>(&persisted.cost_estimate_json)
       .map_err(|_| task_error("持久化采集步骤成本不是合法 JSON，不能执行"))?;
-    let expected_cost = serde_json::json!({ "request_count_estimate": request_limit });
+    let expected_cost = serde_json::json!({ "request_count_estimate": expected_request_limit });
     let matches_plan = persisted.order == index as i64
       && expected.get("platform").and_then(Value::as_str) == Some(&persisted.platform)
       && expected.get("data_type").and_then(Value::as_str) == Some(&persisted.data_type)
       && expected.get("endpoint_key").and_then(Value::as_str) == Some(&persisted.endpoint_key)
       && persisted_params == expected_params
       && persisted.status == "planned"
-      && persisted.request_count_estimate == request_limit
+      && persisted.request_count_estimate == expected_request_limit
       && persisted_cost == expected_cost;
     if !matches_plan {
       return Err(task_error(format!(

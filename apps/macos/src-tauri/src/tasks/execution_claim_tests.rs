@@ -309,17 +309,17 @@ fn legacy_runs_without_a_plan_cannot_be_claimed_or_retried() {
 }
 
 #[test]
-fn enqueue_rejects_non_v2_or_corrupted_confirmed_plans_without_mutation() {
+fn enqueue_rejects_legacy_mismatched_or_corrupted_confirmed_plans_without_mutation() {
   for (label, schema_version, corrupt_budget) in [
     ("execution-enqueue-v1", 1, false),
-    ("execution-enqueue-unknown", 3, false),
+    ("execution-enqueue-mismatched-v3", 3, false),
     ("execution-enqueue-corrupted-v2", 2, true),
   ] {
     let (root_path, task, plan) = prepared_task_workspace(label);
     forge_plan_execution_contract(&root_path, &plan, schema_version, corrupt_budget);
 
     let error =
-      enqueue_task(&root_path, &task.id).expect_err("non-v2 or corrupted plan must not enqueue");
+      enqueue_task(&root_path, &task.id).expect_err("invalid plan contract must not enqueue");
     assert!(error.message.contains("v2") || error.message.contains("采集计划"));
 
     let state = task_run_count_and_state(&root_path, &task.id);

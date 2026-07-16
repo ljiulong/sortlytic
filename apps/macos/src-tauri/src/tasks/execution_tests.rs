@@ -8,6 +8,21 @@ mod execution_claim_tests;
 mod execution_completion_tests;
 
 #[test]
+fn version_three_plan_can_enqueue_and_be_claimed() {
+  let (root_path, task, plan) = prepared_v3_task_workspace("execution-v3");
+
+  let queued = enqueue_task(&root_path, &task.id).expect("v3 task should enqueue");
+  assert_eq!(queued.plan_id.as_deref(), Some(plan.id.as_str()));
+  let running = claim_next_task(&root_path)
+    .expect("v3 claim should succeed")
+    .expect("v3 queued task should be claimed");
+
+  assert_eq!(running.id, queued.id);
+  assert_eq!(running.status, "running");
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn failed_run_can_create_a_new_retry_run() {
   let (root_path, task, plan) = prepared_task_workspace("execution-retry");
   enqueue_task(&root_path, &task.id).expect("task should enqueue");
@@ -606,6 +621,55 @@ fn prepared_task_workspace(
   let root_path = unique_temp_workspace(label);
   create_workspace("执行器测试", &root_path).expect("workspace should be created");
   let (task, plan) = prepared_task_in_workspace(&root_path, "执行任务");
+  (root_path, task, plan)
+}
+
+fn prepared_v3_task_workspace(
+  label: &str,
+) -> (std::path::PathBuf, CollectionTaskView, CollectionPlanView) {
+  let root_path = unique_temp_workspace(label);
+  create_workspace("v3 执行器测试", &root_path).expect("workspace should be created");
+  let task = create_collection_task(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "v3 执行任务".to_string(),
+      source_type: "form".to_string(),
+      platforms: vec!["tiktok".to_string()],
+      data_types: vec!["keyword_search".to_string()],
+    },
+  )
+  .expect("v3 task should create");
+  let draft = crate::collection::generate_form_collection_plan(
+    crate::collection::FormCollectionPlanRequest {
+      platform: "tiktok".to_string(),
+      data_type: None,
+      data_types: vec!["keyword_search".to_string()],
+      params: serde_json::json!({
+        "keyword": "car",
+        "region": "US",
+        "time_range": "30",
+        "page_size": 20
+      }),
+      age_range: None,
+      request_limit: Some(1),
+      record_limit: Some(20),
+      budget_limit_micros: Some(1_000_000),
+    },
+  )
+  .expect("v3 draft should generate");
+  let plan = save_collection_plan(
+    &root_path,
+    SaveCollectionPlanInput {
+      task_id: task.id.clone(),
+      source: draft.source,
+      plan_json: draft.plan_json,
+      validation_status: draft.validation_status,
+      validation_errors_json: Some(draft.validation_errors_json),
+      cost_estimate_json: Some(draft.cost_estimate_json),
+    },
+  )
+  .expect("v3 plan should save");
+  confirm_collection_plan(&root_path, &task.id, &plan.id).expect("v3 plan should confirm");
   (root_path, task, plan)
 }
 
