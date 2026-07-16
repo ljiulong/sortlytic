@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -52,6 +52,7 @@ pub fn persist_account_observations(
   }
   i64::try_from(input.record_limit).map_err(|_| validation_error("账号输出上限超出范围"))?;
   let source_kind = source_kind(&input.data_type)?;
+  let gender_filter = active_gender_filter(connection, &input.task_run_id)?;
   let transaction = connection.unchecked_transaction().map_err(database_error)?;
   let mut observed_count = 0;
   let mut skipped_count = 0;
@@ -65,7 +66,7 @@ pub fn persist_account_observations(
       }
       Err(error) => return Err(error),
     };
-    persist_account(&transaction, &input, incoming)?;
+    persist_account(&transaction, &input, incoming, gender_filter.as_ref())?;
     observed_count += 1;
   }
 
@@ -91,6 +92,7 @@ fn persist_account(
   connection: &Connection,
   input: &AccountObservationInput,
   incoming: AccountRecord,
+  gender_filter: Option<&BTreeSet<String>>,
 ) -> AppResult<()> {
   let matches = matching_accounts(connection, input, &incoming)?;
   let was_included = matches.iter().any(|stored| stored.output_included);
@@ -130,7 +132,13 @@ fn persist_account(
 
   let qualifies = input
     .age_range
-    .is_none_or(|range| range.includes(merged.age));
+    .is_none_or(|range| range.includes(merged.age))
+    && gender_filter.is_none_or(|filter| {
+      merged
+        .gender
+        .as_ref()
+        .is_some_and(|gender| filter.contains(gender))
+    });
   let other_output_count = connection
     .query_row(
       "SELECT COUNT(*) FROM collected_account
@@ -291,6 +299,36 @@ fn output_count(connection: &Connection, task_run_id: &str) -> AppResult<usize> 
     )
     .map_err(database_error)?;
   usize::try_from(count).map_err(|_| database_error("账号输出数量超出范围"))
+}
+
+fn active_gender_filter(
+  connection: &Connection,
+  task_run_id: &str,
+) -> AppResult<Option<BTreeSet<String>>> {
+  let plan_json = connection
+    .query_row(
+      "SELECT plan.plan_json
+       FROM task_run AS run
+       JOIN collection_plan AS plan ON plan.id = run.plan_id
+       WHERE run.id = ?1",
+      params![task_run_id],
+      |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(database_error)?;
+  let Some(plan_json) = plan_json else {
+    return Ok(None);
+  };
+  let plan_json: Value = serde_json::from_str(&plan_json).map_err(json_error)?;
+  let genders = plan_json
+    .get("gender_filter")
+    .and_then(Value::as_array)
+    .into_iter()
+    .flatten()
+    .filter_map(Value::as_str)
+    .map(ToString::to_string)
+    .collect::<BTreeSet<_>>();
+  Ok((!genders.is_empty()).then_some(genders))
 }
 
 fn validation_error(message: impl Into<String>) -> AppError {

@@ -217,10 +217,7 @@ pub fn normalize_account(
         "/user/region",
       ],
     ),
-    gender: first_text(
-      value,
-      &["/gender", "/sex", "/author/gender", "/user/gender"],
-    ),
+    gender: first_gender(value),
     age: first_age(value),
     followers_count: first_nonnegative_integer(
       value,
@@ -335,6 +332,23 @@ fn first_age(value: &Value) -> Option<i64> {
         .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
     })
     .filter(|age| (0..=130).contains(age))
+}
+
+fn first_gender(value: &Value) -> Option<String> {
+  let value = ["/gender", "/sex", "/author/gender", "/user/gender"]
+    .iter()
+    .find_map(|path| value.pointer(path))?;
+  let normalized = value
+    .as_str()
+    .map(str::trim)
+    .map(str::to_lowercase)
+    .or_else(|| value.as_i64().map(|value| value.to_string()))?;
+  match normalized.as_str() {
+    "male" | "m" | "男" | "男性" | "1" => Some("male".to_string()),
+    "female" | "f" | "女" | "女性" | "2" => Some("female".to_string()),
+    "other" | "其他" | "其它" | "non_binary" | "non-binary" | "0" => Some("other".to_string()),
+    _ => None,
+  }
 }
 
 fn first_nonnegative_integer(value: &Value, paths: &[&str]) -> Option<i64> {

@@ -82,6 +82,85 @@ fn identity_prefers_platform_user_id_then_normalized_account() {
 }
 
 #[test]
+fn explicit_gender_values_are_normalized_without_inference() {
+  for (value, expected) in [
+    (json!("男"), "male"),
+    (json!("female"), "female"),
+    (json!(0), "other"),
+  ] {
+    let account = normalize_account(
+      "tiktok",
+      SourceKind::AccountProfile,
+      &json!({ "user_id": format!("user-{expected}"), "gender": value }),
+    )
+    .expect("明确性别应归一化");
+    assert_eq!(account.gender.as_deref(), Some(expected));
+  }
+  let unknown = normalize_account(
+    "tiktok",
+    SourceKind::AccountProfile,
+    &json!({ "user_id": "unknown", "gender": "猜测为女性" }),
+  )
+  .expect("异常性别不应阻止账号归一化");
+  assert_eq!(unknown.gender, None);
+}
+
+#[test]
+fn persisted_gender_filter_runs_after_account_merge() {
+  let connection = account_connection();
+  set_gender_filter(&connection, &["female"]);
+  for (data_type, records) in [
+    (
+      "comments",
+      vec![
+        json!({ "user_id": "u-1", "nickname": "待补全" }),
+        json!({ "user_id": "u-2", "nickname": "男性", "gender": "男" }),
+      ],
+    ),
+    (
+      "account_profile",
+      vec![json!({
+        "user_id": "u-1",
+        "nickname": "女性公开资料",
+        "gender": "女"
+      })],
+    ),
+  ] {
+    persist_account_observations(
+      &connection,
+      AccountObservationInput {
+        task_run_id: "run-1".to_string(),
+        platform: "tiktok".to_string(),
+        data_type: data_type.to_string(),
+        records,
+        output_selected: true,
+        age_range: None,
+        record_limit: 10,
+        collected_at: "2026-07-16T08:00:00+00:00".to_string(),
+      },
+    )
+    .expect("性别筛选账号应合并");
+  }
+
+  let output = connection
+    .query_row(
+      "SELECT COUNT(*), username, gender FROM collected_account WHERE output_included = 1",
+      [],
+      |row| {
+        Ok((
+          row.get::<_, i64>(0)?,
+          row.get::<_, Option<String>>(1)?,
+          row.get::<_, Option<String>>(2)?,
+        ))
+      },
+    )
+    .expect("性别筛选结果应查询");
+  assert_eq!(output.0, 1);
+  assert_eq!(output.1.as_deref(), Some("女性公开资料"));
+  assert_eq!(output.2.as_deref(), Some("female"));
+}
+
+#[test]
 fn persisted_accounts_merge_before_age_filter_and_apply_output_limit() {
   let connection = account_connection();
   let first = persist_account_observations(
@@ -246,8 +325,25 @@ fn account_connection() -> Connection {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         UNIQUE (task_run_id, platform, identity_key)
-      );",
+      );
+      CREATE TABLE collection_plan (id TEXT PRIMARY KEY, plan_json TEXT NOT NULL);
+      CREATE TABLE task_run (id TEXT PRIMARY KEY, plan_id TEXT);",
     )
     .expect("账号表应创建");
   connection
+}
+
+fn set_gender_filter(connection: &Connection, genders: &[&str]) {
+  connection
+    .execute(
+      "INSERT INTO collection_plan (id, plan_json) VALUES ('plan-1', ?1)",
+      [serde_json::json!({ "gender_filter": genders }).to_string()],
+    )
+    .expect("性别计划应插入");
+  connection
+    .execute(
+      "INSERT INTO task_run (id, plan_id) VALUES ('run-1', 'plan-1')",
+      [],
+    )
+    .expect("性别运行应插入");
 }
