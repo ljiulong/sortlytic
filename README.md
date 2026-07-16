@@ -41,8 +41,8 @@ English · <a href="README-zh.md">中文</a>
 
 | Capability | What it provides |
 |---|---|
-| Multi-platform collection | Maps keyword search, comments, account profiles, and item details to supported TikHub endpoints for TikTok, Douyin, and Xiaohongshu. |
-| Controlled task execution | Requires plan confirmation and enforces request, record, and budget limits before the local worker executes a task. |
+| Multi-platform collection | Combines keyword search, item details, account profiles, account posts, and comments across TikTok, Douyin, and Xiaohongshu. |
+| Controlled task execution | Checks live endpoint quotes, free credit, paid balance, request limits, record limits, and the task budget before and during collection. |
 | Natural-language planning | Converts Chinese research intent into a validated collection plan through the current local rule parser and records its runtime snapshot. |
 | Prompt governance | Stores prompt templates and versions, binds output schemas, and blocks activation when built-in regression cases fail. |
 | Local-first security | Keeps workspace data in local SQLite storage and stores API credentials in macOS Keychain through scoped secret references. |
@@ -126,7 +126,7 @@ TikHub is required for real collection. Create and verify an account before buil
 | International network | `https://api.tikhub.io` |
 | Mainland China network | `https://api.tikhub.dev` |
 
-A successful test displays the masked account email, available free credit, and email verification status. The token is written to macOS Keychain; the SQLite workspace stores only a scoped secret reference. When editing an existing configuration, leave the token field empty to reuse the saved token.
+A successful test displays the masked account email, paid balance, free credit, their available total, and email verification status. The token is written to macOS Keychain; the SQLite workspace stores only a scoped secret reference. When editing an existing configuration, leave the token field empty to reuse the saved token.
 
 Start the first collection with 10–50 records. This makes it easier to verify the platform, data type, region, keyword, and endpoint cost before expanding the task.
 
@@ -142,17 +142,25 @@ Open **Workbench → Collection Builder** and choose an entry method:
 
 | Method | When to use it | Required review |
 |---|---|---|
-| Form | You already know the platform, data type, region, keyword, time range, record limit, and budget. | Confirm every field before generating the plan. |
-| Natural language | You want to describe the research goal in Chinese and let the local parser structure it. | Check inferred platforms, data types, missing conditions, record limits, and budget. |
+| Form | You already know the platform, data types, country or region, keyword, optional audience filters, record limit, and budget. | Confirm every field before generating the plan. |
+| Natural language | You want to describe the research goal in Chinese and let the local parser structure it. | Check inferred platforms, data types, filters, missing conditions, record limits, and budget. |
 
-The form supports TikTok, Douyin, and Xiaohongshu with keyword search, public account information, comment collection, and item details. A single task accepts 10–5,000 records and a budget value from 1–500.
+The form supports TikTok, Douyin, and Xiaohongshu. Select one or more output types: keyword-search accounts, item or note authors, public account profiles, accounts owning collected posts, and comment users. Sortlytic uses the keyword as the entry point and adds the required downstream steps automatically; dependency-only search rows do not count toward the output limit.
+
+| Filter | Behavior |
+|---|---|
+| Country or region | Search a single dropdown by Chinese name or two-letter code. The stored value is the code. Unsupported steps never receive the parameter; the control is disabled when none of the selected steps support it. |
+| Age | Optional closed range from 0 to 130. Sortlytic accepts only an explicit age returned by TikHub or public profile data. Unknown or malformed ages are excluded while this filter is active. |
+| Gender | Optional multi-select filter. Sortlytic accepts only an explicit gender returned by TikHub or public profile data and never infers it from a name, avatar, biography, or content. |
+
+A single task accepts 10–5,000 qualified, deduplicated account rows and a budget value from 1–500. Accounts are deduplicated by platform and stable platform user ID, with normalized account identity as the fallback.
 
 After selecting **Generate Plan** or **Parse into Plan**:
 
-1. Review the plan preview, especially platform, data type, region, time range, maximum records, request estimate, and amount limit.
-2. Resolve any value shown under **Missing Conditions**. A plan cannot be confirmed until backend validation reports it as valid.
+1. Review the plan preview, especially platform, output types, supported filters, maximum qualified records, request estimate, live quote, and amount limit.
+2. Resolve the first reason shown beside **Confirm Run**. Invalid filters, unsupported parameters, unknown pricing, unknown balance, insufficient total credit, or an exceeded budget all block confirmation.
 3. Select **Confirm Run**. Planning itself does not start paid collection; confirmation adds the task to the local queue.
-4. Follow the task in **Task Queue**. Possible states include queued, running, waiting for confirmation, partially successful, successful, and failed.
+4. Follow the task in **Task Queue**. Possible states include queued, running, waiting for confirmation, partially successful, successful, and failed. A failed target does not stop unrelated targets; qualified output plus target failures finishes as partially successful.
 
 ### Review results and evidence
 
@@ -178,7 +186,9 @@ default-workspace/
 └── exports/pdf/
 ```
 
-Use XLSX for the structured report payload. The current PDF writer produces a short summary that points readers to the workbook for complete structured data. **Webhook Summary** is visible in the interface but is not enabled and does not send data.
+The XLSX account export follows `excel/社交平台用户数据收集模板_国家地区版.xlsx`. It keeps only the four template sheets (`用户数据收集表`, `填写说明`, `字段枚举`, and `资料依据`), preserves the 18-column account layout, writes age as a number, and retains at least 200 formatted data rows. Larger results extend formulas, styles, and validation. Raw responses and target failures remain in the local evidence store and run logs instead of being added as workbook sheets.
+
+The current PDF writer produces a short summary that points readers to the workbook for complete structured data. **Webhook Summary** is visible in the interface but is not enabled and does not send data.
 
 ### Update the app
 
@@ -197,7 +207,7 @@ Browser preview does not have update permission. Apple Developer ID signing and 
 | “Sortlytic is damaged and can’t be opened” | Re-download the matching DMG from the official release, then follow [First launch and the “damaged” alert](#first-launch-and-the-damaged-alert). |
 | TikHub test fails | Check that the token is complete, the email is verified, the domain matches the current network, and the account has enough credit. |
 | **Save and Test** is disabled | A new TikHub token must contain at least 8 characters. An existing saved token can be reused by leaving the field empty. |
-| A plan cannot be confirmed | Generate the plan first, clear **Missing Conditions**, and verify that its validation status is valid. |
+| A plan cannot be confirmed | Read the first blocker beside the button. Correct invalid filters or unsupported inputs, refresh TikHub credit and live pricing, then confirm that the available total covers the quoted budget. |
 | Export fails | Create a task first. Then read the message below the workspace title for the backend error and retry after the task data is available. |
 | The screen shows realistic records but no native features work | The app is running through `pnpm dev` in browser demonstration mode. Start it with `pnpm tauri dev` or use the packaged app. |
 | No **Open Anyway** button appears | Re-attempt the launch and check Privacy & Security within one hour. For the verified official build, use the targeted `xattr` command above; do not disable Gatekeeper globally. |
