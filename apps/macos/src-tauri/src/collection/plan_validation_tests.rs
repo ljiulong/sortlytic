@@ -22,6 +22,7 @@ fn capability_contract_preserves_order_serialization_and_errors() {
         "keyword_search",
         "comments",
         "account_profile",
+        "account_posts",
         "item_detail"
       ]
     );
@@ -444,28 +445,29 @@ fn invalid_plan_reports_unverified_region_and_missing_required_target() {
 }
 
 #[test]
-fn form_plan_status_uses_authoritative_whole_plan_validation() {
+fn v3_form_plan_accepts_declared_local_region_filter() {
   let plan = generate_form_collection_plan(FormCollectionPlanRequest {
     platform: "xiaohongshu".to_string(),
-    data_type: "comments".to_string(),
+    data_type: Some("comments".to_string()),
+    data_types: Vec::new(),
     params: serde_json::json!({
       "item_id": "note-1",
       "region": "CN"
     }),
+    age_range: None,
     request_limit: Some(1),
     record_limit: None,
     budget_limit_micros: None,
   })
   .expect("plan should generate for user correction");
 
-  assert_eq!(plan.validation_status, "needs_review");
-  assert!(plan
-    .validation_errors_json
-    .as_array()
-    .is_some_and(|errors| errors
-      .iter()
-      .filter_map(Value::as_str)
-      .any(|error| error.contains("region") && error.contains("本地过滤器尚未接通"))));
+  assert_eq!(
+    plan.validation_status, "valid",
+    "{:?}",
+    plan.validation_errors_json
+  );
+  assert_eq!(plan.plan_json["steps"][0]["params"]["item_id"], "note-1");
+  assert!(plan.plan_json["steps"][0]["depends_on_step_key"].is_null());
 }
 
 fn complete_comment_plan() -> Value {

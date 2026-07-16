@@ -53,11 +53,21 @@ pub struct DataTypeCapabilityView {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FormCollectionPlanRequest {
   pub platform: String,
-  pub data_type: String,
+  #[serde(default)]
+  pub data_type: Option<String>,
+  #[serde(default)]
+  pub data_types: Vec<String>,
   pub params: Value,
+  pub age_range: Option<AgeRangeInput>,
   pub request_limit: Option<i64>,
   pub record_limit: Option<i64>,
   pub budget_limit_micros: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgeRangeInput {
+  pub min: i64,
+  pub max: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -245,6 +255,115 @@ pub fn validate_collection_plan_v2(plan_json: &Value) -> CollectionPlanValidatio
   CollectionPlanValidationResult {
     valid: errors.is_empty(),
     errors,
+  }
+}
+
+pub fn validate_collection_plan_v3(plan_json: &Value) -> CollectionPlanValidationResult {
+  let mut executable_plan = plan_json.clone();
+  let mut executable_data_types = executable_plan
+    .get("data_types")
+    .and_then(Value::as_array)
+    .cloned()
+    .unwrap_or_default();
+  if let Some(internal_data_types) = executable_plan
+    .get("internal_data_types")
+    .and_then(Value::as_array)
+  {
+    for data_type in internal_data_types {
+      if !executable_data_types.contains(data_type) {
+        executable_data_types.push(data_type.clone());
+      }
+    }
+  }
+  executable_plan["data_types"] = Value::Array(executable_data_types);
+  executable_plan["request_limit"] = Value::from(1);
+  let mut errors = validate_collection_plan(&executable_plan).errors;
+  if plan_json.get("schema_version").and_then(Value::as_i64) != Some(3) {
+    errors.push("schema_version 必须为 3".to_string());
+  }
+  if positive_integer_field(plan_json, "record_limit").is_none() {
+    errors.push("record_limit 必须是大于 0 的整数".to_string());
+  }
+  if positive_integer_field(plan_json, "request_limit").is_none() {
+    errors.push("request_limit 必须是大于 0 的整数".to_string());
+  }
+  validate_budget_limit(plan_json, &mut errors);
+  validate_age_range(plan_json.get("age_range"), &mut errors);
+
+  let mut prior_steps = std::collections::BTreeSet::new();
+  if let Some(steps) = plan_json.get("steps").and_then(Value::as_array) {
+    for (index, step) in steps.iter().enumerate() {
+      let prefix = format!("steps[{index}]");
+      let Some(step) = step.as_object() else {
+        continue;
+      };
+      let step_key = step
+        .get("step_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+      match step_key {
+        Some(step_key) if prior_steps.insert(step_key.to_string()) => {}
+        Some(_) => errors.push(format!("{prefix}.step_key 不能重复")),
+        None => errors.push(format!("{prefix}.step_key 不能为空")),
+      }
+      if let Some(dependency) = step
+        .get("depends_on_step_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+      {
+        if !prior_steps.contains(dependency) {
+          errors.push(format!("{prefix}.depends_on_step_key 必须引用前置步骤"));
+        }
+      }
+      let request_limit = step
+        .get("request_limit")
+        .and_then(Value::as_i64)
+        .filter(|value| *value > 0);
+      let endpoint = step
+        .get("platform")
+        .and_then(Value::as_str)
+        .zip(step.get("data_type").and_then(Value::as_str))
+        .and_then(|(platform, data_type)| find_endpoint(platform, data_type));
+      if request_limit.is_none() {
+        errors.push(format!("{prefix}.request_limit 必须是大于 0 的整数"));
+      } else if endpoint.is_some_and(|endpoint| request_limit > Some(endpoint.max_request_count)) {
+        errors.push(format!("{prefix}.request_limit 超过端点上限"));
+      }
+    }
+  }
+
+  errors.sort();
+  errors.dedup();
+  CollectionPlanValidationResult {
+    valid: errors.is_empty(),
+    errors,
+  }
+}
+
+fn validate_budget_limit(plan_json: &Value, errors: &mut Vec<String>) {
+  match plan_json.get("budget_limit").and_then(Value::as_object) {
+    Some(budget_limit)
+      if budget_limit.get("currency").and_then(Value::as_str) == Some("USD")
+        && budget_limit
+          .get("amount_micros")
+          .and_then(Value::as_i64)
+          .is_some_and(|amount| amount > 0) => {}
+    _ => errors.push("budget_limit 必须包含 USD 正整数微美元上限".to_string()),
+  }
+}
+
+fn validate_age_range(age_range: Option<&Value>, errors: &mut Vec<String>) {
+  let Some(age_range) = age_range.filter(|value| !value.is_null()) else {
+    return;
+  };
+  let bounds = age_range
+    .get("min")
+    .and_then(Value::as_i64)
+    .zip(age_range.get("max").and_then(Value::as_i64));
+  if !bounds.is_some_and(|(min, max)| (0..=130).contains(&min) && min <= max && max <= 130) {
+    errors.push("age_range 必须是 0–130 内且 min <= max 的整数闭区间".to_string());
   }
 }
 
@@ -456,13 +575,15 @@ mod tests {
   fn form_plan_contains_endpoint_and_confirmation_gate() {
     let plan = generate_form_collection_plan(FormCollectionPlanRequest {
       platform: "tiktok".to_string(),
-      data_type: "keyword_search".to_string(),
+      data_type: Some("keyword_search".to_string()),
+      data_types: Vec::new(),
       params: serde_json::json!({
         "keyword": "car",
         "region": "US",
         "time_range": "30",
         "page_size": 50
       }),
+      age_range: None,
       request_limit: Some(2),
       record_limit: None,
       budget_limit_micros: None,
@@ -474,7 +595,13 @@ mod tests {
       "{:?}",
       plan.validation_errors_json
     );
-    assert_eq!(plan.schema_version, 2);
+    assert_eq!(plan.schema_version, 3);
+    assert_eq!(
+      plan.plan_json["data_types"],
+      serde_json::json!(["keyword_search"])
+    );
+    assert_eq!(plan.plan_json["steps"][0]["step_key"], "keyword_search");
+    assert_eq!(plan.plan_json["steps"][0]["output_selected"], true);
     assert!(plan.plan_json["record_limit"]
       .as_i64()
       .is_some_and(|value| value > 0));
@@ -485,6 +612,43 @@ mod tests {
     );
     assert_eq!(plan.plan_json["requires_user_confirmation"], true);
     assert_eq!(plan.cost_estimate_json["request_count_estimate"], 2);
+  }
+
+  #[test]
+  fn form_plan_normalizes_multi_targets_dependencies_and_age_range() {
+    let plan = generate_form_collection_plan(FormCollectionPlanRequest {
+      platform: "xiaohongshu".to_string(),
+      data_type: None,
+      data_types: vec!["item_detail".to_string(), "comments".to_string()],
+      params: serde_json::json!({
+        "keyword": "新能源汽车",
+        "time_range": "近 30 天"
+      }),
+      age_range: Some(AgeRangeInput { min: 18, max: 35 }),
+      request_limit: Some(4),
+      record_limit: Some(1200),
+      budget_limit_micros: Some(35_000_000),
+    })
+    .expect("多目标计划应自动生成搜索依赖链");
+
+    assert_eq!(
+      plan.validation_status, "valid",
+      "{:?}",
+      plan.validation_errors_json
+    );
+    assert_eq!(
+      plan.plan_json["age_range"],
+      serde_json::json!({ "min": 18, "max": 35 })
+    );
+    assert_eq!(
+      plan.plan_json["internal_data_types"],
+      serde_json::json!(["keyword_search"])
+    );
+    assert_eq!(
+      plan.plan_json["steps"][1]["depends_on_step_key"],
+      "keyword_search"
+    );
+    assert_eq!(plan.plan_json["steps"][0]["output_selected"], false);
   }
 
   #[test]
