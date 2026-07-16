@@ -8,6 +8,105 @@ use serde_json::json;
 use uuid::Uuid;
 
 #[test]
+fn version_three_worker_counts_only_merged_age_qualified_accounts() {
+  let root = std::env::temp_dir().join(format!("worker-v3-age-{}", Uuid::new_v4()));
+  create_workspace("v3 年龄分页测试", &root).expect("workspace should be created");
+  let task = create_collection_task(
+    &root,
+    CreateCollectionTaskInput {
+      name: "合格账号硬上限".to_string(),
+      source_type: "form".to_string(),
+      platforms: vec!["tiktok".to_string()],
+      data_types: vec!["comments".to_string()],
+    },
+  )
+  .expect("task should create");
+  let draft = crate::collection::generate_form_collection_plan(
+    crate::collection::FormCollectionPlanRequest {
+      platform: "tiktok".to_string(),
+      data_type: None,
+      data_types: vec!["comments".to_string()],
+      params: json!({ "item_id": "video-1" }),
+      age_range: Some(crate::collection::AgeRangeInput { min: 18, max: 30 }),
+      request_limit: Some(2),
+      record_limit: Some(1),
+      budget_limit_micros: Some(1_000_000),
+    },
+  )
+  .expect("v3 plan should generate");
+  let plan = save_collection_plan(
+    &root,
+    SaveCollectionPlanInput {
+      task_id: task.id.clone(),
+      source: draft.source,
+      plan_json: draft.plan_json,
+      validation_status: draft.validation_status,
+      validation_errors_json: Some(draft.validation_errors_json),
+      cost_estimate_json: Some(draft.cost_estimate_json),
+    },
+  )
+  .expect("v3 plan should save");
+  confirm_collection_plan(&root, &task.id, &plan.id).expect("v3 plan should confirm");
+  enqueue_task(&root, &task.id).expect("v3 task should enqueue");
+  let run = claim_next_task(&root)
+    .expect("worker should claim v3 task")
+    .expect("v3 queued task should exist");
+  let calls = std::cell::Cell::new(0);
+
+  execute_claimed_run_with_fetcher(&root, &run, |_request| {
+    let call = calls.get();
+    calls.set(call + 1);
+    Ok(if call == 0 {
+      CollectionPage {
+        records: vec![
+          json!({ "cid": "c-1", "user": { "user_id": "u-1", "nickname": "未知年龄" } }),
+          json!({ "cid": "c-2", "user": { "user_id": "u-2", "nickname": "超龄", "age": 40 } }),
+        ],
+        next_cursor: Some(json!({ "endpoint_key": "tiktok.comments", "value": 20 })),
+        has_more: true,
+        raw_response: json!({ "comments": [], "has_more": true, "cursor": "next-page" }),
+      }
+    } else {
+      CollectionPage {
+        records: vec![json!({
+          "cid": "c-3",
+          "user": { "user_id": "u-3", "nickname": "合格账号", "age": "25" }
+        })],
+        next_cursor: None,
+        has_more: false,
+        raw_response: json!({ "comments": [], "has_more": false }),
+      }
+    })
+  })
+  .expect("v3 worker should continue until a qualified account is collected");
+
+  assert_eq!(calls.get(), 2);
+  let connection = super::open_workspace_connection(&root).expect("database should open");
+  let counts = connection
+    .query_row(
+      "SELECT
+         (SELECT COUNT(*) FROM raw_record WHERE task_run_id = ?1),
+         (SELECT COUNT(*) FROM collected_account WHERE task_run_id = ?1),
+         (SELECT COUNT(*) FROM collected_account
+          WHERE task_run_id = ?1 AND output_included = 1),
+         (SELECT age FROM collected_account
+          WHERE task_run_id = ?1 AND output_included = 1)",
+      [&run.id],
+      |row| {
+        Ok((
+          row.get::<_, i64>(0)?,
+          row.get::<_, i64>(1)?,
+          row.get::<_, i64>(2)?,
+          row.get::<_, i64>(3)?,
+        ))
+      },
+    )
+    .expect("v3 collection counts should load");
+  assert_eq!(counts, (3, 3, 1, 25));
+  std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn worker_tick_does_not_leave_a_queued_task_unprocessed() {
   let root = std::env::temp_dir().join(format!("worker-{}", Uuid::new_v4()));
   create_workspace("执行器测试", &root).expect("workspace should be created");

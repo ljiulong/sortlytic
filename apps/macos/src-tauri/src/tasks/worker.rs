@@ -6,6 +6,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::accounts::{persist_account_observations, AccountObservationInput, AgeRange};
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 use crate::records::{persist_collection_page, PersistCollectionPageInput};
 use crate::secrets::read_secret_for_backend;
@@ -34,6 +35,9 @@ struct RunStep {
   request_limit: i64,
   record_limit: i64,
   status: String,
+  schema_version: i64,
+  output_selected: bool,
+  age_range: Option<AgeRange>,
 }
 
 #[derive(Clone)]
@@ -113,7 +117,17 @@ fn load_run_steps(connection: &rusqlite::Connection, run: &TaskRunView) -> AppRe
     .prepare(
       "SELECT run_step.id, task_run.task_id, api_step.platform, api_step.data_type,
               api_step.params_json, api_step.request_count_estimate,
-              json_extract(plan.plan_json, '$.record_limit'), run_step.status
+              json_extract(plan.plan_json, '$.record_limit'), run_step.status,
+              plan.schema_version,
+              COALESCE(
+                json_extract(
+                  plan.plan_json,
+                  '$.steps[' || api_step.step_order || '].output_selected'
+                ),
+                1
+              ),
+              json_extract(plan.plan_json, '$.age_range.min'),
+              json_extract(plan.plan_json, '$.age_range.max')
        FROM task_run_step AS run_step
        JOIN task_run ON task_run.id = run_step.task_run_id
        JOIN collection_plan AS plan ON plan.id = task_run.plan_id
@@ -136,6 +150,12 @@ fn load_run_steps(connection: &rusqlite::Connection, run: &TaskRunView) -> AppRe
         request_limit: row.get(5)?,
         record_limit: row.get(6)?,
         status: row.get(7)?,
+        schema_version: row.get(8)?,
+        output_selected: row.get::<_, i64>(9)? != 0,
+        age_range: row
+          .get::<_, Option<i64>>(10)?
+          .zip(row.get::<_, Option<i64>>(11)?)
+          .map(|(min, max)| AgeRange { min, max }),
       })
     })
     .map_err(database_error)?;
@@ -189,7 +209,9 @@ where
     }
     if let Some(checkpoint) = response_checkpoint.take() {
       let page = parse_response_checkpoint(step, &checkpoint)?;
-      ensure_record_limit(&connection, &run_id, step.record_limit, page.records.len())?;
+      if step.schema_version == 2 {
+        ensure_record_limit(&connection, &run_id, step.record_limit, page.records.len())?;
+      }
       let persisted = persist_collection_page(
         root_path,
         PersistCollectionPageInput {
@@ -212,6 +234,13 @@ where
           false,
         ));
       }
+      persist_step_accounts(
+        &connection,
+        step,
+        &run_id,
+        &page.records,
+        checkpoint.response_received_at.as_deref(),
+      )?;
       let committed_at = Utc::now().to_rfc3339();
       mark_response_checkpoint_completed(
         &connection,
@@ -261,8 +290,9 @@ where
       }
     };
     let response_received_at = Utc::now().to_rfc3339();
-    if let Err(error) =
-      ensure_record_limit(&connection, &run_id, step.record_limit, page.records.len())
+    if let Err(error) = (step.schema_version == 2)
+      .then(|| ensure_record_limit(&connection, &run_id, step.record_limit, page.records.len()))
+      .transpose()
     {
       if error.safe_details.get("worker_code").map(String::as_str) == Some("RECORD_LIMIT_REACHED") {
         mark_checkpoint_failed(
@@ -306,6 +336,20 @@ where
         false,
       ));
     }
+    if let Err(error) = persist_step_accounts(
+      &connection,
+      step,
+      &run_id,
+      &page.records,
+      Some(&response_received_at),
+    ) {
+      mark_checkpoint_uncertain(&connection, &checkpoint_id, &error.message)?;
+      return Err(worker_error(
+        "ACCOUNT_PERSISTENCE_FAILED",
+        "TikHub 响应已返回但账号合并落库失败，已禁止自动重试",
+        false,
+      ));
+    }
 
     let raw_response = page.raw_response.to_string();
     let response_hash = format!("{:x}", Sha256::digest(raw_response.as_bytes()));
@@ -342,6 +386,36 @@ where
     cursor = page.next_cursor;
     page_index += 1;
   }
+}
+
+fn persist_step_accounts(
+  connection: &rusqlite::Connection,
+  step: &RunStep,
+  run_id: &str,
+  records: &[Value],
+  collected_at: Option<&str>,
+) -> AppResult<()> {
+  if step.schema_version < 3 {
+    return Ok(());
+  }
+  let record_limit =
+    usize::try_from(step.record_limit).map_err(|_| task_error("账号输出上限超出运行平台范围"))?;
+  persist_account_observations(
+    connection,
+    AccountObservationInput {
+      task_run_id: run_id.to_string(),
+      platform: step.platform.clone(),
+      data_type: step.data_type.clone(),
+      records: records.to_vec(),
+      output_selected: step.output_selected,
+      age_range: step.age_range,
+      record_limit,
+      collected_at: collected_at
+        .map(ToString::to_string)
+        .unwrap_or_else(|| Utc::now().to_rfc3339()),
+    },
+  )?;
+  Ok(())
 }
 
 fn resume_position(checkpoints: &[Checkpoint]) -> AppResult<(i64, Option<Value>)> {
