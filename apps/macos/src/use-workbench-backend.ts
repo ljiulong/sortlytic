@@ -65,6 +65,8 @@ export type CollectionFormPayload = {
   ageRangeEnabled?: boolean
   ageMin?: number
   ageMax?: number
+  genderFilterEnabled?: boolean
+  genders?: Array<'male' | 'female' | 'other'>
 }
 
 export type ModelSettingsInput = {
@@ -663,6 +665,9 @@ export function planFromBackend(values: CollectionFormPayload, plan: CollectionP
   const recordLimit = positiveNumber(plan.plan_json.record_limit)
   const budgetLimit = positiveNumber(plan.plan_json.budget_limit)
   const useSubmittedLimits = plan.source === 'form_generated'
+  const genders = stringArrayFromJson(plan.plan_json.gender_filter).filter(
+    (value): value is 'male' | 'female' | 'other' => ['male', 'female', 'other'].includes(value),
+  )
 
   return {
     ...values,
@@ -676,6 +681,8 @@ export function planFromBackend(values: CollectionFormPayload, plan: CollectionP
     range: nonEmptyString(plan.plan_json.time_range) ?? '未提供时间范围',
     maxRecords: recordLimit ?? (useSubmittedLimits ? values.maxRecords : 0),
     budget: budgetLimit ?? (useSubmittedLimits ? values.budget : 0),
+    genderFilterEnabled: genders.length > 0,
+    genders,
     status: plan.validation_status === 'valid' ? '等待确认' : '待人工确认',
     missing,
     taskId: plan.task_id,

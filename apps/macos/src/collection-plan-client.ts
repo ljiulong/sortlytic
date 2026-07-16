@@ -3,6 +3,8 @@ export type PlanParamValues = {
   keyword: string
   range: string
   maxRecords: number
+  genderFilterEnabled?: boolean
+  genders?: Array<'male' | 'female' | 'other'>
 }
 
 type BackendPlatform = 'tiktok' | 'douyin' | 'xiaohongshu'
@@ -35,7 +37,7 @@ export function buildPlanParams(
   dataType: BackendDataType,
 ) {
   const keyword = values.keyword.trim()
-  const params: Record<string, string | number> = {}
+  const params: Record<string, string | number | string[]> = {}
 
   if (dataType === 'keyword_search') {
     params.keyword = keyword
@@ -57,6 +59,10 @@ export function buildPlanParams(
 
   if (supportsPageSize(platform, dataType)) {
     params.page_size = Math.min(Math.max(values.maxRecords, 1), 50)
+  }
+
+  if (values.genderFilterEnabled && values.genders?.length) {
+    params.genders = [...new Set(values.genders)]
   }
 
   return params

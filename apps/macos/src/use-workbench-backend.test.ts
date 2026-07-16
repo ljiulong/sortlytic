@@ -682,7 +682,7 @@ describe('buildPlanParams', () => {
 })
 
 describe('v3 form plan request', () => {
-  it('传递多目标与可选年龄闭区间，同时保留旧单值字段', () => {
+  it('传递多目标、年龄闭区间与明确性别，同时保留旧单值字段', () => {
     expect(
       buildFormPlanRequest({
         platform: '小红书',
@@ -696,6 +696,8 @@ describe('v3 form plan request', () => {
         ageRangeEnabled: true,
         ageMin: 18,
         ageMax: 35,
+        genderFilterEnabled: true,
+        genders: ['female', 'other'],
       }),
     ).toMatchObject({
       platform: 'xiaohongshu',
@@ -707,6 +709,7 @@ describe('v3 form plan request', () => {
       params: {
         keyword: '新能源汽车',
         time_range: '近 30 天',
+        genders: ['female', 'other'],
       },
     })
   })
