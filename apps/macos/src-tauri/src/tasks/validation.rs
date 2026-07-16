@@ -1,7 +1,5 @@
 use serde_json::Value;
 
-use crate::collection::validate_collection_plan;
-
 use super::{json_to_string_vec, CollectionTaskView, CostEstimateView};
 
 pub(super) fn estimate_from_plan_json(plan_json: &Value) -> CostEstimateView {
@@ -39,7 +37,7 @@ pub(super) fn estimate_from_plan_json(plan_json: &Value) -> CostEstimateView {
 }
 
 pub(super) fn validate_plan_for_task(task: &CollectionTaskView, plan_json: &Value) -> Vec<String> {
-  let mut errors = validate_collection_plan(plan_json).errors;
+  let mut errors = Vec::new();
   let mut task_platforms = json_to_string_vec(task.platforms_json.clone());
   let mut task_data_types = json_to_string_vec(task.data_types_json.clone());
   let mut plan_platforms = plan_json

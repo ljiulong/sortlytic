@@ -23,6 +23,70 @@ fn task_plan_confirm_enqueue_and_logs_round_trip() {
 }
 
 #[test]
+fn version_three_multi_target_plan_saves_confirms_and_persists_step_limits() {
+  let root_path = unique_temp_workspace("tasks-v3");
+  create_workspace("v3 任务测试", &root_path).expect("workspace should be created");
+  let task = create_collection_task(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "小红书多目标账号".to_string(),
+      source_type: "form".to_string(),
+      platforms: vec!["xiaohongshu".to_string()],
+      data_types: vec!["item_detail".to_string(), "comments".to_string()],
+    },
+  )
+  .expect("v3 任务应创建");
+  let draft = crate::collection::generate_form_collection_plan(
+    crate::collection::FormCollectionPlanRequest {
+      platform: "xiaohongshu".to_string(),
+      data_type: None,
+      data_types: vec!["item_detail".to_string(), "comments".to_string()],
+      params: serde_json::json!({ "keyword": "新能源汽车", "time_range": "近 30 天" }),
+      age_range: Some(crate::collection::AgeRangeInput { min: 18, max: 35 }),
+      request_limit: Some(4),
+      record_limit: Some(1200),
+      budget_limit_micros: Some(35_000_000),
+    },
+  )
+  .expect("v3 草案应生成");
+  let plan = save_collection_plan(
+    &root_path,
+    SaveCollectionPlanInput {
+      task_id: task.id.clone(),
+      source: draft.source,
+      plan_json: draft.plan_json,
+      validation_status: draft.validation_status,
+      validation_errors_json: Some(draft.validation_errors_json),
+      cost_estimate_json: Some(draft.cost_estimate_json),
+    },
+  )
+  .expect("v3 计划应保存");
+
+  assert_eq!(plan.schema_version, 3);
+  assert_eq!(
+    plan.validation_status, "valid",
+    "{:?}",
+    plan.validation_errors_json
+  );
+  confirm_collection_plan(&root_path, &task.id, &plan.id).expect("v3 计划应确认");
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  let limits = {
+    let mut statement = connection
+      .prepare(
+        "SELECT request_count_estimate FROM api_call_step WHERE plan_id = ?1 ORDER BY step_order",
+      )
+      .expect("step query should prepare");
+    statement
+      .query_map([plan.id], |row| row.get::<_, i64>(0))
+      .expect("step limits should query")
+      .collect::<Result<Vec<_>, _>>()
+      .expect("step limits should parse")
+  };
+  assert_eq!(limits, vec![4, 1, 4]);
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn persisted_cost_estimate_counts_the_confirmed_request_limit() {
   let root_path = unique_temp_workspace("request-limit-cost");
   create_workspace("任务测试", &root_path).expect("workspace should be created");

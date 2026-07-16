@@ -5,7 +5,7 @@ use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::collection::validate_collection_plan_v2;
+use crate::collection::{validate_collection_plan_v2, validate_collection_plan_v3};
 use crate::domain::AppResult;
 
 use super::validation::{estimate_from_plan_json, validate_plan_for_task};
@@ -99,7 +99,7 @@ fn persist_api_call_steps(
   let Some(steps) = plan_json.get("steps").and_then(Value::as_array) else {
     return Ok(());
   };
-  let request_limit = plan_json
+  let default_request_limit = plan_json
     .get("request_limit")
     .and_then(Value::as_i64)
     .unwrap_or(1)
@@ -125,6 +125,11 @@ fn persist_api_call_steps(
       .get("params")
       .cloned()
       .unwrap_or_else(|| serde_json::json!({}));
+    let request_limit = step
+      .get("request_limit")
+      .and_then(Value::as_i64)
+      .unwrap_or(default_request_limit)
+      .max(1);
     connection
       .execute(
         "INSERT INTO api_call_step (
@@ -194,7 +199,7 @@ pub fn confirm_collection_plan(
   }
 
   let validation_errors = validate_plan_for_schema(&task, &plan.plan_json, plan.schema_version);
-  if plan.schema_version != 2 || !validation_errors.is_empty() {
+  if !matches!(plan.schema_version, 2 | 3) || !validation_errors.is_empty() {
     let error_message = confirmation_error_message(plan.schema_version);
     let now = Utc::now().to_rfc3339();
     transaction
@@ -271,6 +276,9 @@ fn normalize_plan_source(source: &str) -> AppResult<String> {
 }
 
 fn detect_plan_schema_version(plan_json: &Value) -> i64 {
+  if let Some(version) = plan_json.get("schema_version").and_then(Value::as_i64) {
+    return version;
+  }
   if plan_json.get("record_limit").is_some() || plan_json.get("budget_limit").is_some() {
     2
   } else {
@@ -285,10 +293,11 @@ fn validate_plan_for_schema(
 ) -> Vec<String> {
   let mut errors = validate_plan_for_task(task, plan_json);
   match schema_version {
+    3 => errors.extend(validate_collection_plan_v3(plan_json).errors),
     2 => errors.extend(validate_collection_plan_v2(plan_json).errors),
     1 => errors.push(LEGACY_PLAN_ERROR.to_string()),
     version => errors.push(format!(
-      "schema_version={version} 不受支持，只有 v2 采集计划可以确认/执行"
+      "schema_version={version} 不受支持，只有 v2/v3 采集计划可以确认/执行"
     )),
   }
   errors.sort();
@@ -298,9 +307,10 @@ fn validate_plan_for_schema(
 
 fn confirmation_error_message(schema_version: i64) -> String {
   match schema_version {
+    3 => "采集计划未通过后端校验（v3），不能确认".to_string(),
     2 => "采集计划未通过后端校验（v2），不能确认".to_string(),
     1 => LEGACY_PLAN_ERROR.to_string(),
-    version => format!("schema_version={version} 不受支持，只有 v2 采集计划可以确认/执行"),
+    version => format!("schema_version={version} 不受支持，只有 v2/v3 采集计划可以确认/执行"),
   }
 }
 
