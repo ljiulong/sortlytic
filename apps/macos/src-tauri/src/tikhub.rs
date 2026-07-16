@@ -17,7 +17,9 @@ mod account;
 mod collection;
 
 use account::parse_account_quota;
-pub use account::{quote_tikhub_connector_price, TikhubPriceQuote};
+pub use account::{
+  get_tikhub_account_quota, quote_tikhub_connector_price, TikhubAccountQuota, TikhubPriceQuote,
+};
 pub use collection::{
   build_collection_request, parse_collection_page, send_collection_request, CollectionPage,
   RequestMethod, TikHubCollectionRequest,

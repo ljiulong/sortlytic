@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::{
-  error_for_status, get_tikhub_connector, normalize_tikhub_base_url, number_field,
+  error_for_status, get_tikhub_connector, get_tikhub_json, normalize_tikhub_base_url, number_field,
   read_limited_response_body, reqwest_request_error, safe_body_summary,
 };
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
@@ -19,6 +19,13 @@ pub struct TikhubPriceQuote {
   pub total_price: f64,
   pub currency: String,
   pub quote_json: Value,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct TikhubAccountQuota {
+  pub balance: f64,
+  pub free_credit: f64,
+  pub available_credit: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -43,6 +50,29 @@ pub fn quote_tikhub_connector_price(
     .ok_or_else(|| AppError::validation("TikHub 连接器缺少密钥引用", AppErrorStage::Collection))?;
   let token = read_secret_for_backend(root_path, secret_ref_id, "tikhub")?;
   calculate_tikhub_price(&connector.base_url, &token, endpoint, request_per_day)
+}
+
+pub fn get_tikhub_account_quota(root_path: impl AsRef<Path>) -> AppResult<TikhubAccountQuota> {
+  let root_path = root_path.as_ref();
+  let connector = get_tikhub_connector(root_path)?
+    .filter(|connector| connector.enabled)
+    .ok_or_else(|| AppError::validation("TikHub 连接器尚未启用", AppErrorStage::Collection))?;
+  let secret_ref_id = connector
+    .secret_ref_id
+    .as_deref()
+    .ok_or_else(|| AppError::validation("TikHub 连接器缺少密钥引用", AppErrorStage::Collection))?;
+  let token = read_secret_for_backend(root_path, secret_ref_id, "tikhub")?;
+  let client = reqwest::blocking::Client::builder()
+    .timeout(Duration::from_secs(20))
+    .build()
+    .map_err(reqwest_request_error)?;
+  let response = get_tikhub_json(
+    &client,
+    &connector.base_url,
+    "/api/v1/tikhub/user/get_user_info",
+    &token,
+  )?;
+  require_account_quota(&response)
 }
 
 fn calculate_tikhub_price(
@@ -108,6 +138,36 @@ pub(super) fn parse_account_quota(user_info: &Value) -> AccountQuota {
     free_credit,
     available_credit,
   }
+}
+
+fn require_account_quota(user_info: &Value) -> AppResult<TikhubAccountQuota> {
+  let quota = parse_account_quota(user_info);
+  let (Some(balance), Some(free_credit), Some(available_credit)) =
+    (quota.balance, quota.free_credit, quota.available_credit)
+  else {
+    return Err(AppError::new(
+      AppErrorCode::CostLimitError,
+      "TikHub 充值余额或免费额度未知，已禁止发出采集请求",
+      AppErrorStage::Collection,
+      false,
+    ));
+  };
+  if [balance, free_credit, available_credit]
+    .iter()
+    .any(|value| !value.is_finite() || *value < 0.0)
+  {
+    return Err(AppError::new(
+      AppErrorCode::CostLimitError,
+      "TikHub 账户额度格式异常，已禁止发出采集请求",
+      AppErrorStage::Collection,
+      false,
+    ));
+  }
+  Ok(TikhubAccountQuota {
+    balance,
+    free_credit,
+    available_credit,
+  })
 }
 
 pub(super) fn parse_price_quote(
@@ -195,6 +255,23 @@ mod tests {
     assert_eq!(
       parse_account_quota(&serde_json::json!({})).available_credit,
       None
+    );
+    assert_eq!(
+      require_account_quota(&serde_json::json!({
+        "user_data": { "balance": 1.25, "free_credit": 0.05 }
+      }))
+      .expect("完整额度应通过"),
+      TikhubAccountQuota {
+        balance: 1.25,
+        free_credit: 0.05,
+        available_credit: 1.30,
+      }
+    );
+    assert_eq!(
+      require_account_quota(&serde_json::json!({ "user_data": { "free_credit": 0.05 } }))
+        .expect_err("缺少充值余额必须失败")
+        .code,
+      AppErrorCode::CostLimitError
     );
   }
 
