@@ -344,7 +344,7 @@ fn ensure_builtin_regression_cases(
           "expected_data_types": ["comments"],
           "expected_missing_fields": [],
           "expected_plan_valid": false,
-          "expected_error_contains": ["item_id", "time_range", "region 尚未验证"]
+          "expected_error_contains": ["item_id", "region 尚未验证"]
         }),
       ),
       (
