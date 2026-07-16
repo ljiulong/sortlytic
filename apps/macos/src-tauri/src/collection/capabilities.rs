@@ -74,6 +74,21 @@ const ENDPOINTS: &[EndpointDefinition] = &[
   EndpointDefinition {
     platform: "tiktok",
     platform_name: "TikTok",
+    data_type: "account_posts",
+    data_type_name: "账号作品所属账号",
+    endpoint_key: "tiktok.account_posts",
+    required_params: &["account_id"],
+    optional_params: &["region", "page_size"],
+    pagination_mode: PaginationMode::Cursor,
+    region_filter: FilterExecution::Provider,
+    time_range_filter: FilterExecution::Unsupported,
+    provider_time_ranges: NO_TIME_RANGES,
+    max_page_size: 20,
+    max_request_count: 200,
+  },
+  EndpointDefinition {
+    platform: "tiktok",
+    platform_name: "TikTok",
     data_type: "item_detail",
     data_type_name: "笔记详情",
     endpoint_key: "tiktok.item_detail",
@@ -134,6 +149,21 @@ const ENDPOINTS: &[EndpointDefinition] = &[
   EndpointDefinition {
     platform: "douyin",
     platform_name: "抖音",
+    data_type: "account_posts",
+    data_type_name: "账号作品所属账号",
+    endpoint_key: "douyin.account_posts",
+    required_params: &["account_id"],
+    optional_params: &["page_size"],
+    pagination_mode: PaginationMode::Cursor,
+    region_filter: FilterExecution::Unsupported,
+    time_range_filter: FilterExecution::Unsupported,
+    provider_time_ranges: NO_TIME_RANGES,
+    max_page_size: 20,
+    max_request_count: 200,
+  },
+  EndpointDefinition {
+    platform: "douyin",
+    platform_name: "抖音",
     data_type: "item_detail",
     data_type_name: "笔记详情",
     endpoint_key: "douyin.item_detail",
@@ -190,6 +220,21 @@ const ENDPOINTS: &[EndpointDefinition] = &[
     provider_time_ranges: NO_TIME_RANGES,
     max_page_size: 1,
     max_request_count: 1,
+  },
+  EndpointDefinition {
+    platform: "xiaohongshu",
+    platform_name: "小红书",
+    data_type: "account_posts",
+    data_type_name: "账号作品所属账号",
+    endpoint_key: "xiaohongshu.account_posts",
+    required_params: &["account_id"],
+    optional_params: &[],
+    pagination_mode: PaginationMode::Cursor,
+    region_filter: FilterExecution::Unsupported,
+    time_range_filter: FilterExecution::Unsupported,
+    provider_time_ranges: NO_TIME_RANGES,
+    max_page_size: 20,
+    max_request_count: 200,
   },
   EndpointDefinition {
     platform: "xiaohongshu",
@@ -290,5 +335,25 @@ fn endpoint_to_view(endpoint: &EndpointDefinition) -> DataTypeCapabilityView {
     time_range_filter: endpoint.time_range_filter,
     max_page_size: endpoint.max_page_size,
     max_request_count: endpoint.max_request_count,
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::list_platform_data_types;
+
+  #[test]
+  fn every_platform_exposes_paginated_account_posts() {
+    for platform in ["tiktok", "douyin", "xiaohongshu"] {
+      let capabilities = list_platform_data_types(platform).expect("MVP 平台应提供采集能力");
+      let account_posts = capabilities
+        .iter()
+        .find(|capability| capability.data_type == "account_posts")
+        .expect("每个平台都应支持账号作品采集");
+
+      assert_eq!(account_posts.required_params, vec!["account_id"]);
+      assert_eq!(account_posts.pagination_mode, super::PaginationMode::Cursor);
+      assert!(account_posts.max_request_count > 1);
+    }
   }
 }
