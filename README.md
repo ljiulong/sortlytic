@@ -61,7 +61,7 @@ The current release workflow does not yet apply Apple Developer ID signing and n
 
 ### Run from source
 
-Source development requires macOS, Node.js 24, pnpm 11.5.2 through Corepack, and Rust 1.77.2 or newer.
+Source development requires macOS, Node.js 24, pnpm 11.5.2 through Corepack, and Rust 1.88 or newer.
 
 ```bash
 git clone https://github.com/ljiulong/sortlytic.git
@@ -363,7 +363,7 @@ Local updater builds require `TAURI_SIGNING_PRIVATE_KEY` and, when applicable, `
 
 ### Publish a release
 
-Run the [`release-macos`](.github/workflows/release-macos.yml) workflow manually and select a patch, minor, or major version bump. The workflow synchronizes `package.json`, `tauri.conf.json`, and `Cargo.toml`, creates an `app-vX.Y.Z` tag, then builds Apple Silicon and Intel `.app` and `.dmg` artifacts before publishing the GitHub Release.
+Every push to `main` runs [`release-macos`](.github/workflows/release-macos.yml) after CI passes. semantic-release derives the version from Conventional Commits: `fix` and `revert` produce a patch release, `feat` produces a minor release, and a `BREAKING CHANGE` produces a major release. The workflow synchronizes `package.json`, `tauri.conf.json`, and `Cargo.toml`, creates the `app-vX.Y.Z` tag as a draft release, builds signed updater files plus Apple Silicon and Intel `.app` and `.dmg` artifacts, and publishes the release only after both architectures succeed. Manual dispatch accepts only an optional existing `app-vX.Y.Z` tag through `rebuild_tag` to rebuild its artifacts.
 
 ## Contributing
 

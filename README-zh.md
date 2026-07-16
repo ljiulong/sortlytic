@@ -61,7 +61,7 @@
 
 ### 从源码启动
 
-源码开发需要 macOS、Node.js 24、通过 Corepack 使用的 pnpm 11.5.2，以及 Rust 1.77.2 或更高版本。
+源码开发需要 macOS、Node.js 24、通过 Corepack 使用的 pnpm 11.5.2，以及 Rust 1.88 或更高版本。
 
 ```bash
 git clone https://github.com/ljiulong/sortlytic.git
@@ -363,7 +363,7 @@ pnpm build:mac
 
 ### 发布新版本
 
-手动运行 [`release-macos`](.github/workflows/release-macos.yml) 工作流，并选择 patch、minor 或 major 版本递增。工作流会同步 `package.json`、`tauri.conf.json` 和 `Cargo.toml`，创建 `app-vX.Y.Z` 标签，然后分别构建 Apple Silicon 与 Intel 的 `.app` 和 `.dmg` 产物并发布到 GitHub Release。
+每次推送到 `main` 后，[`release-macos`](.github/workflows/release-macos.yml) 会在 CI 通过后运行。semantic-release 根据 Conventional Commits（约定式提交）自动判定版本：`fix` 和 `revert` 发布补丁版本，`feat` 发布次版本，包含 `BREAKING CHANGE` 时发布主版本。工作流会同步 `package.json`、`tauri.conf.json` 和 `Cargo.toml`，先创建 `app-vX.Y.Z` 草稿 Release，再分别构建 updater 签名文件以及 Apple Silicon 与 Intel 的 `.app`、`.dmg` 产物；只有双架构均成功后才公开 Release。手动运行工作流时只能通过 `rebuild_tag` 传入已有的 `app-vX.Y.Z` 标签，重新构建该版本产物。
 
 ## 贡献
 
