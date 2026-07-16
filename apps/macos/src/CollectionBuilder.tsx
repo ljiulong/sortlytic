@@ -305,6 +305,9 @@ export function CollectionPlanPreview({
   const ageLabel = plan.ageRangeEnabled && plan.ageMin !== undefined && plan.ageMax !== undefined
     ? `${plan.ageMin}–${plan.ageMax} 岁（闭区间，仅明确年龄）`
     : '未启用'
+  const genderLabel = plan.genderFilterEnabled && plan.genders?.length
+    ? plan.genders.map((gender) => genderFilterOptions.find(({ value }) => value === gender)?.label ?? gender).join('、')
+    : '未启用'
 
   return (
     <div className="plan-preview">
@@ -320,6 +323,7 @@ export function CollectionPlanPreview({
         <InfoLine label="数据类型" value={(plan.dataTypes?.length ? plan.dataTypes : [plan.dataType]).join('、')} />
         <InfoLine label="国家/地区" value={regionLabel ?? '未提供或目标不支持'} />
         <InfoLine label="年龄范围" value={ageLabel} />
+        <InfoLine label="性别" value={genderLabel} />
         <InfoLine label="范围" value={plan.maxRecords > 0 ? `${plan.range}，最多 ${plan.maxRecords.toLocaleString()} 条` : plan.range} />
         <InfoLine
           label="成本"

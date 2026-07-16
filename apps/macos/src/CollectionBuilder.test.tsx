@@ -57,6 +57,23 @@ describe('CollectionPlanPreview', () => {
     expect(markup).toContain('暂不能运行：年龄范围必须填写上下限')
     expect(markup).toMatch(/<button[^>]*disabled=""/)
   })
+
+  it('确认前展示已启用的明确性别筛选', () => {
+    const markup = renderToStaticMarkup(
+      createElement(CollectionPlanPreview, {
+        actionMessage: '等待确认',
+        isBusy: false,
+        onConfirmPlan: vi.fn(),
+        plan: {
+          ...draftPlan,
+          genderFilterEnabled: true,
+          genders: ['female', 'other'],
+        },
+      }),
+    )
+
+    expect(markup).toContain('女性、其他明确性别')
+  })
 })
 
 describe('collection form controls', () => {
