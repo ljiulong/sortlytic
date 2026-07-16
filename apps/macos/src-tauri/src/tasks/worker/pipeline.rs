@@ -130,6 +130,8 @@ where
     &target.params,
     target.cursor.as_ref(),
   )?;
+  let current_cursor = target.cursor.clone();
+  update_target(connection, target, "running", current_cursor)?;
   let (checkpoint_id, idempotency_key) =
     insert_prepared_checkpoint(connection, &step.id, page_index, target.cursor.as_ref())?;
   let request = request.with_idempotency_key(idempotency_key)?;

@@ -59,6 +59,19 @@ fn version_three_worker_executes_each_materialized_dependency_target() {
   let calls = std::cell::RefCell::new(Vec::new());
 
   execute_claimed_run_with_fetcher(&root, &run, |request| {
+    let connection = super::open_workspace_connection(&root).expect("database should open");
+    let running_target_count: i64 = connection
+      .query_row(
+        "SELECT COUNT(*) FROM collection_pipeline_target
+         WHERE task_run_id = ?1 AND status = 'running'",
+        [&run.id],
+        |row| row.get(0),
+      )
+      .expect("running target state should be readable");
+    assert_eq!(
+      running_target_count, 1,
+      "每次远端请求前必须先持久化唯一运行中目标"
+    );
     if let Some(keyword) = request.source_params().get("keyword") {
       calls.borrow_mut().push(format!("search:{keyword}"));
       let records = vec![
