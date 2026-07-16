@@ -782,11 +782,13 @@ pub fn run() {
       }
       #[cfg(target_os = "macos")]
       {
-        let main_window = app
-          .get_webview_window("main")
-          .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "找不到主窗口"))?;
-        native_window::apply_native_window_corner_radius(&main_window)
-          .map_err(std::io::Error::other)?;
+        if let Some(main_window) = app.get_webview_window("main") {
+          if let Err(error) = native_window::apply_native_window_corner_radius(&main_window) {
+            log::error!("macOS 原生圆角初始化失败：{error}");
+          }
+        } else {
+          log::error!("macOS 原生圆角初始化失败：找不到主窗口");
+        }
       }
       app_runtime::start_task_worker(app.handle());
       Ok(())

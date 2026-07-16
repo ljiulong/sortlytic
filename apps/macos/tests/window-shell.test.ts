@@ -9,6 +9,7 @@ const nativeWindowSource = readFileSync(
   new URL('../src-tauri/src/native_window.rs', import.meta.url),
   'utf8',
 )
+const appSource = readFileSync(new URL('../src-tauri/src/lib.rs', import.meta.url), 'utf8')
 
 describe('macOS 应用外壳', () => {
   it('关闭原生外框阴影且不叠加整窗伪元素', () => {
@@ -32,5 +33,13 @@ describe('macOS 应用外壳', () => {
     expect(nativeWindowSource).toContain('b"clearColor\\0"')
     expect(nativeWindowSource).toContain('b"setOpaque:\\0", false')
     expect(nativeWindowSource).toContain('b"setBackgroundColor:\\0"')
+  })
+
+  it('原生圆角装饰初始化失败时仍继续启动应用', () => {
+    expect(appSource).toContain('if let Some(main_window) = app.get_webview_window("main")')
+    expect(appSource).toContain(
+      'if let Err(error) = native_window::apply_native_window_corner_radius(&main_window)',
+    )
+    expect(appSource).not.toContain('.map_err(std::io::Error::other)?')
   })
 })
