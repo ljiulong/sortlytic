@@ -235,8 +235,10 @@ export type ReportView = {
 
 export type GenerateFormPlanInput = {
   platform: string
-  data_type: string
+  data_type?: string
+  data_types?: string[]
   params: Record<string, unknown>
+  age_range?: { min: number; max: number } | null
   request_limit?: number
   record_limit?: number
   budget_limit_micros?: number

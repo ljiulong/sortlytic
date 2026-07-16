@@ -16,6 +16,7 @@ import {
   type WorkspaceSummary,
 } from './backend-api'
 import {
+  buildFormPlanRequest,
   mapBackendData,
   planFromBackend,
   saveAndTestTikhubToken,
@@ -676,6 +677,37 @@ describe('buildPlanParams', () => {
     expect(buildPlanParams(values, 'douyin', 'comments')).toEqual({
       item_id: '新能源汽车',
       page_size: 50,
+    })
+  })
+})
+
+describe('v3 form plan request', () => {
+  it('传递多目标与可选年龄闭区间，同时保留旧单值字段', () => {
+    expect(
+      buildFormPlanRequest({
+        platform: '小红书',
+        dataType: '关键词搜索',
+        dataTypes: ['item_detail', 'comments'],
+        regionCode: 'CN',
+        keyword: '新能源汽车',
+        range: '近 30 天',
+        maxRecords: 1200,
+        budget: 35,
+        ageRangeEnabled: true,
+        ageMin: 18,
+        ageMax: 35,
+      }),
+    ).toMatchObject({
+      platform: 'xiaohongshu',
+      data_type: 'item_detail',
+      data_types: ['item_detail', 'comments'],
+      age_range: { min: 18, max: 35 },
+      record_limit: 1200,
+      budget_limit_micros: 35_000_000,
+      params: {
+        keyword: '新能源汽车',
+        time_range: '近 30 天',
+      },
     })
   })
 })

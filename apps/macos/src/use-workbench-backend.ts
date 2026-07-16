@@ -11,6 +11,7 @@ import {
   ensureDefaultWorkspace,
   generateCollectionPlanFromText,
   generateFormCollectionPlan,
+  type GenerateFormPlanInput,
   getBackendStatus,
   getTikhubConnector,
   listModelProviders,
@@ -39,6 +40,7 @@ import {
 } from './backend-api'
 import { useAppUpdater } from './use-app-updater'
 import { buildPlanParams } from './collection-plan-client'
+import type { CollectionDataType } from './collection-options'
 import {
   type ConnectionIcon,
   type DataType,
@@ -59,6 +61,10 @@ export type CollectionFormPayload = {
   range: string
   maxRecords: number
   budget: number
+  dataTypes?: CollectionDataType[]
+  ageRangeEnabled?: boolean
+  ageMin?: number
+  ageMax?: number
 }
 
 export type ModelSettingsInput = {
@@ -70,9 +76,10 @@ export type ModelSettingsInput = {
   apiKey: string
 }
 
-export type RuntimeCollectionPlan = CollectionFormPayload & {
+export type RuntimeCollectionPlan = Omit<CollectionFormPayload, 'dataTypes'> & {
   platforms?: Platform[]
   dataTypes?: DataType[]
+  targetDataTypes?: CollectionDataType[]
   status: TaskStatus
   missing: string[]
   taskId?: string
@@ -456,23 +463,13 @@ export async function saveAndTestTikhubToken(input: { token: string; baseUrl: st
 
 async function createFormPlan(values: CollectionFormPayload): Promise<RuntimeCollectionPlan> {
   assertTauriRuntime()
-  const platform = toBackendPlatform(values.platform)
-  const dataType = toBackendDataType(values.dataType)
-  const params = buildPlanParams(values, platform, dataType)
-  const requestLimit = Math.max(1, Math.ceil(values.maxRecords / 50))
-  const draft = await generateFormCollectionPlan({
-    platform,
-    data_type: dataType,
-    params,
-    request_limit: requestLimit,
-    record_limit: values.maxRecords,
-    budget_limit_micros: Math.round(values.budget * 1_000_000),
-  })
+  const request = buildFormPlanRequest(values)
+  const draft = await generateFormCollectionPlan(request)
   const task = await createCollectionTask({
     name: values.keyword.trim(),
     source_type: 'form',
-    platforms: [platform],
-    data_types: [dataType],
+    platforms: [request.platform],
+    data_types: request.data_types ?? [request.data_type ?? 'keyword_search'],
   })
   const plan = await saveCollectionPlan({
     task_id: task.id,
@@ -484,6 +481,27 @@ async function createFormPlan(values: CollectionFormPayload): Promise<RuntimeCol
   })
 
   return planFromBackend(values, plan)
+}
+
+export function buildFormPlanRequest(values: CollectionFormPayload): GenerateFormPlanInput {
+  const platform = toBackendPlatform(values.platform)
+  const dataTypes = values.dataTypes?.length
+    ? [...new Set(values.dataTypes)]
+    : [toBackendDataType(values.dataType)]
+  const ageRange = values.ageRangeEnabled && values.ageMin !== undefined && values.ageMax !== undefined
+    ? { min: values.ageMin, max: values.ageMax }
+    : null
+
+  return {
+    platform,
+    data_type: dataTypes[0],
+    data_types: dataTypes,
+    params: buildPlanParams(values, platform, 'keyword_search'),
+    age_range: ageRange,
+    request_limit: Math.max(1, Math.ceil(values.maxRecords / 50)),
+    record_limit: values.maxRecords,
+    budget_limit_micros: Math.round(values.budget * 1_000_000),
+  }
 }
 
 async function createNaturalPlan(intentText: string): Promise<RuntimeCollectionPlan> {
@@ -648,6 +666,7 @@ export function planFromBackend(values: CollectionFormPayload, plan: CollectionP
 
   return {
     ...values,
+    targetDataTypes: values.dataTypes,
     platforms,
     dataTypes,
     platform: platforms[0] ?? values.platform,
