@@ -132,8 +132,8 @@ fn persist_account(
 
   let qualifies = input
     .age_range
-    .is_none_or(|range| range.includes(merged.age))
-    && gender_filter.is_none_or(|filter| {
+    .map_or(true, |range| range.includes(merged.age))
+    && gender_filter.map_or(true, |filter| {
       merged
         .gender
         .as_ref()

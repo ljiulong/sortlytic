@@ -379,9 +379,9 @@ fn validate_gender_filter(gender_filter: Option<&Value>, errors: &mut Vec<String
   let mut seen = std::collections::BTreeSet::new();
   if values.is_empty()
     || values.iter().any(|value| {
-      value
-        .as_str()
-        .is_none_or(|value| !matches!(value, "male" | "female" | "other") || !seen.insert(value))
+      value.as_str().map_or(true, |value| {
+        !matches!(value, "male" | "female" | "other") || !seen.insert(value)
+      })
     })
   {
     errors.push("gender_filter 只能包含不重复的 male、female、other".to_string());
