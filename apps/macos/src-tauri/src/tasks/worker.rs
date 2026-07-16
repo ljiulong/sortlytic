@@ -20,6 +20,7 @@ use super::{
 };
 
 mod pipeline;
+mod pricing;
 mod recovery;
 mod runtime;
 mod targets;
@@ -76,6 +77,7 @@ fn execute_claimed_run(root_path: &Path, run: &TaskRunView) -> AppResult<()> {
   let snapshot = load_runtime_snapshot(root_path, &run.id)?;
   let token = read_secret_for_backend(root_path, &snapshot.secret_ref_id, "tikhub")?;
   execute_claimed_run_with_fetcher(root_path, run, |request| {
+    pricing::guard_request(root_path, &run.id, request)?;
     send_collection_request(Some(snapshot.base_url.clone()), &token, request)
   })
 }
