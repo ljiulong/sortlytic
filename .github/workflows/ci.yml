@@ -75,6 +75,14 @@ jobs:
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
           rustup default stable
 
+      - name: Check declared minimum Rust version
+        working-directory: apps/macos/src-tauri
+        run: |
+          MSRV="$(sed -n 's/^rust-version = "\([^"]*\)"/\1/p' Cargo.toml)"
+          test -n "$MSRV"
+          rustup toolchain install "$MSRV" --profile minimal
+          cargo "+$MSRV" check --locked --all-targets --all-features
+
       - name: Check Rust formatting
         working-directory: apps/macos/src-tauri
         run: cargo fmt --all -- --check
