@@ -209,7 +209,7 @@ jobs:
               (.url | startswith("https://github.com/") and contains("/releases/download/"))
             )
           ' "$MANIFEST" >/dev/null
-          gh release upload "$TAG" "$MANIFEST" --clobber
+          gh release upload "$TAG" "$MANIFEST" --repo "$GITHUB_REPOSITORY" --clobber
 
       - name: Publish verified draft release
         if: >-
