@@ -38,6 +38,7 @@ import {
   upsertModelProfile,
 } from './backend-api'
 import { useAppUpdater } from './use-app-updater'
+import { buildPlanParams } from './collection-plan-client'
 import {
   type ConnectionIcon,
   type DataType,
@@ -457,7 +458,7 @@ async function createFormPlan(values: CollectionFormPayload): Promise<RuntimeCol
   assertTauriRuntime()
   const platform = toBackendPlatform(values.platform)
   const dataType = toBackendDataType(values.dataType)
-  const params = buildPlanParams(values, dataType)
+  const params = buildPlanParams(values, platform, dataType)
   const requestLimit = Math.max(1, Math.ceil(values.maxRecords / 50))
   const draft = await generateFormCollectionPlan({
     platform,
@@ -663,21 +664,6 @@ export function planFromBackend(values: CollectionFormPayload, plan: CollectionP
     validationStatus: plan.validation_status,
     costEstimate: `${numberFromJson(plan.cost_estimate_json)} 次请求`,
   }
-}
-
-function buildPlanParams(values: CollectionFormPayload, dataType: string) {
-  const keyword = values.keyword.trim()
-  const regionParams = { region: values.regionCode.trim().toUpperCase() }
-  const pagingParams = {
-    ...regionParams,
-    time_range: values.range.trim(),
-    page_size: Math.min(values.maxRecords, 50),
-  }
-
-  if (dataType === 'keyword_search') return { ...pagingParams, keyword }
-  if (dataType === 'comments') return { ...pagingParams, item_id: keyword }
-  if (dataType === 'account_profile') return { ...regionParams, account_id: keyword }
-  return { ...regionParams, item_id: keyword }
 }
 
 function inferNaturalPlanHints(intentText: string) {

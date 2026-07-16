@@ -22,6 +22,7 @@ import {
   type RuntimeCollectionPlan,
   useWorkbenchBackend,
 } from './use-workbench-backend'
+import { buildPlanParams } from './collection-plan-client'
 import { workspaceSnapshot } from './workbench-data'
 
 type CapturedMutationOptions = {
@@ -644,6 +645,38 @@ describe('planFromBackend', () => {
     expect(result.maxRecords).toBe(0)
     expect(result.budget).toBe(0)
     expect(result.missing).toEqual(['region 尚未验证', 'time_range 不能为空'])
+  })
+})
+
+describe('buildPlanParams', () => {
+  const values = {
+    regionCode: 'cn',
+    keyword: '新能源汽车',
+    range: '7',
+    maxRecords: 120,
+  }
+
+  it('小红书详情不会携带后端明确不支持的地区参数', () => {
+    expect(buildPlanParams(values, 'xiaohongshu', 'item_detail')).toEqual({
+      item_id: '新能源汽车',
+    })
+  })
+
+  it('只把筛选条件传给由供应商直接支持的端点', () => {
+    expect(buildPlanParams(values, 'tiktok', 'keyword_search')).toEqual({
+      keyword: '新能源汽车',
+      region: 'CN',
+      time_range: '7',
+      page_size: 50,
+    })
+    expect(buildPlanParams(values, 'xiaohongshu', 'keyword_search')).toEqual({
+      keyword: '新能源汽车',
+      time_range: '7',
+    })
+    expect(buildPlanParams(values, 'douyin', 'comments')).toEqual({
+      item_id: '新能源汽车',
+      page_size: 50,
+    })
   })
 })
 
