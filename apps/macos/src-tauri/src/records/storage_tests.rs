@@ -46,6 +46,49 @@ fn persists_raw_file_and_normalized_record_atomically() {
 }
 
 #[test]
+fn version_three_run_accepts_confirmed_internal_dependency_data_type() {
+  let workspace = TestWorkspace::new("v3-internal", &["item_detail"]);
+  let run_id = workspace.insert_running_task_run();
+  let connection =
+    open_workspace_database(workspace.root.join(DATABASE_FILE_NAME)).expect("database should open");
+  connection
+    .execute(
+      "INSERT INTO collection_plan (
+         id, task_id, source, schema_version, plan_json, validation_status,
+         confirmed_by_user, created_at, updated_at
+       ) VALUES (
+         'plan-v3', ?1, 'form_generated', 3, ?2, 'valid', 1, ?3, ?3
+       )",
+      params![
+        workspace.task_id,
+        serde_json::json!({
+          "schema_version": 3,
+          "data_types": ["item_detail"],
+          "internal_data_types": ["keyword_search"]
+        })
+        .to_string(),
+        "2026-07-12T08:00:00+00:00"
+      ],
+    )
+    .expect("v3 plan should insert");
+  connection
+    .execute(
+      "UPDATE task_run SET plan_id = 'plan-v3' WHERE id = ?1",
+      [&run_id],
+    )
+    .expect("run should bind v3 plan");
+
+  let result = persist_page(
+    &workspace,
+    &run_id,
+    "keyword_search",
+    vec![tiktok_video("video-internal", "内部搜索结果")],
+  )
+  .expect("confirmed internal dependency should persist");
+  assert_eq!(result.inserted_count, 1);
+}
+
+#[test]
 fn identity_is_idempotent_only_within_the_same_run_and_data_type() {
   let workspace = TestWorkspace::new("identity", &["keyword_search", "item_detail"]);
   let first_run = workspace.insert_running_task_run();

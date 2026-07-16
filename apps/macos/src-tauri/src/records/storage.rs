@@ -256,9 +256,13 @@ fn sync_directory(path: &Path) -> AppResult<()> {
 fn validate_running_scope(connection: &Connection, input: &NormalizedInput) -> AppResult<()> {
   let state = connection
     .query_row(
-      "SELECT task.status, run.status, task.platforms_json, task.data_types_json
+      "SELECT task.status, run.status, task.platforms_json, task.data_types_json,
+              plan.schema_version, plan.plan_json
        FROM task_run run
        JOIN collection_task task ON task.id = run.task_id
+       LEFT JOIN collection_plan plan
+         ON plan.id = run.plan_id AND plan.task_id = task.id
+        AND plan.validation_status = 'valid' AND plan.confirmed_by_user = 1
        WHERE task.id = ?1 AND run.id = ?2 AND run.task_id = task.id",
       params![input.task_id, input.task_run_id],
       |row| {
@@ -267,6 +271,8 @@ fn validate_running_scope(connection: &Connection, input: &NormalizedInput) -> A
           row.get::<_, String>(1)?,
           row.get::<_, String>(2)?,
           row.get::<_, String>(3)?,
+          row.get::<_, Option<i64>>(4)?,
+          row.get::<_, Option<String>>(5)?,
         ))
       },
     )
@@ -279,7 +285,11 @@ fn validate_running_scope(connection: &Connection, input: &NormalizedInput) -> A
   if !json_array_contains(&state.2, &input.platform)? {
     return Err(validation_error("采集平台不在任务确认范围内"));
   }
-  if !json_array_contains(&state.3, &input.data_type)? {
+  let confirmed_internal_type = state.4 == Some(3)
+    && state.5.as_deref().is_some_and(|plan_json| {
+      plan_array_contains(plan_json, "internal_data_types", &input.data_type)
+    });
+  if !json_array_contains(&state.3, &input.data_type)? && !confirmed_internal_type {
     return Err(validation_error("数据类型不在任务确认范围内"));
   }
   Ok(())
@@ -317,6 +327,13 @@ fn json_array_contains(text: &str, expected: &str) -> AppResult<bool> {
   let values =
     serde_json::from_str::<Vec<String>>(text).map_err(|_| integrity_error("任务范围 JSON 损坏"))?;
   Ok(values.iter().any(|value| value == expected))
+}
+
+fn plan_array_contains(plan_json: &str, field: &str, expected: &str) -> bool {
+  serde_json::from_str::<Value>(plan_json)
+    .ok()
+    .and_then(|plan| plan.get(field).and_then(Value::as_array).cloned())
+    .is_some_and(|values| values.iter().any(|value| value.as_str() == Some(expected)))
 }
 
 fn insert_normalized_record(
