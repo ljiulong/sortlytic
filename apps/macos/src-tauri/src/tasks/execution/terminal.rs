@@ -5,6 +5,9 @@ use crate::tikhub::{build_collection_request, parse_collection_page};
 
 use super::*;
 
+#[path = "partial.rs"]
+mod partial;
+
 struct CompletionStep {
   order: i64,
   platform: String,
@@ -51,6 +54,8 @@ struct CompletionTotals {
   request_count: i64,
   persisted_records: i64,
   cost_micros: i64,
+  failure_count: i64,
+  output_records: i64,
 }
 
 pub fn complete_task_run(
@@ -83,13 +88,36 @@ pub fn complete_task_run(
     "record_count": totals.persisted_records
   })
   .to_string();
+  let (terminal_status, current_stage, error_code, error_message) =
+    if totals.failure_count > 0 && totals.output_records == 0 {
+      (
+        "failed",
+        "执行失败",
+        Some("ALL_TARGETS_FAILED"),
+        Some("全部采集目标失败，未获得合格账号"),
+      )
+    } else if totals.failure_count > 0 {
+      ("partial_success", "部分成功", None, None)
+    } else {
+      ("success", "已完成", None, None)
+    };
   let run_changed = transaction
     .execute(
       "UPDATE task_run
-       SET status = 'success', ended_at = ?1, current_stage = '已完成',
-           cost_actual_json = ?2, retryable = 0
-       WHERE id = ?3 AND task_id = ?4 AND plan_id = ?5 AND status = 'running'",
-      params![now, actual_cost_json, run_id, run.task_id, plan_id],
+       SET status = ?1, ended_at = ?2, current_stage = ?3,
+           cost_actual_json = ?4, error_code = ?5, error_message = ?6, retryable = 0
+       WHERE id = ?7 AND task_id = ?8 AND plan_id = ?9 AND status = 'running'",
+      params![
+        terminal_status,
+        now,
+        current_stage,
+        actual_cost_json,
+        error_code,
+        error_message,
+        run_id,
+        run.task_id,
+        plan_id
+      ],
     )
     .map_err(database_error)?;
   if run_changed != 1 {
@@ -98,33 +126,18 @@ pub fn complete_task_run(
   let task_changed = transaction
     .execute(
       "UPDATE collection_task
-       SET status = 'success', completed_at = ?1, actual_cost_json = ?2, updated_at = ?1
-       WHERE id = ?3 AND status = 'running'",
-      params![now, actual_cost_json, run.task_id],
+       SET status = ?1, completed_at = ?2, actual_cost_json = ?3, updated_at = ?2
+       WHERE id = ?4 AND status = 'running'",
+      params![terminal_status, now, actual_cost_json, run.task_id],
     )
     .map_err(database_error)?;
   if task_changed != 1 {
     return Err(task_error("父任务状态已变化，无法原子标记成功"));
   }
-  append_success_log(&transaction, run_id, &now)?;
+  partial::append_completion_log(&transaction, run_id, terminal_status, &now)?;
   transaction.commit().map_err(database_error)?;
 
   get_task_run(&connection, run_id)
-}
-
-fn append_success_log(connection: &Connection, run_id: &str, created_at: &str) -> AppResult<()> {
-  let changed = connection
-    .execute(
-      "INSERT INTO task_log (
-         id, task_run_id, stage, level, message, safe_details_json, created_at
-       ) VALUES (?1, ?2, '已完成', 'info', '任务执行成功', '{}', ?3)",
-      params![Uuid::new_v4().to_string(), run_id, created_at],
-    )
-    .map_err(database_error)?;
-  if changed != 1 {
-    return Err(task_error("任务成功日志未写入，已回滚终态更新"));
-  }
-  Ok(())
 }
 
 fn require_run_completion_evidence(
@@ -162,6 +175,7 @@ fn require_run_completion_evidence(
   let mut request_count = 0_i64;
   let mut persisted_records = 0_i64;
   let mut cost_micros = 0_i64;
+  let mut failure_count = 0_i64;
   for step in &steps {
     let run_step_id = step
       .run_step_id
@@ -198,7 +212,14 @@ fn require_run_completion_evidence(
       )));
     }
     if step.schema_version == 3
-      && !pipeline_requests_match_targets(connection, &run.id, step, totals.request_count)?
+      && (!pipeline_requests_match_targets(connection, &run.id, step, totals.request_count)?
+        || !partial::failure_evidence_matches(
+          connection,
+          &run.id,
+          run_step_id,
+          &step.step_key,
+          totals.failure_count,
+        )?)
     {
       return Err(task_error(format!(
         "运行步骤 {} 的目标请求证据与检查点不一致",
@@ -214,11 +235,14 @@ fn require_run_completion_evidence(
     cost_micros = cost_micros
       .checked_add(totals.cost_micros)
       .ok_or_else(|| task_error("完成证据的成本金额溢出"))?;
+    failure_count = failure_count
+      .checked_add(totals.failure_count)
+      .ok_or_else(|| task_error("失败目标数量溢出"))?;
   }
   if limits.schema_version == 2 && persisted_records > limits.record_limit {
     return Err(task_error("完成证据的持久化记录数超过确认上限"));
   }
-  if limits.schema_version == 3 {
+  let output_records = if limits.schema_version == 3 {
     let output_count = connection
       .query_row(
         "SELECT COUNT(*) FROM collected_account
@@ -230,7 +254,10 @@ fn require_run_completion_evidence(
     if output_count > limits.record_limit {
       return Err(task_error("合并后的输出账号数超过确认上限"));
     }
-  }
+    output_count
+  } else {
+    persisted_records
+  };
   if cost_micros > limits.budget_micros {
     return Err(task_error("完成证据的实际成本超过确认预算"));
   }
@@ -238,6 +265,8 @@ fn require_run_completion_evidence(
     request_count,
     persisted_records,
     cost_micros,
+    failure_count,
+    output_records,
   })
 }
 
@@ -378,6 +407,8 @@ fn completion_chain_totals(
         request_count: 0,
         persisted_records: 0,
         cost_micros: 0,
+        failure_count: 0,
+        output_records: 0,
       });
   }
   let (Some(step_started_at), Some(step_completed_at)) = (
@@ -389,16 +420,21 @@ fn completion_chain_totals(
   let mut request_count = 0_i64;
   let mut persisted_records = 0_i64;
   let mut cost_micros = 0_i64;
+  let mut failure_count = 0_i64;
   let mut previous: Option<&CompletionCheckpoint> = None;
   let mut previous_committed_at: Option<DateTime<FixedOffset>> = None;
   for (index, checkpoint) in checkpoints.iter().enumerate() {
-    if checkpoint.page_index != index as i64
-      || checkpoint.status != "completed"
-      || checkpoint.retryable
-      || checkpoint.last_error_code.is_some()
-      || checkpoint.last_error_message.is_some()
-      || !checkpoint_evidence_is_complete(step, checkpoint)
-    {
+    let is_target_failure = step.schema_version == 3 && checkpoint.status == "failed";
+    let has_valid_evidence = if is_target_failure {
+      partial::failed_checkpoint_is_complete(checkpoint)
+    } else {
+      checkpoint.status == "completed"
+        && !checkpoint.retryable
+        && checkpoint.last_error_code.is_none()
+        && checkpoint.last_error_message.is_none()
+        && checkpoint_evidence_is_complete(step, checkpoint)
+    };
+    if checkpoint.page_index != index as i64 || !has_valid_evidence {
       return None;
     }
     if step.schema_version == 2 && index == 0 && checkpoint.input_cursor_json.is_some() {
@@ -439,6 +475,7 @@ fn completion_chain_totals(
     request_count = request_count.checked_add(checkpoint.request_attempt_count)?;
     persisted_records = persisted_records.checked_add(checkpoint.record_count_persisted)?;
     cost_micros = cost_micros.checked_add(checkpoint_cost_micros(&checkpoint.cost_actual_json)?)?;
+    failure_count = failure_count.checked_add(i64::from(is_target_failure))?;
     previous_committed_at = Some(committed_at);
     previous = Some(checkpoint);
   }
@@ -446,6 +483,8 @@ fn completion_chain_totals(
     request_count,
     persisted_records,
     cost_micros,
+    failure_count,
+    output_records: 0,
   })
 }
 

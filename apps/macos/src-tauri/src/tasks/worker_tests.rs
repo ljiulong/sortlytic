@@ -1,7 +1,7 @@
 use super::*;
 use crate::tasks::{
-  claim_next_task, confirm_collection_plan, create_collection_task, enqueue_task, retry_task,
-  save_collection_plan, CreateCollectionTaskInput, SaveCollectionPlanInput,
+  claim_next_task, confirm_collection_plan, create_collection_task, enqueue_task, get_task,
+  retry_task, save_collection_plan, CreateCollectionTaskInput, SaveCollectionPlanInput,
 };
 use crate::workspace::create_workspace;
 use serde_json::json;
@@ -222,6 +222,11 @@ fn version_three_worker_records_one_target_failure_and_continues() {
   })
   .expect("one target failure should not terminate remaining targets");
 
+  let completed = complete_task_run(&root, &run.id, Value::Null)
+    .expect("qualified output with target failures should reach a partial terminal state");
+  assert_eq!(completed.status, "partial_success");
+  assert_eq!(completed.current_stage.as_deref(), Some("部分成功"));
+
   let connection = super::open_workspace_connection(&root).expect("database should open");
   let state = connection
     .query_row(
@@ -245,6 +250,85 @@ fn version_three_worker_records_one_target_failure_and_continues() {
     )
     .expect("partial target state should load");
   assert_eq!(state, (1, 2, 1, 1));
+  let task_status: String = connection
+    .query_row(
+      "SELECT status FROM collection_task WHERE id = ?1",
+      [&task.id],
+      |row| row.get(0),
+    )
+    .expect("task status should load");
+  assert_eq!(task_status, "partial_success");
+
+  std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn version_three_worker_fails_when_every_target_fails() {
+  let root = std::env::temp_dir().join(format!("worker-v3-all-failed-{}", Uuid::new_v4()));
+  create_workspace("v3 全目标失败测试", &root).expect("workspace should be created");
+  let task = create_collection_task(
+    &root,
+    CreateCollectionTaskInput {
+      name: "全部目标失败".to_string(),
+      source_type: "form".to_string(),
+      platforms: vec!["tiktok".to_string()],
+      data_types: vec!["keyword_search".to_string()],
+    },
+  )
+  .expect("task should create");
+  let draft = crate::collection::generate_form_collection_plan(
+    crate::collection::FormCollectionPlanRequest {
+      platform: "tiktok".to_string(),
+      data_type: None,
+      data_types: vec!["keyword_search".to_string()],
+      params: json!({
+        "keyword": "car",
+        "region": "US",
+        "time_range": "30",
+        "page_size": 20
+      }),
+      age_range: None,
+      request_limit: Some(1),
+      record_limit: Some(1),
+      budget_limit_micros: Some(1_000_000),
+    },
+  )
+  .expect("v3 plan should generate");
+  let plan = save_collection_plan(
+    &root,
+    SaveCollectionPlanInput {
+      task_id: task.id.clone(),
+      source: draft.source,
+      plan_json: draft.plan_json,
+      validation_status: draft.validation_status,
+      validation_errors_json: Some(draft.validation_errors_json),
+      cost_estimate_json: Some(draft.cost_estimate_json),
+    },
+  )
+  .expect("v3 plan should save");
+  confirm_collection_plan(&root, &task.id, &plan.id).expect("v3 plan should confirm");
+  enqueue_task(&root, &task.id).expect("task should enqueue");
+  let run = claim_next_task(&root)
+    .expect("worker should claim task")
+    .expect("queued task should exist");
+
+  execute_claimed_run_with_fetcher(&root, &run, |_| {
+    Err(crate::domain::AppError::new(
+      crate::domain::AppErrorCode::TikhubRequestError,
+      "目标不可用",
+      crate::domain::AppErrorStage::Collection,
+      false,
+    ))
+  })
+  .expect("isolated target failure should form deterministic evidence");
+  let completed = complete_task_run(&root, &run.id, Value::Null)
+    .expect("all failed targets should settle the run");
+  assert_eq!(completed.status, "failed");
+  assert_eq!(completed.error_code.as_deref(), Some("ALL_TARGETS_FAILED"));
+  assert_eq!(
+    get_task(&root, &task.id).expect("task should load").status,
+    "failed"
+  );
 
   std::fs::remove_dir_all(root).ok();
 }
