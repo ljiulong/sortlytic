@@ -59,6 +59,15 @@ export type TikhubConnectionTestResult = {
   message: string
 }
 
+export type TikhubPriceQuote = {
+  endpoint: string
+  request_per_day: number
+  base_unit_price?: number | null
+  total_price: number
+  currency: string
+  quote_json: Record<string, unknown>
+}
+
 export type TikhubConnectorInput = {
   secret_ref_id?: string | null
   base_url: string
@@ -322,6 +331,14 @@ export function saveTikhubConnector(input: TikhubConnectorInput) {
 
 export function testTikhubConnector() {
   return invoke<TikhubConnectionTestResult>('test_tikhub_connector', {
+    rootPath: null,
+  })
+}
+
+export function quoteTikhubConnectorPrice(endpoint: string, requestPerDay: number) {
+  return invoke<TikhubPriceQuote>('quote_tikhub_connector_price', {
+    endpoint,
+    requestPerDay,
     rootPath: null,
   })
 }

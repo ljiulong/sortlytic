@@ -8,6 +8,7 @@ import {
   type CollectionTaskView,
   getTikhubConnector,
   installAppUpdate,
+  quoteTikhubConnectorPrice,
   saveTikhubConnector,
   type SecretRefView,
   testTikhubConnector,
@@ -23,6 +24,7 @@ import {
   type RuntimeCollectionPlan,
   useWorkbenchBackend,
 } from './use-workbench-backend'
+import { preflightCollectionPlanPricing } from './collection-pricing'
 import { buildPlanParams } from './collection-plan-client'
 import { workspaceSnapshot } from './workbench-data'
 
@@ -206,6 +208,7 @@ describe('TikHub connector 后端 API', () => {
     await getTikhubConnector()
     await saveTikhubConnector(input)
     await testTikhubConnector()
+    await quoteTikhubConnectorPrice('/api/v1/tiktok/app/v3/fetch_video_comments', 1)
 
     expect(invokeMock).toHaveBeenNthCalledWith(1, 'get_tikhub_connector', {
       rootPath: null,
@@ -215,6 +218,11 @@ describe('TikHub connector 后端 API', () => {
       rootPath: null,
     })
     expect(invokeMock).toHaveBeenNthCalledWith(3, 'test_tikhub_connector', {
+      rootPath: null,
+    })
+    expect(invokeMock).toHaveBeenNthCalledWith(4, 'quote_tikhub_connector_price', {
+      endpoint: '/api/v1/tiktok/app/v3/fetch_video_comments',
+      requestPerDay: 1,
       rootPath: null,
     })
   })
@@ -326,6 +334,95 @@ describe('TikHub connector 后端 API', () => {
       rootPath: null,
     })
     expect(invokeMock).not.toHaveBeenCalledWith('update_secret', expect.anything())
+  })
+})
+
+describe('计划实时计价预检', () => {
+  const plan = {
+    platform: 'TikTok',
+    dataType: '评论采集',
+    regionCode: 'US',
+    keyword: 'electric vehicle',
+    range: '近 30 天',
+    maxRecords: 100,
+    budget: 1,
+    budgetMicros: 1_000_000,
+    requestCountEstimate: 3,
+    pricingEndpoints: [
+      '/api/v1/tiktok/app/v3/fetch_video_comments',
+      '/api/v1/tiktok/app/v3/handler_user_profile',
+    ],
+    status: '等待确认',
+    missing: [],
+    taskId: 'task-1',
+    planId: 'plan-1',
+    validationStatus: 'valid',
+  } satisfies RuntimeCollectionPlan
+
+  it('同时读取双额度并使用最高单次报价核对计划请求上限', async () => {
+    invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'test_tikhub_connector') {
+        return {
+          success: true,
+          base_url: 'https://api.tikhub.io',
+          balance: 0.2,
+          free_credit: 0.1,
+          available_credit: 0.3,
+          daily_usage_json: {},
+          message: '可用',
+        }
+      }
+      if (command === 'quote_tikhub_connector_price') {
+        const endpoint = String(args?.endpoint)
+        return {
+          endpoint,
+          request_per_day: 1,
+          base_unit_price: endpoint.includes('comments') ? 0.02 : 0.01,
+          total_price: endpoint.includes('comments') ? 0.02 : 0.01,
+          currency: 'USD',
+          quote_json: {},
+        }
+      }
+      throw new Error(`意外命令：${command}`)
+    })
+
+    await expect(preflightCollectionPlanPricing(plan)).resolves.toMatchObject({
+      balance: 0.2,
+      freeCredit: 0.1,
+      availableCredit: 0.3,
+      quotedTotalMicros: 60_000,
+    })
+  })
+
+  it('免费额度与充值余额合计不足时阻止确认', async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'test_tikhub_connector') {
+        return {
+          success: true,
+          base_url: 'https://api.tikhub.io',
+          balance: 0.01,
+          free_credit: 0.01,
+          available_credit: 0.02,
+          daily_usage_json: {},
+          message: '可用',
+        }
+      }
+      if (command === 'quote_tikhub_connector_price') {
+        return {
+          endpoint: '/api/v1/tiktok/app/v3/fetch_video_comments',
+          request_per_day: 1,
+          base_unit_price: 0.02,
+          total_price: 0.02,
+          currency: 'USD',
+          quote_json: {},
+        }
+      }
+      throw new Error(`意外命令：${command}`)
+    })
+
+    await expect(preflightCollectionPlanPricing(plan)).rejects.toThrow(
+      'TikHub 免费额度与充值余额合计不足',
+    )
   })
 })
 
