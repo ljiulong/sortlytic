@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension, Row};
-use rust_xlsxwriter::Workbook;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -15,6 +14,9 @@ use uuid::Uuid;
 
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 use crate::workspace::{open_workspace_database, DATABASE_FILE_NAME};
+
+#[path = "exports/excel.rs"]
+mod excel;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ReportView {
@@ -162,7 +164,7 @@ pub fn create_export_job(
     .map_err(database_error)?;
 
   let write_result = if export_type == "xlsx" {
-    write_excel(&file_path, &report)
+    excel::write_excel(root_path, &file_path, &report)
   } else {
     write_pdf(&file_path, &report)
   };
@@ -264,104 +266,6 @@ pub fn get_report(connection: &Connection, report_id: &str) -> AppResult<ReportV
     .optional()
     .map_err(database_error)?
     .ok_or_else(|| export_error("报告不存在"))
-}
-
-fn write_excel(path: &Path, report: &ReportView) -> AppResult<()> {
-  let mut workbook = Workbook::new();
-  write_key_value_sheet(
-    workbook
-      .add_worksheet()
-      .set_name("任务概览")
-      .map_err(export_error)?,
-    &[
-      ("报告标题", report.title.as_str()),
-      ("报告类型", report.report_type.as_str()),
-      ("生成时间", report.created_at.as_str()),
-      (
-        "数据来源",
-        report.report_model_json["data_source_statement"]
-          .as_str()
-          .unwrap_or(""),
-      ),
-      (
-        "AI 免责声明",
-        report.report_model_json["ai_disclaimer"]
-          .as_str()
-          .unwrap_or(""),
-      ),
-    ],
-  )?;
-  write_json_sheet(
-    workbook
-      .add_worksheet()
-      .set_name("AI结构化结果")
-      .map_err(export_error)?,
-    &report.report_model_json["ai_runs"],
-  )?;
-  write_json_sheet(
-    workbook
-      .add_worksheet()
-      .set_name("运行日志")
-      .map_err(export_error)?,
-    &report.report_model_json["logs"],
-  )?;
-  write_key_value_sheet(
-    workbook
-      .add_worksheet()
-      .set_name("成本明细")
-      .map_err(export_error)?,
-    &[(
-      "成本说明",
-      "MVP 当前记录本地估算成本，外部 API 实际成本由后续适配层写入。",
-    )],
-  )?;
-
-  let bytes = workbook.save_to_buffer().map_err(export_error)?;
-  write_new_export_file(path, &bytes)
-}
-
-fn write_key_value_sheet(
-  worksheet: &mut rust_xlsxwriter::Worksheet,
-  rows: &[(&str, &str)],
-) -> AppResult<()> {
-  worksheet.write(0, 0, "字段").map_err(export_error)?;
-  worksheet.write(0, 1, "值").map_err(export_error)?;
-  worksheet.set_column_width(0, 20).map_err(export_error)?;
-  worksheet.set_column_width(1, 80).map_err(export_error)?;
-
-  for (index, (key, value)) in rows.iter().enumerate() {
-    let row = (index + 1) as u32;
-    worksheet.write(row, 0, *key).map_err(export_error)?;
-    worksheet.write(row, 1, *value).map_err(export_error)?;
-  }
-
-  Ok(())
-}
-
-fn write_json_sheet(worksheet: &mut rust_xlsxwriter::Worksheet, value: &Value) -> AppResult<()> {
-  worksheet.write(0, 0, "序号").map_err(export_error)?;
-  worksheet.write(0, 1, "JSON").map_err(export_error)?;
-  worksheet.set_column_width(0, 10).map_err(export_error)?;
-  worksheet.set_column_width(1, 100).map_err(export_error)?;
-
-  if let Some(items) = value.as_array() {
-    for (index, item) in items.iter().enumerate() {
-      let row = (index + 1) as u32;
-      worksheet
-        .write(row, 0, (index + 1) as i64)
-        .map_err(export_error)?;
-      worksheet
-        .write(row, 1, item.to_string())
-        .map_err(export_error)?;
-    }
-  } else {
-    worksheet.write(1, 0, 1).map_err(export_error)?;
-    worksheet
-      .write(1, 1, value.to_string())
-      .map_err(export_error)?;
-  }
-
-  Ok(())
 }
 
 fn write_pdf(path: &Path, report: &ReportView) -> AppResult<()> {

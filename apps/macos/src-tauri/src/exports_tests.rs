@@ -1,6 +1,7 @@
 use super::*;
 use crate::tasks::{create_collection_task, CreateCollectionTaskInput};
 use crate::workspace::create_workspace;
+use std::process::Command;
 
 #[test]
 fn report_exports_xlsx_and_pdf_files() {
@@ -33,7 +34,9 @@ fn report_exports_xlsx_and_pdf_files() {
 
   assert_eq!(xlsx.status, "success");
   assert_eq!(pdf.status, "success");
-  assert!(xlsx.file_path.expect("xlsx path").is_file());
+  let xlsx_path = xlsx.file_path.expect("xlsx path");
+  assert!(xlsx_path.is_file());
+  assert_template_workbook_structure(&xlsx_path, 204);
   let pdf_path = pdf.file_path.expect("pdf path");
   assert!(pdf_path.is_file());
   let pdf_bytes = fs::read(pdf_path).expect("pdf should be readable");
@@ -45,6 +48,26 @@ fn report_exports_xlsx_and_pdf_files() {
   assert!(pdf.file_size.unwrap_or_default() > 0);
 
   std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn account_template_export_preserves_200_rows_and_expands_at_201_and_1200() {
+  for (count, expected_last_row) in [(1, 204), (201, 205), (1_200, 1_204)] {
+    let (root_path, xlsx_path) = account_export_fixture(count);
+    assert_template_workbook_structure(&xlsx_path, expected_last_row);
+    let sheet = unzip_entry(&xlsx_path, "xl/worksheets/sheet1.xml");
+    assert!(sheet.contains(&format!("<dimension ref=\"A1:R{expected_last_row}\"")));
+    assert!(sheet.contains(&format!("sqref=\"G5:G{expected_last_row}\"")));
+    assert!(sheet.contains(&format!("sqref=\"K5:K{expected_last_row}\"")));
+    assert!(sheet.contains("type=\"whole\""));
+    assert!(sheet.contains("<formula1>0</formula1><formula2>130</formula2>"));
+    assert!(sheet.contains(&format!("<c r=\"A{expected_last_row}\"")));
+    assert!(sheet.contains("IF(B"));
+    let age_cell = xml_cell(&sheet, "K5");
+    assert!(age_cell.contains("<v>28</v>"));
+    assert!(!age_cell.contains("t=\"s\""));
+    std::fs::remove_dir_all(root_path).ok();
+  }
 }
 
 #[test]
@@ -162,6 +185,120 @@ fn test_report(label: &str) -> (std::path::PathBuf, ReportView) {
   .expect("task should be created");
   let report = build_report_model(&root_path, &task.id, "summary").expect("report built");
   (root_path, report)
+}
+
+fn account_export_fixture(count: usize) -> (std::path::PathBuf, std::path::PathBuf) {
+  let (root_path, report) = test_report(&format!("template-{count}"));
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  let run_id = format!("run-{count}");
+  connection
+    .execute(
+      "INSERT INTO task_run (id, task_id, status, started_at, ended_at, current_stage)
+       VALUES (?1, ?2, 'success', ?3, ?3, '已完成')",
+      params![run_id, report.task_id, "2026-07-16T08:00:00+00:00"],
+    )
+    .expect("run should insert");
+  for index in 0..count {
+    connection
+      .execute(
+        "INSERT INTO collected_account (
+           id, task_run_id, platform, identity_key, username, account, platform_user_id,
+           profile_text, country_region, region_source, region_confidence, gender, age,
+           followers_count, posts_count, last_posted_at, profile_url, data_source,
+           collected_at, notes, output_included, created_at, updated_at
+         ) VALUES (?1, ?2, 'tiktok', ?3, ?4, ?5, ?6, '公开简介', 'US',
+           'TikHub API', '高', 'female', 28, 1200, 36, ?7, ?8, 'TikHub API',
+           ?9, '仅使用公开资料', 1, ?9, ?9)",
+        params![
+          format!("account-{index}"),
+          run_id,
+          format!("id:user-{index}"),
+          format!("用户 {index}"),
+          format!("user_{index}"),
+          format!("user-id-{index}"),
+          "2026-07-15T08:00:00+00:00",
+          format!("https://www.tiktok.com/@user_{index}"),
+          "2026-07-16T08:00:00+00:00"
+        ],
+      )
+      .expect("account should insert");
+  }
+  let job = create_export_job(&root_path, &report.id, "xlsx", None).expect("xlsx should export");
+  (root_path, job.file_path.expect("xlsx path should exist"))
+}
+
+fn assert_template_workbook_structure(path: &Path, expected_last_row: u32) {
+  let workbook = unzip_entry(path, "xl/workbook.xml");
+  let expected_sheets = ["用户数据收集表", "填写说明", "字段枚举", "资料依据"];
+  assert_eq!(workbook.matches("<sheet ").count(), 4);
+  for name in expected_sheets {
+    assert!(workbook.contains(&format!("name=\"{name}\"")));
+  }
+  for forbidden in ["原始数据", "运行日志", "任务概览", "AI结构化结果"] {
+    assert!(!workbook.contains(forbidden));
+  }
+  let strings = unzip_entry(path, "xl/sharedStrings.xml");
+  let headers = [
+    "序号",
+    "用户名",
+    "账号",
+    "平台用户ID",
+    "个人信息",
+    "国家/地区",
+    "地区来源",
+    "地区置信度",
+    "社交平台信息",
+    "性别",
+    "年龄",
+    "粉丝数",
+    "作品数",
+    "最近发文时间",
+    "主页链接",
+    "数据来源",
+    "收集日期",
+    "备注",
+  ];
+  let mut previous = 0;
+  for header in headers {
+    let position = strings[previous..]
+      .find(&format!(">{header}</t>"))
+      .map(|offset| previous + offset)
+      .unwrap_or_else(|| panic!("missing header {header}"));
+    previous = position;
+  }
+  let sheet = unzip_entry(path, "xl/worksheets/sheet1.xml");
+  assert!(sheet.contains(&format!("<dimension ref=\"A1:R{expected_last_row}\"")));
+  assert!(sheet.contains("<dataValidations count=\"6\">"));
+  for column in ["G", "H", "I", "J", "P"] {
+    assert!(sheet.contains(&format!("sqref=\"{column}5:{column}{expected_last_row}\"")));
+  }
+  assert!(sheet.contains(&format!("sqref=\"K5:K{expected_last_row}\"")));
+}
+
+fn unzip_entry(path: &Path, entry: &str) -> String {
+  let output = Command::new("unzip")
+    .args([
+      "-p",
+      path.to_str().expect("xlsx path should be utf-8"),
+      entry,
+    ])
+    .output()
+    .expect("unzip should run");
+  assert!(output.status.success(), "unzip failed for {entry}");
+  String::from_utf8(output.stdout).expect("xlsx XML should be UTF-8")
+}
+
+fn xml_cell<'a>(sheet: &'a str, reference: &str) -> &'a str {
+  let start = sheet
+    .find(&format!("<c r=\"{reference}\""))
+    .unwrap_or_else(|| panic!("missing cell {reference}"));
+  let tail = &sheet[start..];
+  let end = tail
+    .find("</c>")
+    .map(|index| index + 4)
+    .or_else(|| tail.find("/>").map(|index| index + 2))
+    .expect("cell should terminate");
+  &tail[..end]
 }
 
 fn unique_temp_workspace(label: &str) -> std::path::PathBuf {
