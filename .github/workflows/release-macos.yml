@@ -153,6 +153,22 @@ jobs:
         with:
           projectPath: apps/macos
           tagName: ${{ needs.release.outputs.tag }}
-          releaseDraft: false
+          releaseDraft: ${{ inputs.rebuild_tag == '' }}
           prerelease: false
           args: --target ${{ matrix.target }} --bundles app,dmg
+
+  finalize-release:
+    name: 发布完整 macOS 稳定版
+    needs: [release, build-and-release]
+    if: >-
+      needs.release.outputs.published == 'true' &&
+      (github.event_name != 'workflow_dispatch' || inputs.rebuild_tag == '')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish verified draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          test "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = "false"

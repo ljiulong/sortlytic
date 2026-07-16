@@ -20,6 +20,22 @@ describe('semantic-release 配置', () => {
     expect(workflow).toContain('uses: ./.github/workflows/ci.yml')
   })
 
+  it('双架构产物全部上传后才公开稳定版', async () => {
+    const githubPlugin = releaseConfig.plugins.find(
+      (plugin) => Array.isArray(plugin) && plugin[0] === '@semantic-release/github',
+    )
+    const workflow = await readFile(
+      new URL('../../../.github/workflows/release-macos.yml', import.meta.url),
+      'utf8',
+    )
+
+    expect(githubPlugin?.[1]).toMatchObject({ draftRelease: true })
+    expect(workflow).toContain("releaseDraft: ${{ inputs.rebuild_tag == '' }}")
+    expect(workflow).toContain('finalize-release:')
+    expect(workflow).toContain('needs: [release, build-and-release]')
+    expect(workflow).toContain('gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest')
+  })
+
   it('为功能与修复提交生成非空发版说明', async () => {
     const semanticReleaseEntry = require.resolve('semantic-release')
     const generatorEntry = require.resolve('@semantic-release/release-notes-generator', {
