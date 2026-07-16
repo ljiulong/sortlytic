@@ -103,7 +103,7 @@ impl AccountAccumulator {
     self
       .accounts
       .into_values()
-      .filter(|account| age_range.map_or(true, |range| range.includes(account.age)))
+      .filter(|account| age_range.is_none_or(|range| range.includes(account.age)))
       .take(limit)
       .collect()
   }
