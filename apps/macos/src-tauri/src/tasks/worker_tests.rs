@@ -1,7 +1,8 @@
 use super::*;
 use crate::tasks::{
-  claim_next_task, confirm_collection_plan, create_collection_task, enqueue_task, get_task,
-  retry_task, save_collection_plan, CreateCollectionTaskInput, SaveCollectionPlanInput,
+  cancel_task, claim_next_task, confirm_collection_plan, create_collection_task, enqueue_task,
+  get_task, get_task_run, retry_task, save_collection_plan, CreateCollectionTaskInput,
+  SaveCollectionPlanInput,
 };
 use crate::workspace::create_workspace;
 use serde_json::json;
@@ -271,6 +272,19 @@ fn version_three_worker_records_one_target_failure_and_continues() {
     )
     .expect("task status should load");
   assert_eq!(task_status, "partial_success");
+  cancel_task(&root, &task.id).expect_err("部分成功任务已是终态，不得取消");
+  assert_eq!(
+    get_task(&root, &task.id)
+      .expect("task should remain readable")
+      .status,
+    "partial_success"
+  );
+  assert_eq!(
+    get_task_run(&connection, &run.id)
+      .expect("run should remain readable")
+      .status,
+    "partial_success"
+  );
 
   std::fs::remove_dir_all(root).ok();
 }
