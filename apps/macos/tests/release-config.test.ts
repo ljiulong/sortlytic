@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module'
+import { readFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -9,6 +10,16 @@ import releaseConfig from '../release.config.mjs'
 const require = createRequire(import.meta.url)
 
 describe('semantic-release 配置', () => {
+  it('每次 main 推送都先验证并交给 semantic-release 判断是否发版', async () => {
+    const workflow = await readFile(
+      new URL('../../../.github/workflows/release-macos.yml', import.meta.url),
+      'utf8',
+    )
+
+    expect(workflow).not.toContain('github.event.head_commit.message')
+    expect(workflow).toContain('uses: ./.github/workflows/ci.yml')
+  })
+
   it('为功能与修复提交生成非空发版说明', async () => {
     const semanticReleaseEntry = require.resolve('semantic-release')
     const generatorEntry = require.resolve('@semantic-release/release-notes-generator', {
