@@ -8,6 +8,124 @@ use serde_json::json;
 use uuid::Uuid;
 
 #[test]
+fn version_three_worker_executes_each_materialized_dependency_target() {
+  let root = std::env::temp_dir().join(format!("worker-v3-targets-{}", Uuid::new_v4()));
+  create_workspace("v3 依赖目标测试", &root).expect("workspace should be created");
+  let task = create_collection_task(
+    &root,
+    CreateCollectionTaskInput {
+      name: "搜索串联作品详情".to_string(),
+      source_type: "form".to_string(),
+      platforms: vec!["tiktok".to_string()],
+      data_types: vec!["item_detail".to_string()],
+    },
+  )
+  .expect("task should create");
+  let draft = crate::collection::generate_form_collection_plan(
+    crate::collection::FormCollectionPlanRequest {
+      platform: "tiktok".to_string(),
+      data_type: None,
+      data_types: vec!["item_detail".to_string()],
+      params: json!({
+        "keyword": "car",
+        "region": "US",
+        "time_range": "30",
+        "page_size": 20
+      }),
+      age_range: None,
+      request_limit: Some(2),
+      record_limit: Some(2),
+      budget_limit_micros: Some(1_000_000),
+    },
+  )
+  .expect("v3 dependency plan should generate");
+  let plan = save_collection_plan(
+    &root,
+    SaveCollectionPlanInput {
+      task_id: task.id.clone(),
+      source: draft.source,
+      plan_json: draft.plan_json,
+      validation_status: draft.validation_status,
+      validation_errors_json: Some(draft.validation_errors_json),
+      cost_estimate_json: Some(draft.cost_estimate_json),
+    },
+  )
+  .expect("v3 dependency plan should save");
+  confirm_collection_plan(&root, &task.id, &plan.id).expect("v3 dependency plan should confirm");
+  enqueue_task(&root, &task.id).expect("v3 dependency task should enqueue");
+  let run = claim_next_task(&root)
+    .expect("worker should claim dependency task")
+    .expect("dependency task should exist");
+  let calls = std::cell::RefCell::new(Vec::new());
+
+  execute_claimed_run_with_fetcher(&root, &run, |request| {
+    if let Some(keyword) = request.source_params().get("keyword") {
+      calls.borrow_mut().push(format!("search:{keyword}"));
+      return Ok(CollectionPage {
+        records: vec![
+          json!({
+            "aweme_id": "video-a",
+            "author": { "user_id": "account-a", "nickname": "账号 A" }
+          }),
+          json!({
+            "aweme_id": "video-b",
+            "author": { "user_id": "account-b", "nickname": "账号 B" }
+          }),
+        ],
+        next_cursor: None,
+        has_more: false,
+        raw_response: json!({ "data": { "aweme_list": [] }, "has_more": false }),
+      });
+    }
+    let item_id = request
+      .source_params()
+      .get("item_id")
+      .and_then(Value::as_str)
+      .expect("target request should contain resolved item_id");
+    calls.borrow_mut().push(format!("detail:{item_id}"));
+    Ok(CollectionPage {
+      records: vec![json!({
+        "aweme_id": item_id,
+        "author": {
+          "user_id": format!("author-{item_id}"),
+          "nickname": format!("作者 {item_id}")
+        }
+      })],
+      next_cursor: None,
+      has_more: false,
+      raw_response: json!({ "data": { "aweme_id": item_id }, "has_more": false }),
+    })
+  })
+  .expect("worker should execute every materialized detail target");
+
+  assert_eq!(
+    calls.into_inner(),
+    vec!["search:\"car\"", "detail:video-a", "detail:video-b"]
+  );
+  let connection = super::open_workspace_connection(&root).expect("database should open");
+  let state = connection
+    .query_row(
+      "SELECT
+         (SELECT COUNT(*) FROM collection_pipeline_target WHERE task_run_id = ?1),
+         (SELECT COUNT(*) FROM collection_pipeline_target
+          WHERE task_run_id = ?1 AND status = 'success'),
+         (SELECT COUNT(*) FROM collected_account
+          WHERE task_run_id = ?1 AND output_included = 1)",
+      [&run.id],
+      |row| {
+        Ok((
+          row.get::<_, i64>(0)?,
+          row.get::<_, i64>(1)?,
+          row.get::<_, i64>(2)?,
+        ))
+      },
+    )
+    .expect("pipeline state should load");
+  assert_eq!(state, (3, 3, 2));
+  std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn version_three_worker_counts_only_merged_age_qualified_accounts() {
   let root = std::env::temp_dir().join(format!("worker-v3-age-{}", Uuid::new_v4()));
   create_workspace("v3 年龄分页测试", &root).expect("workspace should be created");

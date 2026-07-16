@@ -19,6 +19,7 @@ use super::{
   task_error, TaskRunView,
 };
 
+mod pipeline;
 mod recovery;
 mod runtime;
 mod targets;
@@ -27,22 +28,21 @@ use recovery::{
   parse_response_checkpoint, resume_position,
 };
 use runtime::load_runtime_snapshot;
-use targets::{materialize_targets, TargetStepInput};
 
-struct RunStep {
-  id: String,
-  task_id: String,
-  platform: String,
-  data_type: String,
-  params: Value,
-  request_limit: i64,
-  record_limit: i64,
-  status: String,
-  schema_version: i64,
-  output_selected: bool,
-  age_range: Option<AgeRange>,
-  step_key: String,
-  depends_on_step_key: Option<String>,
+pub(super) struct RunStep {
+  pub(super) id: String,
+  pub(super) task_id: String,
+  pub(super) platform: String,
+  pub(super) data_type: String,
+  pub(super) params: Value,
+  pub(super) request_limit: i64,
+  pub(super) record_limit: i64,
+  pub(super) status: String,
+  pub(super) schema_version: i64,
+  pub(super) output_selected: bool,
+  pub(super) age_range: Option<AgeRange>,
+  pub(super) step_key: String,
+  pub(super) depends_on_step_key: Option<String>,
 }
 
 pub fn execute_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRunView>> {
@@ -166,27 +166,10 @@ fn execute_step<F>(root_path: &Path, step: &RunStep, fetch_page: &F) -> AppResul
 where
   F: Fn(&TikHubCollectionRequest) -> AppResult<CollectionPage>,
 {
-  let connection = open_workspace_connection(root_path)?;
   if step.schema_version == 3 {
-    materialize_targets(
-      &connection,
-      &TargetStepInput {
-        task_run_id: connection
-          .query_row(
-            "SELECT task_run_id FROM task_run_step WHERE id = ?1",
-            params![step.id],
-            |row| row.get(0),
-          )
-          .map_err(database_error)?,
-        step_key: step.step_key.clone(),
-        platform: step.platform.clone(),
-        data_type: step.data_type.clone(),
-        params: step.params.clone(),
-        output_selected: step.output_selected,
-        depends_on_step_key: step.depends_on_step_key.clone(),
-      },
-    )?;
+    return pipeline::execute_pipeline_step(root_path, step, fetch_page);
   }
+  let connection = open_workspace_connection(root_path)?;
   let existing = load_checkpoints(&connection, &step.id)?;
   let (mut page_index, mut cursor) = resume_position(&existing)?;
   let mut prepared_checkpoint = existing
@@ -406,7 +389,7 @@ where
   }
 }
 
-fn persist_step_accounts(
+pub(super) fn persist_step_accounts(
   connection: &rusqlite::Connection,
   step: &RunStep,
   run_id: &str,
@@ -436,7 +419,7 @@ fn persist_step_accounts(
   Ok(())
 }
 
-fn mark_step_running(connection: &rusqlite::Connection, step_id: &str) -> AppResult<()> {
+pub(super) fn mark_step_running(connection: &rusqlite::Connection, step_id: &str) -> AppResult<()> {
   let now = Utc::now().to_rfc3339();
   let changed = connection
     .execute(
@@ -452,7 +435,11 @@ fn mark_step_running(connection: &rusqlite::Connection, step_id: &str) -> AppRes
   Ok(())
 }
 
-fn mark_step_success(connection: &rusqlite::Connection, step_id: &str, now: &str) -> AppResult<()> {
+pub(super) fn mark_step_success(
+  connection: &rusqlite::Connection,
+  step_id: &str,
+  now: &str,
+) -> AppResult<()> {
   let changed = connection
     .execute(
       "UPDATE task_run_step
@@ -467,7 +454,27 @@ fn mark_step_success(connection: &rusqlite::Connection, step_id: &str, now: &str
   Ok(())
 }
 
-fn insert_prepared_checkpoint(
+pub(super) fn mark_step_stopped(
+  connection: &rusqlite::Connection,
+  step_id: &str,
+  stop_reason: &str,
+  now: &str,
+) -> AppResult<()> {
+  let changed = connection
+    .execute(
+      "UPDATE task_run_step
+       SET status = 'success', stop_reason = ?1, completed_at = ?2, updated_at = ?2
+       WHERE id = ?3 AND status = 'running' AND started_at IS NOT NULL AND stop_reason IS NULL",
+      params![stop_reason, now, step_id],
+    )
+    .map_err(database_error)?;
+  if changed != 1 {
+    return Err(task_error("运行步骤无法记录正常停止原因"));
+  }
+  Ok(())
+}
+
+pub(super) fn insert_prepared_checkpoint(
   connection: &rusqlite::Connection,
   run_step_id: &str,
   page_index: i64,
@@ -495,7 +502,7 @@ fn insert_prepared_checkpoint(
   Ok((checkpoint_id, idempotency_key))
 }
 
-fn mark_checkpoint_requesting(
+pub(super) fn mark_checkpoint_requesting(
   connection: &rusqlite::Connection,
   checkpoint_id: &str,
   requested_at: &str,
@@ -515,7 +522,7 @@ fn mark_checkpoint_requesting(
   Ok(())
 }
 
-fn mark_checkpoint_uncertain(
+pub(super) fn mark_checkpoint_uncertain(
   connection: &rusqlite::Connection,
   checkpoint_id: &str,
   detail: &str,
@@ -559,7 +566,7 @@ fn mark_checkpoint_failed(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn mark_checkpoint_response_received(
+pub(super) fn mark_checkpoint_response_received(
   connection: &rusqlite::Connection,
   checkpoint_id: &str,
   raw_response: &str,
@@ -609,7 +616,7 @@ fn mark_checkpoint_response_received(
   Ok(())
 }
 
-fn mark_checkpoint_completed(
+pub(super) fn mark_checkpoint_completed(
   connection: &rusqlite::Connection,
   checkpoint_id: &str,
   committed_at: &str,
@@ -628,7 +635,7 @@ fn mark_checkpoint_completed(
   Ok(())
 }
 
-fn worker_error(code: &str, message: &str, retryable: bool) -> AppError {
+pub(super) fn worker_error(code: &str, message: &str, retryable: bool) -> AppError {
   AppError::new(
     AppErrorCode::TikhubRequestError,
     format!("{code}: {message}"),
