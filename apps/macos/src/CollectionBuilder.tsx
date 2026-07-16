@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
+import './CollectionBuilder.css'
 import type { RuntimeCollectionPlan } from './use-workbench-backend'
 import { dataTypeOptions, platformOptions } from './workbench-data'
 

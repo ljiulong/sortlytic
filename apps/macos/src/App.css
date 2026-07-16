@@ -448,56 +448,22 @@ button:disabled:active {
   color: var(--danger);
   background: var(--danger-surface);
 }
-.tabs-root {
-  display: grid;
-  gap: 14px;
-}
-.tabs-list,
 .action-row {
-  display: flex;
   flex-wrap: wrap;
   gap: 7px;
 }
-.tabs-list {
-  width: fit-content;
-  padding: 3px;
-  background: var(--surface-raised);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-lg);
-}
-.tabs-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 0 11px;
-  color: var(--text-muted);
-  background: transparent;
-}
-.tabs-trigger[data-state='active'] {
-  color: var(--text-strong);
-  background: var(--surface);
-  box-shadow: inset 0 0 0 1px var(--border-subtle), var(--shadow-panel);
-}
-.collection-form {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
-  gap: 10px;
-}
-.field,
-.natural-input {
+.field {
   display: grid;
   gap: 6px;
   min-width: 0;
 }
-.field span,
-.natural-input label {
+.field span {
   color: var(--text);
   font-size: 11px;
   font-weight: 650;
 }
 .field input,
-.field select,
-.natural-input textarea {
+.field select {
   width: 100%;
   min-width: 0;
   min-height: 40px;
@@ -511,61 +477,12 @@ button:disabled:active {
 .field input[type='number'] {
   font-variant-numeric: tabular-nums;
 }
-.field input::placeholder,
-.natural-input textarea::placeholder {
+.field input::placeholder {
   color: var(--text-faint);
 }
 .field small {
   color: var(--danger);
   font-size: 11px;
-}
-.form-submit {
-  align-self: end;
-  width: 100%;
-  min-width: 0;
-}
-.natural-input textarea {
-  min-height: 108px;
-  padding: 10px;
-  line-height: 1.7;
-  resize: vertical;
-}
-.plan-preview {
-  display: grid;
-  gap: 13px;
-  margin-top: 16px;
-  padding: 14px;
-  background: var(--surface-raised);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-}
-.plan-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-.plan-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-}
-.info-line {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-.info-line span {
-  color: var(--text-faint);
-  font-size: 10px;
-}
-.info-line strong {
-  min-width: 0;
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.65;
-  overflow-wrap: anywhere;
 }
 .task-list,
 .regression-list,
