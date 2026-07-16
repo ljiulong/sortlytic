@@ -22,7 +22,8 @@ use super::{
 mod recovery;
 mod runtime;
 use recovery::{
-  ensure_record_limit, mark_response_checkpoint_completed, parse_response_checkpoint,
+  ensure_record_limit, load_checkpoints, mark_response_checkpoint_completed,
+  parse_response_checkpoint, resume_position,
 };
 use runtime::load_runtime_snapshot;
 
@@ -38,23 +39,6 @@ struct RunStep {
   schema_version: i64,
   output_selected: bool,
   age_range: Option<AgeRange>,
-}
-
-#[derive(Clone)]
-struct Checkpoint {
-  id: String,
-  page_index: i64,
-  status: String,
-  request_attempt_count: i64,
-  idempotency_key: String,
-  input_cursor: Option<Value>,
-  next_cursor: Option<Value>,
-  has_more: Option<bool>,
-  provider_response_json: Option<String>,
-  provider_response_hash: Option<String>,
-  provider_response_size: Option<i64>,
-  record_count_received: i64,
-  response_received_at: Option<String>,
 }
 
 pub fn execute_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRunView>> {
@@ -416,124 +400,6 @@ fn persist_step_accounts(
     },
   )?;
   Ok(())
-}
-
-fn resume_position(checkpoints: &[Checkpoint]) -> AppResult<(i64, Option<Value>)> {
-  for (index, checkpoint) in checkpoints.iter().enumerate() {
-    if checkpoint.page_index != index as i64 {
-      return Err(worker_error(
-        "CHECKPOINT_CHAIN_INVALID",
-        "运行步骤检查点链不连续，已停止执行",
-        false,
-      ));
-    }
-    if index == 0 && checkpoint.input_cursor.is_some() {
-      return Err(worker_error(
-        "CHECKPOINT_CHAIN_INVALID",
-        "首个检查点不能携带续页游标",
-        false,
-      ));
-    }
-    if index > 0 {
-      let previous = &checkpoints[index - 1];
-      if previous.has_more != Some(true) || previous.next_cursor != checkpoint.input_cursor {
-        return Err(worker_error(
-          "CHECKPOINT_CHAIN_INVALID",
-          "检查点之间的续页游标不一致，已停止执行",
-          false,
-        ));
-      }
-    }
-    if index + 1 < checkpoints.len()
-      && (checkpoint.status != "completed" || checkpoint.has_more != Some(true))
-    {
-      return Err(worker_error(
-        "CHECKPOINT_CHAIN_INVALID",
-        "非末页检查点不能声明采集结束",
-        false,
-      ));
-    }
-  }
-  let Some(last) = checkpoints.last() else {
-    return Ok((0, None));
-  };
-  match last.status.as_str() {
-    "prepared" => Ok((last.page_index, last.input_cursor.clone())),
-    "response_received" => Ok((last.page_index, last.input_cursor.clone())),
-    "completed" if last.has_more == Some(false) => Ok((last.page_index + 1, None)),
-    "completed" if last.has_more == Some(true) && last.next_cursor.is_some() => {
-      Ok((last.page_index + 1, last.next_cursor.clone()))
-    }
-    "completed" => Err(worker_error(
-      "CHECKPOINT_CHAIN_INVALID",
-      "续页检查点缺少有效游标",
-      false,
-    )),
-    _ => Err(worker_error(
-      "CHECKPOINT_STATE_UNSUPPORTED",
-      "运行步骤存在无法安全恢复的未完成检查点",
-      false,
-    )),
-  }
-}
-
-fn load_checkpoints(
-  connection: &rusqlite::Connection,
-  run_step_id: &str,
-) -> AppResult<Vec<Checkpoint>> {
-  let mut statement = connection
-    .prepare(
-      "SELECT id, page_index, status, request_attempt_count, idempotency_key, input_cursor_json,
-              next_cursor_json, has_more, provider_response_json,
-              provider_response_hash, provider_response_size,
-              record_count_received, response_received_at
-       FROM collection_page_checkpoint
-       WHERE task_run_step_id = ?1
-       ORDER BY page_index, id",
-    )
-    .map_err(database_error)?;
-  let rows = statement
-    .query_map(params![run_step_id], |row| {
-      let input_cursor: Option<String> = row.get(5)?;
-      let next_cursor: Option<String> = row.get(6)?;
-      Ok(Checkpoint {
-        id: row.get(0)?,
-        page_index: row.get(1)?,
-        status: row.get(2)?,
-        request_attempt_count: row.get(3)?,
-        idempotency_key: row.get(4)?,
-        input_cursor: input_cursor
-          .map(|value| serde_json::from_str(&value))
-          .transpose()
-          .map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(
-              5,
-              rusqlite::types::Type::Text,
-              Box::new(error),
-            )
-          })?,
-        next_cursor: next_cursor
-          .map(|value| serde_json::from_str(&value))
-          .transpose()
-          .map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(
-              6,
-              rusqlite::types::Type::Text,
-              Box::new(error),
-            )
-          })?,
-        has_more: row.get::<_, Option<i64>>(7)?.map(|value| value != 0),
-        provider_response_json: row.get(8)?,
-        provider_response_hash: row.get(9)?,
-        provider_response_size: row.get(10)?,
-        record_count_received: row.get(11)?,
-        response_received_at: row.get(12)?,
-      })
-    })
-    .map_err(database_error)?;
-  rows
-    .collect::<rusqlite::Result<Vec<_>>>()
-    .map_err(database_error)
 }
 
 fn mark_step_running(connection: &rusqlite::Connection, step_id: &str) -> AppResult<()> {
