@@ -49,7 +49,7 @@ pub fn generate_form_collection_plan(
     };
     total_request_limit = total_request_limit.saturating_add(step_request_limit);
     let depends_on_step_key =
-      (needs_search_dependency && data_type != "keyword_search").then_some("keyword_search");
+      requires_step_search_dependency(data_type, &request.params).then_some("keyword_search");
     let input_binding = if depends_on_step_key.is_some() {
       dependency_binding(data_type)
     } else {
@@ -198,19 +198,23 @@ fn step_params(data_type: &str, source: &Value, optional_params: &[&str]) -> App
 }
 
 fn requires_search_dependency(data_types: &[String], params: &Value) -> bool {
-  data_types.iter().any(|data_type| {
-    let required_key = match data_type.as_str() {
-      "item_detail" | "comments" => "item_id",
-      "account_profile" | "account_posts" => "account_id",
-      _ => return false,
-    };
-    params
-      .get(required_key)
-      .and_then(Value::as_str)
-      .map(str::trim)
-      .filter(|value| !value.is_empty())
-      .is_none()
-  })
+  data_types
+    .iter()
+    .any(|data_type| requires_step_search_dependency(data_type, params))
+}
+
+fn requires_step_search_dependency(data_type: &str, params: &Value) -> bool {
+  let required_key = match data_type {
+    "item_detail" | "comments" => "item_id",
+    "account_profile" | "account_posts" => "account_id",
+    _ => return false,
+  };
+  params
+    .get(required_key)
+    .and_then(Value::as_str)
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .is_none()
 }
 
 fn copy_string(

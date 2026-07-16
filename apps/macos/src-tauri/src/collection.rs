@@ -678,6 +678,40 @@ mod tests {
   }
 
   #[test]
+  fn form_plan_keeps_dependencies_when_search_is_selected_for_output() {
+    let plan = generate_form_collection_plan(FormCollectionPlanRequest {
+      platform: "xiaohongshu".to_string(),
+      data_type: None,
+      data_types: vec![
+        "keyword_search".to_string(),
+        "item_detail".to_string(),
+        "account_profile".to_string(),
+        "comments".to_string(),
+      ],
+      params: serde_json::json!({
+        "keyword": "新能源汽车",
+        "region": "CN"
+      }),
+      age_range: None,
+      request_limit: Some(4),
+      record_limit: Some(1200),
+      budget_limit_micros: Some(35_000_000),
+    })
+    .expect("显式选择搜索结果时仍应生成下游依赖链");
+
+    assert!(plan.plan_json["steps"][0]["depends_on_step_key"].is_null());
+    for step in plan.plan_json["steps"]
+      .as_array()
+      .expect("steps 应为数组")
+      .iter()
+      .skip(1)
+    {
+      assert_eq!(step["depends_on_step_key"], "keyword_search");
+      assert!(!step["input_binding"].is_null());
+    }
+  }
+
+  #[test]
   fn account_profile_and_item_detail_are_registered_for_all_platforms() {
     for platform in ["tiktok", "douyin", "xiaohongshu"] {
       let data_types = list_platform_data_types(platform).expect("platform should be supported");
