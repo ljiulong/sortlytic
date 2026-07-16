@@ -70,6 +70,8 @@ describe('collection form controls', () => {
     maxRecords: 1200,
     budget: 35,
     ageRangeEnabled: false,
+    genderFilterEnabled: false,
+    genders: [],
   }
 
   it('数据类型至少选择一项，且年龄范围使用闭区间校验', () => {
@@ -92,6 +94,23 @@ describe('collection form controls', () => {
         ageMax: 18,
       }).success,
     ).toBe(false)
+  })
+
+  it('性别筛选默认关闭，启用后至少选择一种明确性别', () => {
+    expect(collectionFormSchema.safeParse(baseInput).success).toBe(true)
+    expect(
+      collectionFormSchema.safeParse({
+        ...baseInput,
+        genderFilterEnabled: true,
+      }).success,
+    ).toBe(false)
+    const parsed = collectionFormSchema.safeParse({
+      ...baseInput,
+      genderFilterEnabled: true,
+      genders: ['female', 'other'],
+    })
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data.genders).toEqual(['female', 'other'])
   })
 
   it('只有所选平台和数据类型存在地区执行能力时启用地区选择', () => {

@@ -20,6 +20,7 @@ import {
   collectionFormSchema,
   collectionDataTypeOptions,
   countryRegionOptions,
+  genderFilterOptions,
   supportsRegionSelection,
 } from './collection-options'
 import type { RuntimeCollectionPlan } from './use-workbench-backend'
@@ -82,11 +83,14 @@ export function CollectionBuilder({
       maxRecords: plan.maxRecords,
       budget: plan.budget,
       ageRangeEnabled: false,
+      genderFilterEnabled: false,
+      genders: [],
     },
   })
   const selectedPlatform = watch('platform')
   const selectedDataTypes = watch('dataTypes') ?? []
   const ageRangeEnabled = watch('ageRangeEnabled')
+  const genderFilterEnabled = watch('genderFilterEnabled')
   const regionEnabled = supportsRegionSelection(selectedPlatform, selectedDataTypes)
 
   useEffect(() => {
@@ -198,6 +202,26 @@ export function CollectionBuilder({
               </div>
               {errors.ageMin?.message ? <small>{errors.ageMin.message}</small> : null}
               {errors.ageMax?.message ? <small>{errors.ageMax.message}</small> : null}
+            </Field>
+            <Field label="性别">
+              <label className="inline-toggle">
+                <input type="checkbox" {...register('genderFilterEnabled')} />
+                仅保留明确公开性别的账号
+              </label>
+              <div className="collection-type-grid">
+                {genderFilterOptions.map((item) => (
+                  <label className="collection-type-option" key={item.value}>
+                    <input
+                      disabled={!genderFilterEnabled}
+                      type="checkbox"
+                      value={item.value}
+                      {...register('genders')}
+                    />
+                    <span><strong>{item.label}</strong></span>
+                  </label>
+                ))}
+              </div>
+              {errors.genders?.message ? <small>{errors.genders.message}</small> : null}
             </Field>
             <Field error={errors.maxRecords?.message} label="最大记录数">
               <input type="number" {...register('maxRecords', { valueAsNumber: true })} />

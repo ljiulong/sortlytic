@@ -30,6 +30,12 @@ export type CollectionDataType = (typeof collectionDataTypeOptions)[number]['val
 
 export const AGE_RANGE_LIMITS = { min: 0, max: 130 } as const
 
+export const genderFilterOptions = [
+  { value: 'female', label: '女性' },
+  { value: 'male', label: '男性' },
+  { value: 'other', label: '其他明确性别' },
+] as const
+
 const ISO_COUNTRY_REGION_CODES = `
 AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ
 BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ
@@ -81,17 +87,23 @@ export const collectionFormSchema = z
     ageRangeEnabled: z.boolean(),
     ageMin: optionalAge,
     ageMax: optionalAge,
+    genderFilterEnabled: z.boolean(),
+    genders: z.array(z.enum(genderFilterOptions.map(({ value }) => value))).default([]),
   })
   .superRefine((values, context) => {
-    if (!values.ageRangeEnabled) return
-    if (values.ageMin === undefined) {
-      context.addIssue({ code: 'custom', path: ['ageMin'], message: '请输入最小年龄' })
+    if (values.ageRangeEnabled) {
+      if (values.ageMin === undefined) {
+        context.addIssue({ code: 'custom', path: ['ageMin'], message: '请输入最小年龄' })
+      }
+      if (values.ageMax === undefined) {
+        context.addIssue({ code: 'custom', path: ['ageMax'], message: '请输入最大年龄' })
+      }
+      if (values.ageMin !== undefined && values.ageMax !== undefined && values.ageMin > values.ageMax) {
+        context.addIssue({ code: 'custom', path: ['ageMax'], message: '最大年龄不能小于最小年龄' })
+      }
     }
-    if (values.ageMax === undefined) {
-      context.addIssue({ code: 'custom', path: ['ageMax'], message: '请输入最大年龄' })
-    }
-    if (values.ageMin !== undefined && values.ageMax !== undefined && values.ageMin > values.ageMax) {
-      context.addIssue({ code: 'custom', path: ['ageMax'], message: '最大年龄不能小于最小年龄' })
+    if (values.genderFilterEnabled && values.genders.length === 0) {
+      context.addIssue({ code: 'custom', path: ['genders'], message: '请至少选择一种明确性别' })
     }
   })
 
