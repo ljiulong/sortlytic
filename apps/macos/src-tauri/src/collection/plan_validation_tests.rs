@@ -334,6 +334,20 @@ fn local_filters_fail_closed_until_a_production_filter_exists() {
 }
 
 #[test]
+fn omitted_local_filters_do_not_block_an_otherwise_valid_plan() {
+  let mut plan = complete_comment_plan();
+  plan["region"] = Value::Null;
+  plan["time_range"] = Value::Null;
+  plan["record_limit"] = serde_json::json!(1200);
+  plan["budget_limit"] = serde_json::json!({ "currency": "USD", "amount_micros": 35_000_000 });
+  plan["steps"][0]["params"] = serde_json::json!({ "item_id": "note-1" });
+
+  let result = validate_collection_plan_v2(&plan);
+
+  assert!(result.valid, "{:?}", result.errors);
+}
+
+#[test]
 fn unsupported_filter_constraints_are_rejected() {
   let mut plan = complete_account_profile_plan_v2();
   plan["region"] = serde_json::json!("US");
@@ -400,7 +414,7 @@ fn complete_comment_plan_passes_authoritative_validation() {
 }
 
 #[test]
-fn invalid_plan_reports_unverified_region_and_missing_execution_params() {
+fn invalid_plan_reports_unverified_region_and_missing_required_target() {
   let result = validate_collection_plan(&serde_json::json!({
     "platforms": ["xiaohongshu"],
     "data_types": ["comments"],
@@ -427,10 +441,6 @@ fn invalid_plan_reports_unverified_region_and_missing_execution_params() {
     .iter()
     .any(|error| error.contains("region 尚未验证")));
   assert!(result.errors.iter().any(|error| error.contains("item_id")));
-  assert!(result
-    .errors
-    .iter()
-    .any(|error| error.contains("time_range")));
 }
 
 #[test]
@@ -455,7 +465,7 @@ fn form_plan_status_uses_authoritative_whole_plan_validation() {
     .is_some_and(|errors| errors
       .iter()
       .filter_map(Value::as_str)
-      .any(|error| error.contains("time_range"))));
+      .any(|error| error.contains("region") && error.contains("本地过滤器尚未接通"))));
 }
 
 fn complete_comment_plan() -> Value {
