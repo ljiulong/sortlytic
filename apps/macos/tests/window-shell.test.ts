@@ -6,7 +6,7 @@ const windowConfig = JSON.parse(
 )
 const globalStyles = readFileSync(new URL('../src/index.css', import.meta.url), 'utf8')
 const nativeWindowSource = readFileSync(
-  new URL('../src-tauri/src/lib.rs', import.meta.url),
+  new URL('../src-tauri/src/native_window.rs', import.meta.url),
   'utf8',
 )
 
