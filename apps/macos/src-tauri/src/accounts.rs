@@ -5,6 +5,12 @@ use serde_json::Value;
 
 use crate::domain::{AppError, AppErrorStage, AppResult};
 
+mod storage;
+
+pub use storage::{
+  persist_account_observations, AccountObservationInput, AccountPersistenceResult,
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AgeRange {
   pub min: i64,
@@ -53,6 +59,28 @@ pub struct AccountRecord {
   pub profile_url: Option<String>,
   #[serde(skip)]
   field_priorities: BTreeMap<String, u8>,
+}
+
+impl AccountRecord {
+  pub(crate) fn merge(&mut self, incoming: AccountRecord) {
+    merge_account(self, incoming);
+  }
+
+  pub(crate) fn field_priorities(&self) -> &BTreeMap<String, u8> {
+    &self.field_priorities
+  }
+
+  pub(crate) fn restore_field_priorities(&mut self, priorities: BTreeMap<String, u8>) {
+    self.field_priorities = priorities;
+  }
+
+  pub(crate) fn normalized_account(&self) -> Option<String> {
+    self
+      .account
+      .as_deref()
+      .map(normalized_account_name)
+      .filter(|value| !value.is_empty())
+  }
 }
 
 #[derive(Debug, Default)]
