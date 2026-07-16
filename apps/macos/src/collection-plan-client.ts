@@ -16,8 +16,12 @@ type BackendDataType =
   | 'item_detail'
   | 'account_posts'
 
-function supportsProviderRegion(platform: BackendPlatform, dataType: BackendDataType) {
-  return platform === 'tiktok' && dataType === 'keyword_search'
+function supportsRegionFilter(platform: BackendPlatform, dataType: BackendDataType) {
+  if (platform === 'tiktok') {
+    return ['keyword_search', 'account_posts', 'comments'].includes(dataType)
+  }
+
+  return ['keyword_search', 'comments'].includes(dataType)
 }
 
 function supportsProviderTimeRange(dataType: BackendDataType) {
@@ -48,7 +52,7 @@ export function buildPlanParams(
   }
 
   const region = values.regionCode.trim().toUpperCase()
-  if (region && supportsProviderRegion(platform, dataType)) {
+  if (region && supportsRegionFilter(platform, dataType)) {
     params.region = region
   }
 

@@ -809,7 +809,7 @@ describe('buildPlanParams', () => {
     })
   })
 
-  it('只把筛选条件传给由供应商直接支持的端点', () => {
+  it('把地区交给支持供应商或本地筛选的端点', () => {
     expect(buildPlanParams(values, 'tiktok', 'keyword_search')).toEqual({
       keyword: '新能源汽车',
       region: 'CN',
@@ -818,10 +818,12 @@ describe('buildPlanParams', () => {
     })
     expect(buildPlanParams(values, 'xiaohongshu', 'keyword_search')).toEqual({
       keyword: '新能源汽车',
+      region: 'CN',
       time_range: '7',
     })
     expect(buildPlanParams(values, 'douyin', 'comments')).toEqual({
       item_id: '新能源汽车',
+      region: 'CN',
       page_size: 50,
     })
   })
@@ -854,6 +856,7 @@ describe('v3 form plan request', () => {
       budget_limit_micros: 35_000_000,
       params: {
         keyword: '新能源汽车',
+        region: 'CN',
         time_range: '近 30 天',
         genders: ['female', 'other'],
       },
