@@ -33,6 +33,28 @@ describe('CollectionPlanPreview', () => {
     expect(markup).toContain('新能源汽车')
     expect(markup).toContain('笔记详情')
     expect(markup).toContain('先生成计划')
+    expect(markup).toContain('请先生成并保存采集计划')
+    expect(markup).toMatch(/<button[^>]*disabled=""/)
+  })
+
+  it('后端校验未通过时显示第一条可操作阻塞原因', () => {
+    const markup = renderToStaticMarkup(
+      createElement(CollectionPlanPreview, {
+        actionMessage: '计划需要修正',
+        isBusy: false,
+        onConfirmPlan: vi.fn(),
+        plan: {
+          ...draftPlan,
+          taskId: 'task-1',
+          planId: 'plan-1',
+          validationStatus: 'needs_review',
+          status: '待人工确认',
+          missing: ['年龄范围必须填写上下限', '价格未知'],
+        },
+      }),
+    )
+
+    expect(markup).toContain('暂不能运行：年龄范围必须填写上下限')
     expect(markup).toMatch(/<button[^>]*disabled=""/)
   })
 })

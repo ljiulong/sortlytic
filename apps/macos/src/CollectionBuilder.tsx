@@ -254,11 +254,11 @@ function Field({
   children: ReactNode
 }) {
   return (
-    <label className="field">
+    <div className="field">
       <span>{label}</span>
       {children}
       {error ? <small>{error}</small> : null}
-    </label>
+    </div>
   )
 }
 
@@ -273,11 +273,14 @@ export function CollectionPlanPreview({
   onConfirmPlan: () => Promise<unknown>
   plan: RuntimeCollectionPlan
 }) {
-  const canConfirm = Boolean(
-    plan.taskId && plan.planId && plan.validationStatus === 'valid' && plan.status === '等待确认',
-  )
+  const blocker = confirmationBlocker(plan, isBusy)
+  const canConfirm = !blocker
   const isEnqueued = plan.status === '已排队' || plan.status === '运行中'
   const confirmLabel = isEnqueued ? '已入队' : plan.taskId ? '确认运行' : '先生成计划'
+  const regionLabel = countryRegionOptions.find(({ code }) => code === plan.regionCode)?.label
+  const ageLabel = plan.ageRangeEnabled && plan.ageMin !== undefined && plan.ageMax !== undefined
+    ? `${plan.ageMin}–${plan.ageMax} 岁（闭区间，仅明确年龄）`
+    : '未启用'
 
   return (
     <div className="plan-preview">
@@ -291,7 +294,8 @@ export function CollectionPlanPreview({
       <div className="plan-grid">
         <InfoLine label="平台" value={(plan.platforms?.length ? plan.platforms : [plan.platform]).join('、')} />
         <InfoLine label="数据类型" value={(plan.dataTypes?.length ? plan.dataTypes : [plan.dataType]).join('、')} />
-        <InfoLine label="国家/地区" value={plan.regionCode ? `${plan.regionCode}，以后端计划为准` : '未提供'} />
+        <InfoLine label="国家/地区" value={regionLabel ?? '未提供或目标不支持'} />
+        <InfoLine label="年龄范围" value={ageLabel} />
         <InfoLine label="范围" value={plan.maxRecords > 0 ? `${plan.range}，最多 ${plan.maxRecords.toLocaleString()} 条` : plan.range} />
         <InfoLine
           label="成本"
@@ -300,8 +304,15 @@ export function CollectionPlanPreview({
         <InfoLine label="缺失条件" value={plan.missing.length ? plan.missing.join('、') : '无'} />
       </div>
       <p className="muted-text">{actionMessage}</p>
+      {blocker ? (
+        <p className="plan-blocker" id="plan-confirm-blocker" role="status">
+          <AlertTriangle size={15} aria-hidden="true" />
+          {plan.taskId ? `暂不能运行：${blocker}` : blocker}
+        </p>
+      ) : null}
       <div className="action-row">
         <button
+          aria-describedby={blocker ? 'plan-confirm-blocker' : undefined}
           className="primary-button"
           disabled={!canConfirm || isBusy}
           type="button"
@@ -315,6 +326,17 @@ export function CollectionPlanPreview({
       </div>
     </div>
   )
+}
+
+function confirmationBlocker(plan: RuntimeCollectionPlan, isBusy: boolean) {
+  if (isBusy) return '正在处理计划，请稍候'
+  if (!plan.taskId || !plan.planId) return '请先生成并保存采集计划'
+  if (plan.validationStatus !== 'valid') return plan.missing[0] ?? '计划校验未通过'
+  if (plan.status !== '等待确认') {
+    if (plan.status === '已排队' || plan.status === '运行中') return '任务已进入运行队列'
+    return `计划状态为“${plan.status}”`
+  }
+  return undefined
 }
 
 function InfoLine({ label, value }: { label: string; value: string }) {
