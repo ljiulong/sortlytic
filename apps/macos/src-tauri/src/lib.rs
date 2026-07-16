@@ -769,7 +769,7 @@ unsafe fn objc_send_f64(receiver: *mut c_void, selector: &'static [u8], value: f
 fn apply_native_window_corner_radius(window: &tauri::WebviewWindow) -> Result<(), String> {
   let native_window = window.ns_window().map_err(|error| error.to_string())?;
   let (clear_color, content_view) = unsafe {
-    let ns_color = objc_getClass(b"NSColor\0".as_ptr().cast());
+    let ns_color = objc_getClass(c"NSColor".as_ptr());
     if ns_color.is_null() {
       return Err("无法获取 macOS 原生颜色类".to_string());
     }
@@ -885,8 +885,7 @@ pub fn run() {
         let main_window = app
           .get_webview_window("main")
           .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "找不到主窗口"))?;
-        apply_native_window_corner_radius(&main_window)
-          .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error))?;
+        apply_native_window_corner_radius(&main_window).map_err(std::io::Error::other)?;
       }
       start_task_worker(app.handle());
       Ok(())
