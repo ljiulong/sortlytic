@@ -453,6 +453,34 @@ mod tests {
   }
 
   #[test]
+  fn rejects_sensitive_ai_urls_before_persisting_profile_data() {
+    let root = workspace("ai-sensitive-url");
+    let sentinel = "url-secret-sentinel-987654321";
+    let input = SaveApiProfileInput::Ai {
+      id: None,
+      name: "不安全端点".to_string(),
+      provider_type: AiProviderType::CustomOpenaiCompatible,
+      api_format: AiApiFormat::OpenaiCompatible,
+      base_url: format!("https://user:{sentinel}@example.test/v1?api_key={sentinel}#token"),
+      default_model_id: "model-test".to_string(),
+      api_key: Some(AI_SECRET.to_string()),
+    };
+
+    let error = service::save_profile(&root, input).unwrap_err();
+
+    assert!(error.message.contains("AI Base URL"));
+    let registry_json = fs::read(root.join("secrets/api-config.json")).unwrap();
+    let database = fs::read(root.join(DATABASE_FILE_NAME)).unwrap();
+    assert!(!registry_json
+      .windows(sentinel.len())
+      .any(|value| value == sentinel.as_bytes()));
+    assert!(!database
+      .windows(sentinel.len())
+      .any(|value| value == sentinel.as_bytes()));
+    fs::remove_dir_all(root).ok();
+  }
+
+  #[test]
   fn active_runtime_snapshot_blocks_tikhub_edit_and_delete() {
     let root = workspace("snapshot");
     let registry = service::save_profile(

@@ -163,7 +163,7 @@ fn save_ai(
 ) -> AppResult<(String, bool)> {
   let name = required(&name, "AI 配置名称")?;
   validate_ai_format(provider, format)?;
-  let base_url = ai_url(provider, &base_url);
+  let base_url = ai_url(provider, &base_url)?;
   let model = model.trim().to_string();
   let key = secret(api_key);
   let now = Utc::now().to_rfc3339();
@@ -533,17 +533,7 @@ fn validate_ai(registry: &ApiProfileRegistry, profile: &AiApiProfile) -> Result<
   if profile.default_model_id.trim().is_empty() {
     return Err("AI 默认模型 ID 不能为空".to_string());
   }
-  let url = reqwest::Url::parse(&profile.base_url)
-    .map_err(|_| "AI Base URL 不是完整的 HTTP(S) 地址".to_string())?;
-  if !matches!(url.scheme(), "http" | "https")
-    || url.host_str().is_none()
-    || !url.username().is_empty()
-    || url.password().is_some()
-    || url.query().is_some()
-    || url.fragment().is_some()
-  {
-    return Err("AI Base URL 必须包含主机且不能携带凭据、查询串或片段".to_string());
-  }
+  validate_ai_url(&profile.base_url).map_err(|value| value.message)?;
   let has_key = profile
     .credential_ref_id
     .as_ref()
@@ -655,17 +645,40 @@ fn tikhub_url(value: &str) -> AppResult<String> {
   }
 }
 
-fn ai_url(provider: AiProviderType, value: &str) -> String {
+fn ai_url(provider: AiProviderType, value: &str) -> AppResult<String> {
   let value = value.trim().trim_end_matches('/');
-  if !value.is_empty() {
-    return value.to_string();
+  let value = if !value.is_empty() {
+    value.to_string()
+  } else {
+    match provider {
+      AiProviderType::Openai => "https://api.openai.com/v1".to_string(),
+      AiProviderType::Anthropic => "https://api.anthropic.com".to_string(),
+      AiProviderType::Gemini => "https://generativelanguage.googleapis.com".to_string(),
+      AiProviderType::Ollama => "http://localhost:11434".to_string(),
+      AiProviderType::CustomOpenaiCompatible => String::new(),
+    }
+  };
+  if value.is_empty() {
+    return Ok(value);
   }
-  match provider {
-    AiProviderType::Openai => "https://api.openai.com/v1".to_string(),
-    AiProviderType::Anthropic => "https://api.anthropic.com".to_string(),
-    AiProviderType::Gemini => "https://generativelanguage.googleapis.com".to_string(),
-    AiProviderType::Ollama => "http://localhost:11434".to_string(),
-    AiProviderType::CustomOpenaiCompatible => String::new(),
+  validate_ai_url(&value)?;
+  Ok(value)
+}
+
+fn validate_ai_url(value: &str) -> AppResult<()> {
+  let url = reqwest::Url::parse(value).map_err(|_| error("AI Base URL 不是完整的 HTTP(S) 地址"))?;
+  if matches!(url.scheme(), "http" | "https")
+    && url.host_str().is_some()
+    && url.username().is_empty()
+    && url.password().is_none()
+    && url.query().is_none()
+    && url.fragment().is_none()
+  {
+    Ok(())
+  } else {
+    Err(error(
+      "AI Base URL 必须包含主机且不能携带凭据、查询串或片段",
+    ))
   }
 }
 
