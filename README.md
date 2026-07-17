@@ -13,7 +13,7 @@ English · <a href="README-zh.md">中文</a>
 <h1 align="center">Sortlytic</h1>
 
 <p align="center">
-  <strong>A local-first macOS workspace for collecting, organizing, validating, and exporting public social-platform research.</strong>
+  <strong>A local-first macOS workspace for collecting, organizing, validating, and exporting public social research data.</strong>
   <br />
   <em>TikTok · Douyin · Xiaohongshu · Structured workflows · XLSX and PDF exports</em>
 </p>
