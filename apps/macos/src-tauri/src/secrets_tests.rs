@@ -57,6 +57,44 @@ fn secret_crud_uses_json_as_the_only_plaintext_location() {
 }
 
 #[test]
+fn snapshot_secret_reads_require_exact_profile_and_revision() {
+  let root = test_workspace("snapshot-revision");
+  let original = "snapshot-original-secret-7193";
+  let replacement = "snapshot-replacement-secret-4821";
+  let saved = save_secret(
+    &root,
+    "tikhub",
+    "default",
+    original,
+    Some("快照账号".into()),
+  )
+  .unwrap();
+
+  assert_eq!(
+    read_secret_for_snapshot(&root, &saved.id, "tikhub", &saved.provider_id, 1).unwrap(),
+    original
+  );
+
+  update_secret(&root, &saved.id, replacement).unwrap();
+  for error in [
+    read_secret_for_snapshot(&root, &saved.id, "tikhub", &saved.provider_id, 1)
+      .expect_err("旧快照修订号不得读取新密钥"),
+    read_secret_for_snapshot(&root, &saved.id, "tikhub", "another-profile", 2)
+      .expect_err("快照配置身份不匹配时必须拒绝"),
+    read_secret_for_snapshot(&root, &saved.id, "model_provider", &saved.provider_id, 2)
+      .expect_err("快照供应商类型不匹配时必须拒绝"),
+  ] {
+    assert!(!error.message.contains(original));
+    assert!(!error.message.contains(replacement));
+  }
+  assert_eq!(
+    read_secret_for_snapshot(&root, &saved.id, "tikhub", &saved.provider_id, 2).unwrap(),
+    replacement
+  );
+  fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn json_credentials_remain_isolated_by_workspace_scope() {
   let first = test_workspace("scope-a");
   let second = test_workspace("scope-b");

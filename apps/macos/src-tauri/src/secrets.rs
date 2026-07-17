@@ -265,6 +265,40 @@ pub fn read_secret_for_backend(
     .ok_or_else(|| secret_store_error("密钥需要重新输入，未从旧系统存储读取"))
 }
 
+pub(crate) fn read_secret_for_snapshot(
+  root_path: impl AsRef<Path>,
+  secret_ref_id: &str,
+  expected_provider_type: &str,
+  expected_profile_id: &str,
+  expected_revision: u64,
+) -> AppResult<String> {
+  let expected_provider_type = normalize_provider_type(expected_provider_type)?;
+  let root_path = root_path.as_ref();
+  let connection = scoped_workspace_connection(root_path)?;
+  validate_secret_ref_provider(&connection, secret_ref_id, &expected_provider_type)?;
+  drop(connection);
+
+  let registry = registry_for_access(root_path)?;
+  let location = find_profile_by_credential(&registry, secret_ref_id)
+    .ok_or_else(|| secret_store_error("运行快照引用的密钥尚未迁移，请重新绑定后重试"))?;
+  let (actual_provider_type, actual_profile_id) = match &location {
+    ProfileLocation::Tikhub(profile_id) => ("tikhub", profile_id.as_str()),
+    ProfileLocation::Ai(profile_id) => ("model_provider", profile_id.as_str()),
+  };
+  if actual_provider_type != expected_provider_type || actual_profile_id != expected_profile_id {
+    return Err(permission_error("运行快照的 API 配置身份与当前凭据不匹配"));
+  }
+
+  let credential = registry
+    .credentials
+    .get(secret_ref_id)
+    .ok_or_else(|| secret_store_error("运行快照引用的密钥需要重新输入"))?;
+  if credential.profile_id != expected_profile_id || credential.revision != expected_revision {
+    return Err(permission_error("运行快照的密钥修订号与当前凭据不匹配"));
+  }
+  Ok(credential.secret.clone())
+}
+
 pub(crate) fn validate_secret_ref_provider(
   connection: &Connection,
   secret_ref_id: &str,
