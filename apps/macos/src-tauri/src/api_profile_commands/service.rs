@@ -506,16 +506,21 @@ fn ensure_mutable(root: &Path, kind: ApiProfileKind, id: &str) -> AppResult<()> 
   if kind == ApiProfileKind::Ai {
     return Ok(());
   }
+  let credential_ref_id = get_registry(root)?
+    .tikhub_profiles
+    .get(id)
+    .map(|profile| profile.credential_ref_id.clone())
+    .unwrap_or_default();
   let connection = open_workspace_database(root.join(DATABASE_FILE_NAME))?;
   let referenced: i64 = connection
     .query_row(
       "SELECT EXISTS (
          SELECT 1 FROM collection_runtime_snapshot AS snapshot
          JOIN task_run AS run ON run.id = snapshot.task_run_id
-         WHERE snapshot.secret_provider_id = ?1
+         WHERE (snapshot.secret_ref_id = ?1 OR snapshot.secret_provider_id = ?2)
            AND run.status IN ('queued','running')
        )",
-      params![id],
+      params![credential_ref_id, id],
       |row| row.get(0),
     )
     .map_err(database_error)?;

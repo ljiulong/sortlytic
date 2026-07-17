@@ -647,4 +647,81 @@ mod tests {
     assert!(service::delete_profile(&root, ApiProfileKind::Tikhub, &profile.id).is_err());
     fs::remove_dir_all(root).ok();
   }
+
+  #[test]
+  fn legacy_runtime_snapshots_block_profiles_by_stable_credential_reference() {
+    for status in ["queued", "running"] {
+      let root = workspace(&format!("legacy-snapshot-{status}"));
+      let registry = service::save_profile(
+        &root,
+        SaveApiProfileInput::Tikhub {
+          id: None,
+          name: "迁移后账号".to_string(),
+          base_url: "https://api.tikhub.io".to_string(),
+          api_key: Some(TIKHUB_SECRET.to_string()),
+        },
+      )
+      .unwrap();
+      let profile = registry.tikhub_profiles.values().next().unwrap();
+      let connection = open_workspace_database(root.join(DATABASE_FILE_NAME)).unwrap();
+      connection
+        .execute_batch("DROP TRIGGER trg_collection_runtime_snapshot_insert;")
+        .unwrap();
+      connection.execute(
+        "INSERT INTO collection_task (id,name,source_type,status,created_at,updated_at) VALUES ('task','t','form',?1,?2,?2)",
+        params![status, "2026-07-17T00:00:00+00:00"],
+      ).unwrap();
+      connection.execute(
+        "INSERT INTO task_run (id,task_id,status,started_at,claimed_at,current_stage) VALUES ('run','task',?1,?2,?2,'恢复待发送')",
+        params![status, "2026-07-17T00:00:00+00:00"],
+      ).unwrap();
+      connection
+        .execute(
+          "INSERT INTO collection_runtime_snapshot (
+           id,task_run_id,workspace_id,runtime_contract_version,plan_id,plan_schema_version,
+           plan_json,connector_type,connector_id,connector_config_version,base_url,secret_ref_id,
+           secret_revision,secret_provider_type,secret_provider_id,connector_tested_at,
+           connector_test_status,created_at
+         ) SELECT 'legacy-snapshot','run',id,1,'plan',2,'{}','tikhub','default',1,?1,?2,1,
+                  'tikhub','default',?3,'success',?3 FROM workspace",
+          params![
+            profile.base_url,
+            profile.credential_ref_id,
+            "2026-07-17T00:00:00+00:00"
+          ],
+        )
+        .unwrap();
+      drop(connection);
+
+      let edit = SaveApiProfileInput::Tikhub {
+        id: Some(profile.id.clone()),
+        name: "不应写入".to_string(),
+        base_url: profile.base_url.clone(),
+        api_key: None,
+      };
+      let edit_error = service::save_profile(&root, edit).unwrap_err();
+      let delete_error =
+        service::delete_profile(&root, ApiProfileKind::Tikhub, &profile.id).unwrap_err();
+      assert!(!edit_error.message.contains(TIKHUB_SECRET));
+      assert!(!delete_error.message.contains(TIKHUB_SECRET));
+
+      let unchanged = open_workspace_database(root.join(DATABASE_FILE_NAME))
+        .unwrap()
+        .query_row(
+          "SELECT secret_provider_id,secret_ref_id FROM collection_runtime_snapshot WHERE id = 'legacy-snapshot'",
+          [],
+          |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .unwrap();
+      assert_eq!(
+        unchanged,
+        ("default".to_string(), profile.credential_ref_id.clone())
+      );
+      assert_eq!(
+        service::get_registry(&root).unwrap().tikhub_profiles[&profile.id].name,
+        "迁移后账号"
+      );
+      fs::remove_dir_all(root).ok();
+    }
+  }
 }
