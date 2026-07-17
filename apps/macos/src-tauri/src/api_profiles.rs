@@ -15,6 +15,9 @@ mod storage;
 mod concurrency_tests;
 
 #[cfg(test)]
+mod storage_tests;
+
+#[cfg(test)]
 mod url_validation_tests;
 
 pub const API_PROFILE_SCHEMA_VERSION: u32 = 1;

@@ -2,6 +2,8 @@ use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::{collections::BTreeMap, sync::LazyLock, sync::Mutex};
 
 use uuid::Uuid;
 
@@ -13,6 +15,68 @@ const REGISTRY_FILE_NAME: &str = "api-config.json";
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
 const PRIVATE_FILE_MODE: u32 = 0o600;
 const PERMISSION_BITS: u32 = 0o7777;
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum WriteFailurePoint {
+  TempPermissions,
+  TempWrite,
+  TempSync,
+  Rename,
+}
+
+#[cfg(test)]
+impl WriteFailurePoint {
+  pub(super) const fn label(self) -> &'static str {
+    match self {
+      Self::TempPermissions => "temp-permissions",
+      Self::TempWrite => "temp-write",
+      Self::TempSync => "temp-sync",
+      Self::Rename => "rename",
+    }
+  }
+
+  const fn error_context(self) -> &'static str {
+    match self {
+      Self::TempPermissions => "无法设置 API 配置临时文件权限",
+      Self::TempWrite => "无法写入 API 配置临时文件",
+      Self::TempSync => "无法同步 API 配置临时文件",
+      Self::Rename => "无法原子替换 API 配置文件",
+    }
+  }
+}
+
+#[cfg(test)]
+static WRITE_FAILURES: LazyLock<Mutex<BTreeMap<PathBuf, WriteFailurePoint>>> =
+  LazyLock::new(|| Mutex::new(BTreeMap::new()));
+
+#[cfg(test)]
+pub(super) struct WriteFailureGuard {
+  final_path: PathBuf,
+}
+
+#[cfg(test)]
+impl Drop for WriteFailureGuard {
+  fn drop(&mut self) {
+    WRITE_FAILURES
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+      .remove(&self.final_path);
+  }
+}
+
+#[cfg(test)]
+pub(super) fn install_write_failure(
+  root_path: &Path,
+  failure: WriteFailurePoint,
+) -> WriteFailureGuard {
+  let final_path = registry_path(root_path);
+  WRITE_FAILURES
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner())
+    .insert(final_path.clone(), failure);
+  WriteFailureGuard { final_path }
+}
 
 pub(super) fn registry_path(root_path: &Path) -> PathBuf {
   root_path
@@ -82,12 +146,18 @@ fn write_and_replace(
     .mode(PRIVATE_FILE_MODE)
     .open(temp_path)
     .map_err(|error| io_error("无法创建 API 配置临时文件", error))?;
+  #[cfg(test)]
+  maybe_fail_write(final_path, WriteFailurePoint::TempPermissions)?;
   temp_file
     .set_permissions(fs::Permissions::from_mode(PRIVATE_FILE_MODE))
     .map_err(|error| io_error("无法设置 API 配置临时文件权限", error))?;
+  #[cfg(test)]
+  maybe_fail_write(final_path, WriteFailurePoint::TempWrite)?;
   temp_file
     .write_all(contents)
     .map_err(|error| io_error("无法写入 API 配置临时文件", error))?;
+  #[cfg(test)]
+  maybe_fail_write(final_path, WriteFailurePoint::TempSync)?;
   temp_file
     .sync_all()
     .map_err(|error| io_error("无法同步 API 配置临时文件", error))?;
@@ -99,6 +169,8 @@ fn write_and_replace(
   )?;
   drop(temp_file);
 
+  #[cfg(test)]
+  maybe_fail_write(final_path, WriteFailurePoint::Rename)?;
   fs::rename(temp_path, final_path)
     .map_err(|error| io_error("无法原子替换 API 配置文件", error))?;
   let metadata = fs::symlink_metadata(final_path)
@@ -107,6 +179,23 @@ fn write_and_replace(
   File::open(directory)
     .and_then(|file| file.sync_all())
     .map_err(|error| io_error("无法同步 API 配置目录", error))
+}
+
+#[cfg(test)]
+fn maybe_fail_write(final_path: &Path, failure: WriteFailurePoint) -> AppResult<()> {
+  let should_fail = WRITE_FAILURES
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner())
+    .get(final_path)
+    .copied()
+    == Some(failure);
+  if should_fail {
+    return Err(io_error(
+      failure.error_context(),
+      std::io::Error::new(ErrorKind::Other, "injected storage failure"),
+    ));
+  }
+  Ok(())
 }
 
 fn read_registry_from_path(path: &Path) -> AppResult<ApiProfileRegistry> {
