@@ -37,6 +37,19 @@ const taskStatusTranslationKeys: Record<TaskStatus, string> = {
   已取消: 'taskStatus.cancelled',
 }
 
+const taskSourceTranslationKeys = {
+  natural_language: 'taskQueue.source.naturalLanguage',
+  form: 'taskQueue.source.form',
+} as const
+
+const taskDataTypeTranslationKeys: Record<string, string> = {
+  keyword_search: 'taskQueue.dataType.keywordSearch',
+  account_profile: 'taskQueue.dataType.accountProfile',
+  item_detail: 'taskQueue.dataType.itemDetail',
+  account_posts: 'taskQueue.dataType.accountPosts',
+  comments: 'taskQueue.dataType.comments',
+}
+
 const taskExportFormatOptionKeys = [
   { value: 'xlsx', key: 'export.formats.xlsx' },
   { value: 'pdf', key: 'export.formats.pdf' },
@@ -191,6 +204,17 @@ function TaskQueue({
             const progress = Math.min(100, Math.max(0, task.progress))
             const titleId = `task-title-${task.id}`
             const formattedRecords = task.records.toLocaleString(numberLocale)
+            const sourceLabel = task.sourceType
+              ? t(taskSourceTranslationKeys[task.sourceType])
+              : task.source
+            const dataTypeKey = task.dataTypeCode
+              ? taskDataTypeTranslationKeys[task.dataTypeCode] ?? taskDataTypeTranslationKeys.comments
+              : undefined
+            const costLabel = dataTypeKey
+              ? `${task.requestCount
+                ? t('taskQueue.requestEstimate', { count: task.requestCount })
+                : t('taskQueue.requestEstimateUnknown')} · ${t(dataTypeKey)}`
+              : task.cost
 
             return (
               <article
@@ -239,7 +263,7 @@ function TaskQueue({
                     ) : (
                       <div className="task-card__title-view">
                         <h3 id={titleId}>{task.name}</h3>
-                        <p className="task-card__meta">{task.platform} · {task.source}</p>
+                        <p className="task-card__meta">{task.platform} · {sourceLabel}</p>
                       </div>
                     )}
                   </div>
@@ -254,7 +278,7 @@ function TaskQueue({
                     </div>
                     <div>
                       <dt>{t('taskQueue.requestCost')}</dt>
-                      <dd>{task.cost}</dd>
+                      <dd>{costLabel}</dd>
                     </div>
                   </dl>
                   <div className="task-card__progress">

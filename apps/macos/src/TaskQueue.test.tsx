@@ -6,6 +6,7 @@ import TaskQueue, {
   confirmationForTaskAction,
   taskExportFormatOptions,
 } from './TaskQueue'
+import { i18n as appI18n } from './i18n'
 import type { WorkbenchRuntimeData } from './use-workbench-backend'
 import type { TaskStatus } from './workbench-data'
 
@@ -15,9 +16,12 @@ const waitingTask: WorkbenchRuntimeData['tasks'][number] = {
   platform: 'TikTok',
   status: '等待确认',
   source: '表单式',
+  sourceType: 'form',
   progress: 0,
   records: 0,
   cost: '预计 3 次请求',
+  requestCount: 3,
+  dataTypeCode: 'keyword_search',
 }
 
 function renderQueue(tasks: WorkbenchRuntimeData['tasks']) {
@@ -127,5 +131,19 @@ describe('TaskQueue', () => {
     expect(markup).toContain('task-queue__empty')
     expect(markup).toContain('还没有可运行的任务')
     expect(markup).toContain('前往“新建任务”')
+  })
+
+  it('英文模式使用本地化的任务来源、请求估算和数据类型', async () => {
+    await appI18n.changeLanguage('en-US')
+    const markup = renderQueue([{ ...waitingTask, name: 'Research task', sourceType: 'natural_language' }])
+
+    expect(markup).toContain('Natural language')
+    expect(markup).toContain('Estimated 3 requests')
+    expect(markup).toContain('Search-result accounts')
+    expect(markup).not.toContain('自然语言')
+    expect(markup).not.toContain('预计 3 次请求')
+    expect(markup).not.toContain('搜索结果账号')
+
+    await appI18n.changeLanguage('zh-CN')
   })
 })
