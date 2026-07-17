@@ -4,13 +4,14 @@ import { dirname } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
+import { validateReleaseTitles } from '../../scripts/validate-english-release.mjs'
 
 import releaseConfig from '../release.config.mjs'
 
 const require = createRequire(import.meta.url)
 
-describe('semantic-release 配置', () => {
-  it('每次 main 推送都先验证并交给 semantic-release 判断是否发版', async () => {
+describe('semantic-release configuration', () => {
+  it('validates every main push before semantic-release decides whether to publish', async () => {
     const workflow = await readFile(
       new URL('../../../.github/workflows/release-macos.yml', import.meta.url),
       'utf8',
@@ -20,7 +21,7 @@ describe('semantic-release 配置', () => {
     expect(workflow).toContain('uses: ./.github/workflows/ci.yml')
   })
 
-  it('双架构产物全部上传后才公开稳定版', async () => {
+  it('publishes the stable release only after both architecture assets are uploaded', async () => {
     const githubPlugin = releaseConfig.plugins.find(
       (plugin) => Array.isArray(plugin) && plugin[0] === '@semantic-release/github',
     )
@@ -36,7 +37,7 @@ describe('semantic-release 配置', () => {
     expect(workflow).toContain('gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest')
   })
 
-  it('公开稳定版前把更新清单改为直接下载地址', async () => {
+  it('normalizes updater URLs before publishing the stable release', async () => {
     const workflow = await readFile(
       new URL('../../../.github/workflows/release-macos.yml', import.meta.url),
       'utf8',
@@ -54,7 +55,7 @@ describe('semantic-release 配置', () => {
     expect(workflow).toContain('startswith("https://github.com/")')
   })
 
-  it('重打包已有标签时仍修复更新清单但不重复发布', async () => {
+  it('repairs the updater manifest without republishing a recovery tag', async () => {
     const workflow = await readFile(
       new URL('../../../.github/workflows/release-macos.yml', import.meta.url),
       'utf8',
@@ -67,7 +68,7 @@ describe('semantic-release 配置', () => {
     )
   })
 
-  it('发版工作流把所有第三方 Action 固定到完整提交 SHA', async () => {
+  it('pins every third-party Action to a full commit SHA', async () => {
     const workflow = await readFile(
       new URL('../../../.github/workflows/release-macos.yml', import.meta.url),
       'utf8',
@@ -80,7 +81,7 @@ describe('semantic-release 配置', () => {
     }
   })
 
-  it('容器型 cargo-deny Action 只在 Linux runner 上运行', async () => {
+  it('runs the container-based cargo-deny Action on Linux only', async () => {
     const workflow = await readFile(
       new URL('../../../.github/workflows/ci.yml', import.meta.url),
       'utf8',
@@ -91,7 +92,7 @@ describe('semantic-release 配置', () => {
     )
   })
 
-  it('为功能与修复提交生成非空发版说明', async () => {
+  it('generates English release notes for feature and fix commits', async () => {
     const semanticReleaseEntry = require.resolve('semantic-release')
     const generatorEntry = require.resolve('@semantic-release/release-notes-generator', {
       paths: [dirname(semanticReleaseEntry)],
@@ -113,9 +114,41 @@ describe('semantic-release 配置', () => {
       options: { repositoryUrl: 'https://github.com/ljiulong/sortlytic.git' },
     })
 
-    expect(notes).toContain('Features')
+    expect(notes).toContain('Highlights')
     expect(notes).toContain('Bug Fixes')
     expect(notes).toContain('add collection target')
     expect(notes).toContain('preserve request limit')
+  })
+
+  it('uses an English fallback for historical non-ASCII commit subjects', async () => {
+    const semanticReleaseEntry = require.resolve('semantic-release')
+    const generatorEntry = require.resolve('@semantic-release/release-notes-generator', {
+      paths: [dirname(semanticReleaseEntry)],
+    })
+    const { generateNotes } = await import(pathToFileURL(generatorEntry).href)
+    const generatorPlugin = releaseConfig.plugins.find(
+      (plugin) => Array.isArray(plugin) && plugin[0] === '@semantic-release/release-notes-generator',
+    )
+
+    const notes = await generateNotes(generatorPlugin?.[1] ?? {}, {
+      cwd: process.cwd(),
+      commits: [
+        { hash: '3333333333333333', message: 'feat: 修复中文历史标题' },
+        { hash: '4444444444444444', message: 'fix: preserve English title' },
+      ],
+      lastRelease: { gitTag: 'app-v0.2.0' },
+      nextRelease: { gitTag: 'app-v0.2.1', version: '0.2.1' },
+      options: { repositoryUrl: 'https://github.com/ljiulong/sortlytic.git' },
+    })
+
+    expect(notes).toContain('Highlights')
+    expect(notes).toContain('Historical commit message omitted')
+    expect(notes).toContain('preserve English title')
+    expect(notes).not.toContain('修复中文历史标题')
+  })
+
+  it('blocks non-ASCII release metadata and accepts English titles', () => {
+    expect(() => validateReleaseTitles(['feat: add an English feature'])).not.toThrow()
+    expect(() => validateReleaseTitles(['feat: 新功能'])).toThrow('Release blocked')
   })
 })
