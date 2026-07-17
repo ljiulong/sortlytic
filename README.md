@@ -45,7 +45,7 @@ English · <a href="README-zh.md">中文</a>
 | Controlled task execution | Checks live endpoint quotes, free credit, paid balance, request limits, record limits, and the task budget before and during collection. |
 | Natural-language planning | Converts Chinese research intent into a validated collection plan through the current local rule parser and records its runtime snapshot. |
 | Prompt governance | Stores prompt templates and versions, binds output schemas, and blocks activation when built-in regression cases fail. |
-| Local-first security | Keeps workspace data in local SQLite storage and stores API credentials in macOS Keychain through scoped secret references. |
+| Local-first security | Keeps workspace data in local SQLite storage and stores TikHub and AI API profiles in a workspace-private JSON registry. |
 | Auditable delivery | Builds report snapshots, validates export integrity, and writes structured Excel workbooks and PDF reports with hashes and job history. |
 
 ## Quick Start
@@ -78,7 +78,7 @@ For interface preview without the native backend, run:
 pnpm dev
 ```
 
-The browser preview uses demonstration data. It cannot use macOS Keychain, execute native collection tasks, create local exports, or install application updates.
+The browser preview uses demonstration data. It cannot access the workspace-private API registry, execute native collection tasks, create local exports, or install application updates.
 
 ## Usage
 
@@ -118,23 +118,23 @@ TikHub is required for real collection. Create and verify an account before buil
 
 1. [Register a TikHub account](https://user.tikhub.io/register), verify the email address, then [sign in to the user center](https://user.tikhub.io/login).
 2. Create an API Token in the user center and copy it when shown. Check the [TikHub pricing page](https://tikhub.io/pricing) before using paid endpoints.
-3. In Sortlytic, open **Settings → TikHub Settings → Configure TikHub API**.
-4. Select a domain, paste the token, and choose **Save and Test**.
+3. In Sortlytic, open **Settings → Configure TikHub API**.
+4. Select a domain, paste the token, and choose **Save and Test**. The dialog keeps a list of saved profiles so you can add another account or switch the current profile later.
 
 | Network | API domain |
 |---|---|
 | International network | `https://api.tikhub.io` |
 | Mainland China network | `https://api.tikhub.dev` |
 
-A successful test displays the masked account email, paid balance, free credit, their available total, and email verification status. The token is written to macOS Keychain; the SQLite workspace stores only a scoped secret reference. When editing an existing configuration, leave the token field empty to reuse the saved token.
+A successful test displays the masked account email, paid balance, free credit, their available total, and email verification status. The token is stored in plaintext inside the workspace-private `secrets/api-config.json`; SQLite keeps only a rebuildable mirror and scoped credential-reference metadata. The first valid TikHub profile becomes current automatically. Later profiles are saved without replacing it until you explicitly choose **Set as Current**. When editing an existing configuration, leave the token field empty to reuse the saved token.
 
 Start the first collection with 10–50 records. This makes it easier to verify the platform, data type, region, keyword, and endpoint cost before expanding the task.
 
 ### Configure a model provider (optional)
 
-Open **Settings → Model API Settings** to store an OpenAI, Anthropic, Gemini, or custom OpenAI-compatible profile. Select the API format, fill in the Base URL when required, enter the default model ID and API key, then choose **Save and Validate**. The available API formats also include Ollama for saved local-provider configurations. Saved keys use macOS Keychain and can be reused without re-entering them.
+Open **Settings → Configure AI API** to store OpenAI, Anthropic, Gemini, custom OpenAI-compatible, or Ollama profiles. Select the API format, fill in the Base URL when required, enter the default model ID and API key, then choose **Save and Test**. Ollama may be saved without a key. The dialog supports multiple profiles, including multiple accounts or endpoints for the same provider, and lets you switch the current profile. Keys are stored in the same workspace-private JSON registry and can be retained by leaving the key field empty while editing.
 
-This configuration is optional in the current MVP. Natural-language planning still uses `local-rule-engine/rule-parser-v1`; provider-backed plan generation and real model inference are not connected yet.
+This configuration is optional in the current MVP. AI profile testing validates only the protocol, address, model, and key requirements; it does not call the model provider. Natural-language planning still uses `local-rule-engine/rule-parser-v1`; provider-backed plan generation and real model inference are not connected yet.
 
 ### Create and confirm a collection plan
 
@@ -216,8 +216,12 @@ Browser preview does not have update permission. Apple Developer ID signing and 
 
 - Sortlytic currently creates one local `default-workspace`; it does not provide user accounts, a remote database, remote synchronization, or multi-device synchronization.
 - Workspace data, raw responses, prompt snapshots, logs, reports, and exports remain under the macOS application data directory.
-- TikHub and model API secrets remain in macOS Keychain. They are not written into reports or exports.
-- Deleting the application does not necessarily remove the workspace or Keychain entries. Back up required XLSX, PDF, and raw files before manually deleting application data.
+- TikHub and AI API profiles are the only source of truth in `~/Library/Application Support/com.steven.sortlytic/default-workspace/secrets/api-config.json`. The `secrets` directory is restricted to mode `0700`, and the JSON file to `0600`; the application refuses symbolic links, non-regular files, or storage that cannot enforce these private permissions.
+- API keys are plaintext in that JSON file. The permissions restrict other local users, but they cannot stop malicious processes running under the same macOS account from reading it.
+- Plaintext API keys are not copied into SQLite, logs, exports, Webhook payloads, or application backups. SQLite contains only rebuildable profile mirrors, credential-reference metadata, audits, and immutable task snapshots without the key itself.
+- This workspace-private JSON design supersedes earlier documentation that required API keys to be stored in macOS Keychain.
+- Migration does not read or delete legacy macOS Keychain entries, so it does not trigger a Keychain access prompt. Imported legacy profiles are marked **Re-enter Required** and require the TikHub token or AI API key to be entered once in the corresponding dialog. Old Keychain entries remain available for manual cleanup or rollback.
+- Deleting the application does not necessarily remove the workspace or legacy Keychain entries. Back up required XLSX, PDF, and raw files before manually deleting application data; do not copy `secrets/api-config.json` into a shared backup.
 - Only collect public data that you are permitted to access, and follow platform terms, privacy requirements, and applicable law.
 
 ## Architecture
@@ -236,8 +240,8 @@ graph LR
     B --> D[Prompt and Plan Runtime]
     B --> E[Report and Export Engine]
     B --> F[(Local Workspace<br/>SQLite and files)]
-    B --> G[macOS Keychain]
-    B --> H[TikHub and Model APIs]
+    B --> G[Workspace-private API JSON<br/>0700 directory · 0600 file]
+    B --> H[TikHub API]
     C --> F
     C --> H
     D --> F
@@ -260,17 +264,18 @@ graph LR
 | Application identifier | `com.steven.sortlytic` | `apps/macos/src-tauri/tauri.conf.json` |
 | Default workspace | `default-workspace` | Created under the macOS app data directory |
 | Local persistence | SQLite, raw records, reports, and exports | Stored inside the active workspace |
+| API profile registry | TikHub and AI profiles plus plaintext credentials | `secrets/api-config.json` inside the active workspace |
 | Updater endpoint | `https://github.com/ljiulong/sortlytic/releases/latest/download/latest.json` | Tauri updater configuration |
 
 ### In-app settings
 
 | Setting | Purpose | Storage |
 |---|---|---|
-| TikHub API domain | Selects `api.tikhub.io` or `api.tikhub.dev` for the current network | Workspace database |
-| TikHub token | Authenticates collection and account checks | macOS Keychain |
-| Model provider | Stores provider format, endpoint, region, policies, and health status | Workspace database |
-| Model API key | Authenticates provider connection tests | macOS Keychain |
-| Default model profile | Records model capabilities and the active model choice | Workspace database |
+| TikHub profiles | Stores named accounts, domains, validation summaries, and the current profile | Private API registry JSON |
+| TikHub token | Authenticates collection and account checks | Plaintext credential in private API registry JSON |
+| AI profiles | Stores named providers, API formats, endpoints, default models, validation status, and the current profile | Private API registry JSON |
+| AI API key | Satisfies local AI profile validation; Ollama may omit it | Plaintext credential in private API registry JSON |
+| Runtime profile mirror | Supports internal queries and immutable task binding without plaintext keys | Workspace SQLite database |
 
 ### Release secrets
 
@@ -319,8 +324,8 @@ Do not commit signing keys, API tokens, or exported credentials to the repositor
 | Tauri 2 | Native macOS application shell and command bridge |
 | Rust | Workspace, collection, task, prompt, security, and export logic |
 | SQLite and rusqlite | Local transactional workspace storage |
-| macOS Keychain | API credential storage through scoped key references |
-| reqwest | TikHub and provider connection requests |
+| Private JSON registry | API profile and plaintext credential storage with `0700` directory and `0600` file permissions |
+| reqwest | TikHub account tests and collection requests |
 | rust_xlsxwriter | Native XLSX report generation |
 
 ### Quality and delivery
