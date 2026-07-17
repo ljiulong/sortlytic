@@ -370,6 +370,40 @@ Local updater builds require `TAURI_SIGNING_PRIVATE_KEY` and, when applicable, `
 
 Every push to `main` runs [`release-macos`](.github/workflows/release-macos.yml) after CI passes. semantic-release derives the version from Conventional Commits: `fix` and `revert` produce a patch release, `feat` produces a minor release, and a `BREAKING CHANGE` produces a major release. The workflow synchronizes `package.json`, `tauri.conf.json`, and `Cargo.toml`, creates the `app-vX.Y.Z` tag as a draft release, builds signed updater files plus Apple Silicon and Intel `.app` and `.dmg` artifacts, and publishes the release only after both architectures succeed. Manual dispatch accepts only an optional existing `app-vX.Y.Z` tag through `rebuild_tag` to rebuild its artifacts.
 
+#### What semantic-release owns
+
+For a normal push to `main`, `semantic-release` is responsible for the release decision and release metadata:
+
+- It analyzes English Conventional Commit titles to decide whether a release is needed and whether the next version is a patch, minor, or major release.
+- It assigns the next version and synchronizes the application version in `apps/macos/package.json`, `apps/macos/src-tauri/tauri.conf.json`, `apps/macos/src-tauri/Cargo.toml`, and `apps/macos/src-tauri/Cargo.lock`.
+- It creates the `app-vX.Y.Z` Git tag.
+- It generates the release notes and creates the draft GitHub Release named `Sortlytic vX.Y.Z`.
+
+Release-relevant commit titles must be written in English and use the Conventional Commits format. Use titles such as `feat: add a collection target`, `fix: preserve the request limit`, or `revert: ...`. Add a `BREAKING CHANGE: ...` footer when the change requires a major release. Do not choose a release number, tag, or release notes manually; the configured `semantic-release` plugins own those values.
+
+#### Build and publication order
+
+The normal workflow publishes only after the complete release pipeline succeeds:
+
+1. `verify` runs the reusable CI workflow against the pushed commit.
+2. `release` runs `semantic-release`. If it creates a new release, the workflow checks out the resulting tag and keeps the GitHub Release in draft state.
+3. `build-and-release` runs a macOS matrix for `aarch64-apple-darwin` (Apple Silicon) and `x86_64-apple-darwin` (Intel). Each job builds and uploads `.app` and `.dmg` bundles plus the Tauri updater artifacts to the same tagged draft Release. The two jobs use `--bundles app,dmg`; updater artifacts are enabled by `src-tauri/tauri.conf.json`.
+4. `finalize-release` rewrites `latest.json` to use direct GitHub Release download URLs, copies the Release notes into the manifest, verifies that both platform entries have non-empty signatures, uploads the normalized manifest, and marks the draft Release as the latest public release.
+
+If `semantic-release` finds no release-worthy commit, the build matrix is skipped. A release is not made public while either macOS architecture is missing or failed.
+
+#### Updater verification and in-app installation
+
+The Tauri updater uses the public key and `latest.json` endpoint configured in `apps/macos/src-tauri/tauri.conf.json`. The release finalization check requires a non-empty signature for every platform entry. In a packaged Sortlytic app, open **Settings → Automatic Updates**, select **Check for Updates**, review the version and Release notes, then select **Download and Restart**. The updater downloads and installs the signed artifact and relaunches the app. Browser preview does not have the updater permission; Apple Developer ID signing and notarization are a separate macOS distribution concern.
+
+#### Recovery rebuilds with `rebuild_tag`
+
+Use **Run workflow** with `rebuild_tag` only when rebuilding an existing release. The value must match `app-vX.Y.Z`; the workflow verifies that the Git tag and the corresponding GitHub Release exist, checks out that tag for CI and packaging, and skips `semantic-release`. It then rebuilds both macOS targets, uploads the artifacts to the existing Release, and refreshes its updater manifest without creating a new version, tag, or Release. The normal draft-publication command is skipped for this recovery path.
+
+#### Apple signing and notarization boundary
+
+The current workflow expects `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` for updater artifact signing, but it does not configure an Apple Developer ID certificate or notarization credentials. Updater signatures authenticate the updater artifacts; they do not replace Apple code signing or notarization, and they do not guarantee that Gatekeeper will accept a browser-downloaded app. Download only from the official Sortlytic Release, select the DMG that matches the Mac architecture, and follow [First launch and the “damaged” alert](#first-launch-and-the-damaged-alert) if macOS blocks the app. Do not disable Gatekeeper system-wide.
+
 ## Contributing
 
 1. Fork the repository.
