@@ -1,5 +1,7 @@
 import { CheckCircle2, Download, RefreshCcw, ShieldCheck } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import type { AppUpdateInfo } from './backend-api'
+import './i18n'
 import './UpdateSettingsPanel.css'
 
 type UpdateSettingsPanelProps = {
@@ -23,19 +25,24 @@ function UpdateSettingsPanel({
   checkForUpdate,
   installUpdate,
 }: UpdateSettingsPanelProps) {
+  const { t } = useTranslation('updates')
   const statusTone = updateError ? 'danger' : update ? 'success' : hasCheckedForUpdate ? 'info' : 'warning'
   const statusLabel = updateError
-    ? '检查失败'
+    ? t('status.checkFailed')
     : update
-      ? '有新版本'
+      ? t('status.available')
       : hasCheckedForUpdate
-        ? '已是最新'
+        ? t('status.latest')
         : isTauriApp
-          ? '尚未检查'
-          : '打包应用可用'
+          ? t('status.notChecked')
+          : t('status.packagedOnly')
   const summary = update
-    ? `发现版本 ${update.version}，可以立即下载并重启应用`
-    : updateError ?? (hasCheckedForUpdate ? '当前版本已经是最新版本' : '发布后可从 GitHub 安全获取签名更新')
+    ? t('summary.available', { version: update.version })
+    : updateError
+      ? t('summary.checkFailed')
+      : hasCheckedForUpdate
+        ? t('summary.latest')
+        : t('summary.notChecked')
 
   return (
     <section className="update-settings" aria-labelledby="update-settings-heading">
@@ -45,9 +52,9 @@ function UpdateSettingsPanel({
             {update ? <CheckCircle2 size={17} aria-hidden="true" /> : <ShieldCheck size={17} aria-hidden="true" />}
           </span>
           <div>
-            <p className="eyebrow">自动更新</p>
-            <h3 id="update-settings-heading">客户端版本</h3>
-            <p>只检查和下载官方发布的 macOS 更新包。</p>
+            <p className="eyebrow">{t('eyebrow')}</p>
+            <h3 id="update-settings-heading">{t('title')}</h3>
+            <p>{t('description')}</p>
           </div>
         </div>
         <span className="status-pill" data-tone={statusTone}>{statusLabel}</span>
@@ -57,19 +64,21 @@ function UpdateSettingsPanel({
         <strong>{summary}</strong>
         <p>
           {isTauriApp
-            ? '更新包经过签名校验，安装完成后应用会自动重启。'
-            : '浏览器预览不具备更新权限，请打开打包后的 macOS 应用。'}
+            ? t('body.signedInstall')
+            : t('body.browserPreview')}
         </p>
-        {update?.body ? (
+        {update?.body?.trim() ? (
           <section className="update-settings__notes" aria-labelledby="update-notes-heading">
-            <h4 id="update-notes-heading">版本说明</h4>
+            <h4 id="update-notes-heading">{t('notes.title')}</h4>
             <p>{update.body}</p>
           </section>
-        ) : null}
+        ) : (
+          <p className="update-settings__notes-empty">{t('notes.empty')}</p>
+        )}
       </div>
 
       <footer className="update-settings__footer">
-        <span>官方发布源 · 签名校验 · 本地安装</span>
+        <span>{t('footer')}</span>
         <div className="update-settings__actions">
           <button
             className="ghost-button"
@@ -78,7 +87,7 @@ function UpdateSettingsPanel({
             onClick={() => void checkForUpdate().catch(() => undefined)}
           >
             <RefreshCcw size={16} aria-hidden="true" />
-            {isCheckingForUpdate ? '正在检查' : '检查更新'}
+            {isCheckingForUpdate ? t('actions.checking') : t('actions.check')}
           </button>
           {update ? (
             <button
@@ -88,7 +97,7 @@ function UpdateSettingsPanel({
               onClick={() => void installUpdate().catch(() => undefined)}
             >
               <Download size={16} aria-hidden="true" />
-              {isInstallingUpdate ? '正在安装' : '下载并重启'}
+              {isInstallingUpdate ? t('actions.installing') : t('actions.install')}
             </button>
           ) : null}
         </div>

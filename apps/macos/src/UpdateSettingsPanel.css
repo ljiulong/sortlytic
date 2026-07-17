@@ -94,6 +94,17 @@
 
 .update-settings__notes p {
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.update-settings__notes-empty {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 
 .update-settings__footer {
