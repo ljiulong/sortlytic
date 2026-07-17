@@ -47,6 +47,13 @@ describe('Dashboard', () => {
     expect(markup).toContain('正在读取真实数据')
   })
 
+  it('运行概览的主指标不使用反相黑底', () => {
+    const markup = renderDashboard()
+
+    expect(markup).not.toContain('overview-primary-metric')
+    expect(markup).toContain('overview-fact overview-fact--lead')
+  })
+
   it('有真实记录时显示数据表和对应来源检查区', () => {
     const markup = renderDashboard({
       records: [{

@@ -99,7 +99,7 @@ function OverviewSummary({
         <StatusPill tone={toneForHealth(health)} label={health} />
       </header>
       <div className="overview-summary__body">
-        <div className="overview-primary-metric" data-tone={primaryMetric.tone}>
+        <div className="overview-fact overview-fact--lead" data-tone={primaryMetric.tone}>
           <span>{primaryMetric.label}</span>
           <strong data-available={metricIsAvailable(primaryMetric.value)}>{primaryMetric.value}</strong>
           <p>{primaryMetric.delta}</p>
