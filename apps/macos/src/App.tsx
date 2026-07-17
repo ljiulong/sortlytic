@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 import './App.css'
 import './App.responsive.css'
-import { type WorkbenchRuntimeData, useWorkbenchBackend } from './use-workbench-backend'
+import { useWorkbenchBackend } from './use-workbench-backend'
 import { CollectionBuilder, StatusPill } from './CollectionBuilder'
 import AppLogo from './AppLogo'
 import Dashboard from './Dashboard'
@@ -90,7 +90,6 @@ function Workbench() {
           actionMessage={backend.actionMessage}
           isInitializing={backend.isInitializing}
           onOpenGuide={() => setActiveNav('guide')}
-          workspace={data.workspace}
         />
         {activeNav === 'guide' ? (
           <div className={pageLayoutClassName}>
@@ -150,20 +149,18 @@ function TopBar({
   actionMessage,
   isInitializing,
   onOpenGuide,
-  workspace,
 }: {
   activeNav: NavKey
   actionMessage: string
   isInitializing: boolean
   onOpenGuide: () => void
-  workspace: WorkbenchRuntimeData['workspace']
 }) {
   const currentPage = pageMeta[activeNav]
 
   return (
     <header className="topbar">
       <div className="topbar-copy">
-        <p className="eyebrow">{workspace.name}</p>
+        <p className="eyebrow">{currentPage.context}</p>
         <h1>{currentPage.title}</h1>
         <p className="page-description">{currentPage.description}</p>
       </div>
