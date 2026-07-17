@@ -87,7 +87,7 @@ describe('language configuration', () => {
     expect(globalThis.localStorage.getItem(languageStorageKey)).toBe('en-US')
   })
 
-  it('keeps a session language change when local storage is unavailable', async () => {
+  it('reports persistence failure while keeping the session language change', async () => {
     const originalStorage = globalThis.localStorage
     Object.defineProperty(globalThis, 'localStorage', {
       configurable: true,
@@ -102,7 +102,9 @@ describe('language configuration', () => {
     })
 
     try {
-      await expect(changeAppLanguage('en-US')).resolves.toBeUndefined()
+      await expect(changeAppLanguage('en-US')).rejects.toThrow(
+        'LANGUAGE_PERSISTENCE_FAILED',
+      )
       expect(i18n.language).toBe('en-US')
     } finally {
       Object.defineProperty(globalThis, 'localStorage', {

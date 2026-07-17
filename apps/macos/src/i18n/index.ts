@@ -59,9 +59,14 @@ export async function changeAppLanguage(language: AppLanguage): Promise<void> {
   await i18n.changeLanguage(language)
 
   try {
-    globalThis.localStorage?.setItem(languageStorageKey, language)
-  } catch {
-    // Language changes remain active for this session when storage is unavailable.
+    const storage = globalThis.localStorage
+    if (!storage) throw new Error('storage unavailable')
+    storage.setItem(languageStorageKey, language)
+    if (storage.getItem(languageStorageKey) !== language) {
+      throw new Error('stored value mismatch')
+    }
+  } catch (cause) {
+    throw new Error('LANGUAGE_PERSISTENCE_FAILED', { cause })
   }
 }
 
