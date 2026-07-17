@@ -11,6 +11,7 @@ import {
   getLatestCollectionPlan,
   installAppUpdate,
   listLatestTaskRuns,
+  listTaskLogs,
   quoteTikhubConnectorPrice,
   type TaskRunView,
   updateCollectionTask,
@@ -207,6 +208,17 @@ describe('任务页动作', () => {
     await listLatestTaskRuns()
 
     expect(invokeMock).toHaveBeenCalledWith('list_latest_task_runs', {
+      rootPath: null,
+    })
+  })
+
+  it('按最新运行 ID 读取经过后端脱敏的任务日志', async () => {
+    invokeMock.mockResolvedValue([])
+
+    await listTaskLogs('run-2')
+
+    expect(invokeMock).toHaveBeenCalledWith('list_task_logs', {
+      taskRunId: 'run-2',
       rootPath: null,
     })
   })

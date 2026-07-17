@@ -113,6 +113,16 @@ export type TaskRunView = {
   cost_actual_json: Record<string, unknown>
 }
 
+export type TaskLogView = {
+  id: string
+  task_run_id: string
+  stage: string
+  level: string
+  message: string
+  safe_details_json: unknown
+  created_at: string
+}
+
 export type PromptTemplateView = {
   id: string
   template_key: string
@@ -214,6 +224,13 @@ export function listTasks(status?: string) {
 
 export function listLatestTaskRuns() {
   return invoke<TaskRunView[]>('list_latest_task_runs', { rootPath: null })
+}
+
+export function listTaskLogs(taskRunId: string) {
+  return invoke<TaskLogView[]>('list_task_logs', {
+    taskRunId,
+    rootPath: null,
+  })
 }
 
 export function createCollectionTask(input: {
