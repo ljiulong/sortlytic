@@ -113,9 +113,12 @@ export type WorkbenchRuntimeData = {
     platform: Platform
     status: TaskStatus
     source: string
+    sourceType?: 'natural_language' | 'form'
     progress: number
     records: number
     cost: string
+    requestCount?: number
+    dataTypeCode?: string
   }>
   records: SocialRecord[]
   promptRuns: Array<{ name: string; status: '通过' | '失败'; provider: string; diff: string }>

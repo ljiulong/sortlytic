@@ -12,9 +12,12 @@ export function mapTaskRow(task: CollectionTaskView) {
     platform: toUiPlatform(platforms[0] ?? 'xiaohongshu'),
     status: toUiTaskStatus(task.status),
     source: task.source_type === 'natural_language' ? '自然语言' : '表单式',
+    sourceType: task.source_type === 'natural_language' ? 'natural_language' : 'form',
     progress: progressForTaskStatus(task.status),
     records: 0,
     cost: `${requestCount ? `预计 ${requestCount} 次请求` : '尚无请求估算'} · ${toUiDataType(dataTypes[0] ?? 'comments')}`,
+    requestCount,
+    dataTypeCode: dataTypes[0] ?? 'comments',
   } as const
 }
 

@@ -19,6 +19,9 @@ describe('workbench task status mapping', () => {
     })).toMatchObject({
       id: 'task-cancelled',
       status: '已取消',
+      sourceType: 'form',
+      requestCount: 0,
+      dataTypeCode: 'keyword_search',
     })
   })
 })
