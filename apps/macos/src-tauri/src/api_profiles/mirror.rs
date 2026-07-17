@@ -106,7 +106,10 @@ pub(super) fn mirror_registry(root_path: &Path, registry: &ApiProfileRegistry) -
     .map_err(|error| database_error("无法提交 API 配置镜像", error))
 }
 
-fn rebuild_mirror(transaction: &Transaction<'_>, registry: &ApiProfileRegistry) -> AppResult<()> {
+pub(super) fn rebuild_mirror(
+  transaction: &Transaction<'_>,
+  registry: &ApiProfileRegistry,
+) -> AppResult<()> {
   transaction
     .execute("DELETE FROM tikhub_connector", [])
     .map_err(|error| database_error("无法清理 TikHub 派生镜像", error))?;

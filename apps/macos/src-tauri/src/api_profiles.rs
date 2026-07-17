@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use chrono::DateTime;
+use rusqlite::Transaction;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -221,6 +222,19 @@ pub fn sync_api_profile_mirror(root_path: impl AsRef<Path>) -> AppResult<()> {
     concurrency_tests::run_before_mirror_hook(root_path);
     mirror::mirror_registry(root_path, &registry)
   })
+}
+
+pub(crate) fn rebuild_api_profile_mirror(
+  transaction: &Transaction<'_>,
+  registry: &ApiProfileRegistry,
+) -> AppResult<()> {
+  mirror::rebuild_mirror(transaction, registry)
+}
+
+pub(crate) fn with_api_profile_mirror_lock<T>(
+  operation: impl FnOnce() -> AppResult<T>,
+) -> AppResult<T> {
+  with_mirror_lock(operation)
 }
 
 fn with_registry_lock<T>(operation: impl FnOnce() -> AppResult<T>) -> AppResult<T> {
