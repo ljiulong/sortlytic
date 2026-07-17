@@ -11,6 +11,18 @@
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
     "core:window:allow-start-dragging",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://github.com/ljiulong/sortlytic" },
+        { "url": "https://github.com/ljiulong/sortlytic/*" },
+        { "url": "https://user.tikhub.io/register" },
+        { "url": "https://user.tikhub.io/login" },
+        { "url": "https://docs.tikhub.io/" },
+        { "url": "https://tikhub.io/getting-started" },
+        { "url": "https://tikhub.io/pricing" }
+      ]
+    },
     "process:default",
     "updater:default"
   ]
