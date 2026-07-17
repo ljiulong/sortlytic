@@ -30,22 +30,11 @@ pub(super) fn load_runtime_snapshot(
          AND plan.plan_json = snapshot.plan_json
          AND plan.validation_status = 'valid'
          AND plan.confirmed_by_user = 1
-       JOIN tikhub_connector AS connector
-         ON connector.id = snapshot.connector_id
-        AND connector.workspace_id = snapshot.workspace_id
-       JOIN secret_ref AS secret ON secret.id = snapshot.secret_ref_id
+       JOIN workspace ON workspace.id = snapshot.workspace_id
        WHERE snapshot.task_run_id = ?1
-         AND connector.enabled = 1
-         AND connector.config_version = snapshot.connector_config_version
-         AND connector.base_url = snapshot.base_url
-         AND connector.secret_ref_id = snapshot.secret_ref_id
-         AND connector.last_tested_at = snapshot.connector_tested_at
-         AND connector.last_test_status = snapshot.connector_test_status
-         AND secret.credential_revision = snapshot.secret_revision
-         AND secret.provider_type = snapshot.secret_provider_type
-         AND secret.provider_id = snapshot.secret_provider_id
          AND snapshot.connector_type = 'tikhub'
-         AND snapshot.secret_provider_type = 'tikhub'",
+         AND snapshot.secret_provider_type = 'tikhub'
+         AND snapshot.connector_test_status = 'success'",
       params![run_id],
       |row| {
         Ok(RuntimeSnapshot {
@@ -72,7 +61,7 @@ pub(super) fn load_runtime_snapshot(
     == 1;
   Err(worker_error(
     "RUNTIME_SNAPSHOT_NOT_READY",
-    "运行时快照缺失或已与当前连接器、密钥版本不一致",
+    "运行时快照缺失或已与绑定的工作区、计划不一致",
     !has_snapshot,
   ))
 }

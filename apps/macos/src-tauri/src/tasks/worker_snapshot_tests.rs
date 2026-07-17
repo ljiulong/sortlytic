@@ -13,7 +13,7 @@ use crate::tasks::{
 use crate::workspace::{create_workspace, open_workspace_database, DATABASE_FILE_NAME};
 
 #[test]
-fn worker_rejects_a_connector_changed_after_enqueue() {
+fn runtime_snapshot_remains_valid_after_current_connector_switch() {
   let root = std::env::temp_dir().join(format!("worker-snapshot-stale-{}", Uuid::new_v4()));
   create_workspace("快照过期测试", &root).expect("workspace should be created");
   let task = create_collection_task(
@@ -57,6 +57,14 @@ fn worker_rejects_a_connector_changed_after_enqueue() {
   confirm_collection_plan(&root, &task.id, &plan.id).expect("plan should be confirmed");
   insert_ready_connector(&root);
   enqueue_task(&root, &task.id).expect("task should be queued");
+  let claimed = claim_next_task(&root)
+    .expect("task claim should succeed")
+    .expect("queued task should be claimed");
+
+  let original = load_runtime_snapshot(&root, &claimed.id)
+    .expect("claimed run should load its immutable snapshot");
+  assert_eq!(original.base_url, "https://api.tikhub.dev");
+  assert_eq!(original.secret_ref_id, "secret-1");
 
   let connection =
     open_workspace_database(root.join(DATABASE_FILE_NAME)).expect("database should open");
@@ -67,14 +75,10 @@ fn worker_rejects_a_connector_changed_after_enqueue() {
     )
     .expect("connector should be changed");
 
-  let run = execute_next_task(&root)
-    .expect("worker should record the stale snapshot failure")
-    .expect("worker should claim the queued run");
-  assert_eq!(
-    run.error_code.as_deref(),
-    Some("RUNTIME_SNAPSHOT_NOT_READY")
-  );
-  assert!(!run.retryable);
+  let after_switch = load_runtime_snapshot(&root, &claimed.id)
+    .expect("running task should keep using its immutable snapshot after a switch");
+  assert_eq!(after_switch.base_url, original.base_url);
+  assert_eq!(after_switch.secret_ref_id, original.secret_ref_id);
   std::fs::remove_dir_all(root).ok();
 }
 
