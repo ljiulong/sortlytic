@@ -1,26 +1,44 @@
+use std::path::Path;
+
 use serde_json::Value;
 
-use crate::collection::validate_collection_plan;
-use crate::planning::generate_plan_json;
+use crate::ai::run_collection_prompt_regression;
+use crate::collection::validate_collection_plan_v3;
 
 use super::{PromptRegressionCaseView, PromptVersionView};
 
+pub(super) struct PromptCaseEvaluation {
+  pub schema_valid: bool,
+  pub rules_valid: bool,
+  pub error_summary: Option<String>,
+  pub provider_id: Option<String>,
+  pub model_id: Option<String>,
+}
+
 pub(super) fn evaluate_prompt_case(
+  root_path: &Path,
   version: &PromptVersionView,
   case: &PromptRegressionCaseView,
-) -> (bool, bool, Option<String>) {
+) -> PromptCaseEvaluation {
   let mut schema_errors = Vec::new();
   let mut rule_errors = Vec::new();
-
-  match case.expected_schema_id.as_str() {
-    "collection_plan_v1" => {
-      evaluate_collection_case(version, case, &mut schema_errors, &mut rule_errors)
-    }
+  let (provider_id, model_id) = match case.expected_schema_id.as_str() {
+    "collection_plan_v3" => evaluate_collection_case(
+      root_path,
+      version,
+      case,
+      &mut schema_errors,
+      &mut rule_errors,
+    ),
     "analysis_summary_v1" | "sentiment_v1" => {
-      evaluate_analysis_case(version, case, &mut schema_errors, &mut rule_errors)
+      evaluate_analysis_case(version, case, &mut schema_errors, &mut rule_errors);
+      (None, None)
     }
-    schema_id => schema_errors.push(format!("不支持的回归 Schema：{schema_id}")),
-  }
+    schema_id => {
+      schema_errors.push(format!("不支持的回归 Schema：{schema_id}"));
+      (None, None)
+    }
+  };
 
   let schema_valid = schema_errors.is_empty();
   let rules_valid = rule_errors.is_empty();
@@ -32,15 +50,22 @@ pub(super) fn evaluate_prompt_case(
       .join("；")
   });
 
-  (schema_valid, rules_valid, error_summary)
+  PromptCaseEvaluation {
+    schema_valid,
+    rules_valid,
+    error_summary,
+    provider_id,
+    model_id,
+  }
 }
 
 fn evaluate_collection_case(
+  root_path: &Path,
   version: &PromptVersionView,
   case: &PromptRegressionCaseView,
   schema_errors: &mut Vec<String>,
   rule_errors: &mut Vec<String>,
-) {
+) -> (Option<String>, Option<String>) {
   let Some(text) = case
     .input_json
     .get("text")
@@ -49,27 +74,45 @@ fn evaluate_collection_case(
     .filter(|text| !text.is_empty())
   else {
     schema_errors.push("input_json.text 必须是非空字符串".to_string());
-    return;
+    return (None, None);
   };
 
   require_terms(
     &version.content,
     &[
       "json",
+      "collection_plan_v3",
       "input_json.text",
+      "schema_version",
       "platforms",
       "data_types",
+      "internal_data_types",
       "region",
       "steps",
+      "record_limit",
+      "request_limit",
+      "budget_limit",
+      "output_rules",
       "missing_fields",
       "requires_user_confirmation",
+      "证据",
       "不得猜测",
     ],
     rule_errors,
   );
+  if !rule_errors.is_empty() {
+    schema_errors.push("候选提示词静态约束未通过，未执行真实模型回归".to_string());
+    return (None, None);
+  }
 
-  let output = generate_plan_json(text);
-  validate_collection_output_schema(&output, schema_errors);
+  let response = match run_collection_prompt_regression(root_path, &version.content, text) {
+    Ok(response) => response,
+    Err(error) => {
+      schema_errors.push(format!("真实模型回归失败：{}", error.message));
+      return (None, None);
+    }
+  };
+  let output = response.output_json.clone();
   compare_string_array_rule(
     &output,
     "platforms",
@@ -92,7 +135,7 @@ fn evaluate_collection_case(
     rule_errors,
   );
 
-  let validation = validate_collection_plan(&output);
+  let validation = validate_collection_plan_v3(&output);
   if let Some(expected_valid) = case
     .expected_rules_json
     .get("expected_plan_valid")
@@ -121,6 +164,11 @@ fn evaluate_collection_case(
       rule_errors.push(format!("计划校验错误未包含 {expected_error}"));
     }
   }
+  if !validation.valid {
+    schema_errors.extend(validation.errors);
+  }
+
+  (Some(response.provider_id), Some(response.model_id))
 }
 
 fn evaluate_analysis_case(
@@ -164,27 +212,6 @@ fn evaluate_analysis_case(
       || !(version.content.contains("空结果") || version.content.contains("不得编造")))
   {
     rule_errors.push("提示词未定义空 records 的无证据处理规则".to_string());
-  }
-}
-
-fn validate_collection_output_schema(output: &Value, errors: &mut Vec<String>) {
-  let Some(object) = output.as_object() else {
-    errors.push("规划器输出必须是 JSON 对象".to_string());
-    return;
-  };
-  for field in ["platforms", "data_types", "steps", "missing_fields"] {
-    if !object.get(field).is_some_and(Value::is_array) {
-      errors.push(format!("规划器输出字段 {field} 必须是数组"));
-    }
-  }
-  if !object.contains_key("region") {
-    errors.push("规划器输出缺少 region".to_string());
-  }
-  if !object
-    .get("requires_user_confirmation")
-    .is_some_and(Value::is_boolean)
-  {
-    errors.push("规划器输出 requires_user_confirmation 必须是布尔值".to_string());
   }
 }
 
