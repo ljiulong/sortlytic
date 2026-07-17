@@ -33,6 +33,7 @@ import {
   type PrimaryNavKey,
   primaryNavigation,
 } from './navigation'
+import { pageMeta } from './page-meta'
 import {
   type SocialRecord,
 } from './workbench-data'
@@ -105,6 +106,7 @@ function Workbench() {
       </aside>
       <main className="workspace" id="main-content" tabIndex={-1}>
         <TopBar
+          activeNav={activeNav}
           actionMessage={backend.actionMessage}
           isInitializing={backend.isInitializing}
           onOpenGuide={() => setActiveNav('guide')}
@@ -204,24 +206,31 @@ function Workbench() {
   )
 }
 function TopBar({
+  activeNav,
   actionMessage,
   isInitializing,
   onOpenGuide,
   workspace,
 }: {
+  activeNav: NavKey
   actionMessage: string
   isInitializing: boolean
   onOpenGuide: () => void
   workspace: WorkbenchRuntimeData['workspace']
 }) {
+  const currentPage = pageMeta[activeNav]
+
   return (
     <header className="topbar">
-      <div>
-        <p className="eyebrow">工作区</p>
-        <h1>{workspace.name}</h1>
-        <p className="muted-text">{isInitializing ? '正在连接本地后端' : actionMessage}</p>
+      <div className="topbar-copy">
+        <p className="eyebrow">{workspace.name}</p>
+        <h1>{currentPage.title}</h1>
+        <p className="page-description">{currentPage.description}</p>
       </div>
       <div className="topbar-actions">
+        <p className="topbar-status" aria-live="polite">
+          {isInitializing ? '正在连接本地后端' : actionMessage}
+        </p>
         <ThemeToggle />
         <button
           aria-label="打开使用指南"
