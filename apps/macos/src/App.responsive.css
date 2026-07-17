@@ -3,7 +3,7 @@
     grid-template-columns: 208px minmax(0, 1fr);
   }
 
-  .main-grid {
+  .page-layout--split {
     grid-template-columns: minmax(0, 1fr) 320px;
   }
 
@@ -21,7 +21,7 @@
     padding-inline: 20px;
   }
 
-  .main-grid {
+  .page-layout--split {
     grid-template-columns: 1fr;
   }
 
@@ -77,6 +77,25 @@
 }
 
 @media (max-width: 760px) {
+  .topbar {
+    flex-wrap: wrap;
+  }
+
+  .topbar-copy {
+    flex: 1 1 280px;
+  }
+
+  .topbar-actions {
+    flex: 1 1 280px;
+  }
+
+  .topbar-status {
+    order: 3;
+    flex-basis: 100%;
+    max-width: none;
+    text-align: right;
+  }
+
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -137,8 +156,8 @@
 
   .topbar {
     align-items: flex-start;
-    margin-bottom: 12px;
-    padding-bottom: 14px;
+    margin-bottom: 18px;
+    padding-top: 2px;
   }
 
   .topbar-actions {
@@ -150,7 +169,7 @@
   }
 
   h1 {
-    font-size: 21px;
+    font-size: 24px;
   }
 
   .glass-panel {
@@ -158,8 +177,8 @@
   }
 
   .glass-panel > .section-heading {
-    margin: -14px -14px 14px;
-    padding: 13px 14px 12px;
+    margin-bottom: 14px;
+    padding: 0;
   }
 
   .section-heading {
