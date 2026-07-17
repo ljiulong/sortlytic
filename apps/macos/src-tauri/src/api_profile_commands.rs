@@ -306,6 +306,129 @@ mod tests {
     }
   }
 
+  fn successful_tikhub_test() -> TikhubConnectionTestResult {
+    TikhubConnectionTestResult {
+      success: true,
+      base_url: "https://api.tikhub.io".to_string(),
+      masked_email: Some("s***n@example.test".to_string()),
+      balance: Some(4.0),
+      free_credit: Some(1.0),
+      available_credit: Some(5.0),
+      email_verified: Some(true),
+      api_key_status: Some(1),
+      daily_usage_json: json!({"data":{"total_requests":12}}),
+      message: "TikHub Token 可用".to_string(),
+    }
+  }
+
+  #[test]
+  fn ai_profile_requires_explicit_activation_after_active_profile_is_deleted() {
+    let root = workspace("ai-explicit-reactivation");
+    let first = service::save_profile(&root, ai_input(None, "OpenAI A", Some(AI_SECRET))).unwrap();
+    let first_id = first.ai_profiles.values().next().unwrap().id.clone();
+    let first_test = service::test_profile(&root, ApiProfileKind::Ai, &first_id).unwrap();
+    assert_eq!(
+      first_test.registry.active_profile_ids.ai.as_deref(),
+      Some(first_id.as_str())
+    );
+
+    let second = service::save_profile(
+      &root,
+      ai_input(None, "OpenAI B", Some("sk-second-123456789")),
+    )
+    .unwrap();
+    let second_id = second
+      .ai_profiles
+      .values()
+      .find(|profile| profile.name == "OpenAI B")
+      .unwrap()
+      .id
+      .clone();
+    let second_test = service::test_profile(&root, ApiProfileKind::Ai, &second_id).unwrap();
+    assert_eq!(
+      second_test.registry.active_profile_ids.ai.as_deref(),
+      Some(first_id.as_str())
+    );
+
+    let deleted = service::delete_profile(&root, ApiProfileKind::Ai, &first_id).unwrap();
+    assert!(deleted.active_profile_ids.ai.is_none());
+    let retested = service::test_profile(&root, ApiProfileKind::Ai, &second_id).unwrap();
+    assert!(retested.registry.active_profile_ids.ai.is_none());
+    let activated = service::activate_profile(&root, ApiProfileKind::Ai, &second_id).unwrap();
+    assert_eq!(
+      activated.active_profile_ids.ai.as_deref(),
+      Some(second_id.as_str())
+    );
+    fs::remove_dir_all(root).ok();
+  }
+
+  #[test]
+  fn tikhub_profile_requires_explicit_activation_after_active_profile_is_deleted() {
+    let root = workspace("tikhub-explicit-reactivation");
+    let first = service::save_profile(
+      &root,
+      SaveApiProfileInput::Tikhub {
+        id: None,
+        name: "TikHub A".to_string(),
+        base_url: "https://api.tikhub.io".to_string(),
+        api_key: Some(TIKHUB_SECRET.to_string()),
+      },
+    )
+    .unwrap();
+    let first_id = first.tikhub_profiles.values().next().unwrap().id.clone();
+    let first_test =
+      service::test_profile_with(&root, ApiProfileKind::Tikhub, &first_id, |_, _, _| {
+        Ok(successful_tikhub_test())
+      })
+      .unwrap();
+    assert_eq!(
+      first_test.registry.active_profile_ids.tikhub.as_deref(),
+      Some(first_id.as_str())
+    );
+
+    let second = service::save_profile(
+      &root,
+      SaveApiProfileInput::Tikhub {
+        id: None,
+        name: "TikHub B".to_string(),
+        base_url: "https://api.tikhub.dev".to_string(),
+        api_key: Some("tk-second-123456789".to_string()),
+      },
+    )
+    .unwrap();
+    let second_id = second
+      .tikhub_profiles
+      .values()
+      .find(|profile| profile.name == "TikHub B")
+      .unwrap()
+      .id
+      .clone();
+    let second_test =
+      service::test_profile_with(&root, ApiProfileKind::Tikhub, &second_id, |_, _, _| {
+        Ok(successful_tikhub_test())
+      })
+      .unwrap();
+    assert_eq!(
+      second_test.registry.active_profile_ids.tikhub.as_deref(),
+      Some(first_id.as_str())
+    );
+
+    let deleted = service::delete_profile(&root, ApiProfileKind::Tikhub, &first_id).unwrap();
+    assert!(deleted.active_profile_ids.tikhub.is_none());
+    let retested =
+      service::test_profile_with(&root, ApiProfileKind::Tikhub, &second_id, |_, _, _| {
+        Ok(successful_tikhub_test())
+      })
+      .unwrap();
+    assert!(retested.registry.active_profile_ids.tikhub.is_none());
+    let activated = service::activate_profile(&root, ApiProfileKind::Tikhub, &second_id).unwrap();
+    assert_eq!(
+      activated.active_profile_ids.tikhub.as_deref(),
+      Some(second_id.as_str())
+    );
+    fs::remove_dir_all(root).ok();
+  }
+
   #[test]
   fn safe_views_switch_profiles_and_keep_blank_edit_keys() {
     let root = workspace("ai");
@@ -402,18 +525,7 @@ mod tests {
     let profile_id = registry.tikhub_profiles.values().next().unwrap().id.clone();
     let success =
       service::test_profile_with(&root, ApiProfileKind::Tikhub, &profile_id, |_, _, _| {
-        Ok(TikhubConnectionTestResult {
-          success: true,
-          base_url: "https://api.tikhub.io".to_string(),
-          masked_email: Some("s***n@example.test".to_string()),
-          balance: Some(4.0),
-          free_credit: Some(1.0),
-          available_credit: Some(5.0),
-          email_verified: Some(true),
-          api_key_status: Some(1),
-          daily_usage_json: json!({"data":{"total_requests":12}}),
-          message: "TikHub Token 可用".to_string(),
-        })
+        Ok(successful_tikhub_test())
       })
       .unwrap();
     assert!(success.success);

@@ -354,11 +354,13 @@ fn persist_tikhub(
     {
       return Err(error("TikHub 配置已在测试期间变更，请重新测试"));
     }
+    let was_successful = profile.status == ApiProfileStatus::Success;
     profile.status = status;
     profile.last_tested_at = Some(now.clone());
     profile.test_summary = summary;
     profile.updated_at = now.clone();
     if status == ApiProfileStatus::Success
+      && !was_successful
       && registry.active_profile_ids.tikhub.is_none()
       && registry.tikhub_profiles.len() == 1
     {
@@ -404,10 +406,15 @@ fn test_ai(root: &Path, id: &str) -> AppResult<ServiceTestResult> {
     {
       return Err(error("AI 配置已在校验期间变更，请重新校验"));
     }
+    let was_successful = current.status == ApiProfileStatus::Success;
     current.status = status;
     current.last_tested_at = Some(now.clone());
     current.updated_at = now.clone();
-    if success && registry.active_profile_ids.ai.is_none() && registry.ai_profiles.len() == 1 {
+    if success
+      && !was_successful
+      && registry.active_profile_ids.ai.is_none()
+      && registry.ai_profiles.len() == 1
+    {
       registry.active_profile_ids.ai = Some(id.to_string());
     } else if !success && registry.active_profile_ids.ai.as_deref() == Some(id) {
       registry.active_profile_ids.ai = None;
