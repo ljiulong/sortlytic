@@ -499,6 +499,9 @@ export function mapBackendData(
 
   const latestRunByTask = new Map(latestRuns.map((run) => [run.task_id, run]))
   const recordCountByTask = new Map(recordCounts.map((count) => [count.task_id, count.record_count]))
+  const taskRecordCounts = tasks.map((task) => Math.max(0, recordCountByTask.get(task.id) ?? 0))
+  const storedRecordCount = taskRecordCounts.reduce((total, count) => total + count, 0)
+  const tasksWithRecords = taskRecordCounts.filter((count) => count > 0).length
 
   return {
     workspace: {
@@ -510,9 +513,16 @@ export function mapBackendData(
     connections: buildConnections(registry),
     metrics: [
       { label: '本地任务', value: String(tasks.length), delta: `${pendingCount} 个待确认`, tone: 'info' },
-      { label: '入库记录', value: '0', delta: '真实记录读取尚未接入', tone: 'info' },
+      {
+        label: '入库记录',
+        value: String(storedRecordCount),
+        delta: storedRecordCount > 0 ? `records_available:${tasksWithRecords}` : '暂无真实记录',
+        tone: storedRecordCount > 0 ? 'success' : 'info',
+      },
       { label: '预计请求', value: String(requestCount), delta: `${queuedCount} 个已入队`, tone: 'warning' },
-      { label: '证据覆盖', value: '未计算', delta: '暂无真实记录', tone: 'info' },
+      ...(storedRecordCount === 0
+        ? [{ label: '证据覆盖', value: '未计算', delta: '暂无真实记录', tone: 'info' as const }]
+        : []),
     ],
     tasks: tasks.map((task) => {
       const row = mapTaskRow(task)

@@ -605,6 +605,13 @@ describe('mapBackendData', () => {
     )
 
     expect(result.tasks[0]?.records).toBe(42)
+    expect(result.metrics).toContainEqual({
+      label: '入库记录',
+      value: '42',
+      delta: 'records_available:1',
+      tone: 'success',
+    })
+    expect(result.metrics.some((metric) => metric.label === '证据覆盖')).toBe(false)
   })
 
   it('把最新运行阶段、安全错误和重试状态关联到对应任务', () => {
