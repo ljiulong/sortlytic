@@ -200,6 +200,10 @@
   box-shadow: var(--shadow-panel);
 }
 
+.workspace-settings:has(.app-select[data-open='true']) {
+  overflow: visible;
+}
+
 .workspace-settings > header {
   display: flex;
   align-items: flex-start;

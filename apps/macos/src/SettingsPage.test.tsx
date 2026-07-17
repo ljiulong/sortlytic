@@ -131,4 +131,11 @@ describe('SettingsPage API 配置入口', () => {
     expect(css).toContain('var(--surface-raised)')
     expect(css).toContain('var(--text-strong)')
   })
+
+  it('语言选择器打开时允许选项弹层超出设置卡片', () => {
+    const css = readFileSync(new URL('./SettingsPage.css', import.meta.url), 'utf8')
+
+    expect(css).toContain('.workspace-settings:has(.app-select[data-open=\'true\'])')
+    expect(css).toContain('overflow: visible')
+  })
 })
