@@ -1,5 +1,5 @@
 use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::thread;
 
@@ -9,11 +9,19 @@ use uuid::Uuid;
 
 use super::*;
 use crate::api_profiles::{
-  save_api_profile_registry, ActiveApiProfileIds, AiApiProfile, ApiCredential, ApiProfileRegistry,
-  CredentialProviderType,
+  save_api_profile_registry, sync_api_profile_mirror, update_api_profile_registry,
+  ActiveApiProfileIds, AiApiProfile, ApiCredential, ApiProfileRegistry, CredentialProviderType,
+  TikhubApiProfile,
 };
-use crate::tasks::{create_collection_task, get_task, CreateCollectionTaskInput};
+use crate::records::list_task_record_counts;
+use crate::tasks::{
+  confirm_collection_plan, create_collection_task, enqueue_task, execute_next_task, get_task,
+  list_task_logs, CreateCollectionTaskInput,
+};
+use crate::tikhub::test_support::override_tikhub_base_url_for_current_test;
 use crate::workspace::create_workspace;
+
+const TIKHUB_E2E_TOKEN: &str = "sortlytic-e2e-tikhub-token";
 
 #[test]
 fn natural_language_generation_requires_an_active_ai_profile() {
@@ -116,6 +124,93 @@ fn text_generation_uses_active_prompt_and_real_provider_response() {
     serde_json::json!(["keyword_search"])
   );
   assert_eq!(runs.len(), 1);
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn natural_language_plan_runs_through_tikhub_and_persists_records() {
+  let root_path = unique_temp_workspace("ai-tikhub-e2e");
+  create_workspace("自然语言采集端到端测试", &root_path).expect("workspace should be created");
+  let plan = valid_keyword_plan();
+  let ai_response = serde_json::json!({
+    "choices": [{ "message": { "content": plan.to_string() } }],
+    "usage": { "prompt_tokens": 44, "completion_tokens": 66 }
+  })
+  .to_string();
+  let (ai_base_url, ai_server) = serve_ai_once(200, ai_response, |request| {
+    assert!(request.starts_with("POST /v1/chat/completions HTTP/1.1"));
+    assert!(request.contains("input_json.text"));
+    assert!(request.contains("collection_plan_v3"));
+    assert!(request.contains("最近 7 天美国 TikTok 汽车内容"));
+  });
+  let ai_profile_id = configure_active_ai(&root_path, ai_base_url);
+  let task = create_collection_task(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "AI 到 TikHub 完整链路".to_string(),
+      source_type: "natural_language".to_string(),
+      platforms: vec!["tiktok".to_string()],
+      data_types: vec!["keyword_search".to_string()],
+    },
+  )
+  .expect("task should be created");
+
+  let generated = generate_collection_plan_from_text(
+    &root_path,
+    GenerateCollectionPlanFromTextInput {
+      task_id: task.id.clone(),
+      intent_text: "采集最近 7 天美国 TikTok 汽车内容，预算 2 美元".to_string(),
+      provider_id: None,
+      model_id: None,
+    },
+  )
+  .expect("AI plan should generate");
+  ai_server.join().expect("AI test server should finish");
+
+  let (tikhub_base_url, tikhub_server) = serve_tikhub_collection_flow();
+  configure_active_tikhub(&root_path);
+  confirm_collection_plan(&root_path, &task.id, &generated.collection_plan.id)
+    .expect("AI plan should be confirmed");
+  let queued = enqueue_task(&root_path, &task.id).expect("task should enqueue");
+  let _base_url_override = override_tikhub_base_url_for_current_test(tikhub_base_url);
+  let completed = execute_next_task(&root_path)
+    .expect("worker should execute")
+    .expect("queued task should exist");
+  assert_eq!(completed.status, "success", "{completed:?}");
+  tikhub_server
+    .join()
+    .expect("TikHub test server should finish");
+
+  let completed_task = get_task(&root_path, &task.id).expect("task should reload");
+  let record_counts = list_task_record_counts(&root_path).expect("record counts should list");
+  let logs = list_task_logs(&root_path, &completed.id).expect("task logs should list");
+  let safe_runtime_output = serde_json::json!({
+    "ai_run": generated.ai_run,
+    "task_run": completed,
+    "task_logs": logs
+  })
+  .to_string();
+
+  assert_eq!(queued.status, "queued");
+  assert_eq!(completed_task.status, "success");
+  assert_eq!(generated.runtime_snapshot.provider_id, ai_profile_id);
+  assert_eq!(generated.runtime_snapshot.model_id, "deepseek-test");
+  assert_eq!(
+    generated.runtime_snapshot.output_schema_id,
+    "collection_plan_v3"
+  );
+  assert_eq!(generated.ai_run.input_tokens, Some(44));
+  assert_eq!(generated.ai_run.output_tokens, Some(66));
+  assert_eq!(
+    record_counts
+      .iter()
+      .find(|count| count.task_id == task.id)
+      .map(|count| count.record_count),
+    Some(1)
+  );
+  assert!(!safe_runtime_output.contains(TIKHUB_E2E_TOKEN));
+  assert!(!safe_runtime_output.contains("sk-ai-secret"));
 
   std::fs::remove_dir_all(root_path).ok();
 }
@@ -278,6 +373,43 @@ fn configure_active_ai(root_path: &Path, base_url: String) -> String {
   profile_id
 }
 
+fn configure_active_tikhub(root_path: &Path) {
+  let profile_id = Uuid::new_v4().to_string();
+  let credential_id = Uuid::new_v4().to_string();
+  let now = Utc::now().to_rfc3339();
+  update_api_profile_registry(root_path, |registry| {
+    registry.tikhub_profiles.insert(
+      profile_id.clone(),
+      TikhubApiProfile {
+        id: profile_id.clone(),
+        name: "端到端 TikHub".to_string(),
+        base_url: "https://api.tikhub.io".to_string(),
+        credential_ref_id: credential_id.clone(),
+        revision: 1,
+        status: ApiProfileStatus::Success,
+        last_tested_at: Some(now.clone()),
+        test_summary: None,
+        created_at: now.clone(),
+        updated_at: now.clone(),
+      },
+    );
+    registry.credentials.insert(
+      credential_id.clone(),
+      ApiCredential {
+        id: credential_id,
+        provider_type: CredentialProviderType::Tikhub,
+        profile_id: profile_id.clone(),
+        revision: 1,
+        secret: TIKHUB_E2E_TOKEN.to_string(),
+      },
+    );
+    registry.active_profile_ids.tikhub = Some(profile_id);
+    Ok(())
+  })
+  .expect("TikHub registry should update");
+  sync_api_profile_mirror(root_path).expect("TikHub profile should mirror into the workspace");
+}
+
 fn serve_ai_once(
   status: u16,
   body: String,
@@ -287,43 +419,124 @@ fn serve_ai_once(
   let address = listener.local_addr().expect("test address should resolve");
   let server = thread::spawn(move || {
     let (mut stream, _) = listener.accept().expect("test server should accept");
-    let mut request = Vec::new();
-    let mut buffer = [0_u8; 16 * 1024];
-    loop {
-      let bytes_read = stream
-        .read(&mut buffer)
-        .expect("request should be readable");
-      if bytes_read == 0 {
-        break;
-      }
-      request.extend_from_slice(&buffer[..bytes_read]);
-      let text = String::from_utf8_lossy(&request);
-      if let Some(header_end) = text.find("\r\n\r\n") {
-        let content_length = text[..header_end]
-          .lines()
-          .find_map(|line| {
-            line
-              .to_ascii_lowercase()
-              .strip_prefix("content-length:")
-              .and_then(|value| value.trim().parse::<usize>().ok())
-          })
-          .unwrap_or(0);
-        if request.len() >= header_end + 4 + content_length {
-          break;
-        }
-      }
-    }
-    let request = String::from_utf8_lossy(&request).into_owned();
+    let request = read_http_request(&mut stream);
     inspect(&request);
     let reason = if status == 200 { "OK" } else { "Unauthorized" };
-    write!(
-      stream,
-      "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-      body.len()
-    )
-    .expect("response should be writable");
+    write_json_response(&mut stream, status, reason, &body);
   });
   (format!("http://{address}"), server)
+}
+
+fn serve_tikhub_collection_flow() -> (String, thread::JoinHandle<()>) {
+  let listener = TcpListener::bind("127.0.0.1:0").expect("TikHub test server should bind");
+  let address = listener.local_addr().expect("test address should resolve");
+  let responses = [
+    (
+      "/api/v1/tikhub/user/get_user_info",
+      serde_json::json!({
+        "code": 200,
+        "user_data": { "balance": 5.0, "free_credit": 1.0 }
+      })
+      .to_string(),
+    ),
+    (
+      "/api/v1/tikhub/user/calculate_price?",
+      serde_json::json!({
+        "code": 200,
+        "data": { "total_price": 0.01, "base_price": 0.01, "currency": "USD" }
+      })
+      .to_string(),
+    ),
+    (
+      "/api/v1/tiktok/app/v3/fetch_video_search_result?",
+      serde_json::json!({
+        "code": 200,
+        "data": {
+          "aweme_list": [{
+            "aweme_id": "video-e2e",
+            "desc": "端到端测试记录",
+            "share_url": "https://www.tiktok.com/@author/video/video-e2e",
+            "author": {
+              "user_id": "author-e2e",
+              "unique_id": "author",
+              "nickname": "测试作者"
+            }
+          }],
+          "has_more": false
+        }
+      })
+      .to_string(),
+    ),
+  ];
+  let server = thread::spawn(move || {
+    for (index, (path_prefix, body)) in responses.into_iter().enumerate() {
+      let (mut stream, _) = listener.accept().expect("TikHub request should arrive");
+      let request = read_http_request(&mut stream);
+      assert!(
+        request.starts_with(&format!("GET {path_prefix}")),
+        "unexpected TikHub request: {request}"
+      );
+      assert!(
+        request
+          .to_ascii_lowercase()
+          .contains(&format!("authorization: bearer {TIKHUB_E2E_TOKEN}")),
+        "TikHub request should use the configured token"
+      );
+      if index == 1 {
+        assert!(request.contains("request_per_day=1"));
+        assert!(
+          request.contains("endpoint=%2Fapi%2Fv1%2Ftiktok%2Fapp%2Fv3%2Ffetch_video_search_result")
+        );
+      }
+      if index == 2 {
+        assert!(request.contains("keyword=car"));
+        assert!(request.contains("region=US"));
+        assert!(request.contains("publish_time=7"));
+        assert!(request.to_ascii_lowercase().contains("idempotency-key:"));
+      }
+      write_json_response(&mut stream, 200, "OK", &body);
+    }
+  });
+  (format!("http://{address}"), server)
+}
+
+fn read_http_request(stream: &mut TcpStream) -> String {
+  let mut request = Vec::new();
+  let mut buffer = [0_u8; 16 * 1024];
+  loop {
+    let bytes_read = stream
+      .read(&mut buffer)
+      .expect("request should be readable");
+    if bytes_read == 0 {
+      break;
+    }
+    request.extend_from_slice(&buffer[..bytes_read]);
+    let text = String::from_utf8_lossy(&request);
+    if let Some(header_end) = text.find("\r\n\r\n") {
+      let content_length = text[..header_end]
+        .lines()
+        .find_map(|line| {
+          line
+            .to_ascii_lowercase()
+            .strip_prefix("content-length:")
+            .and_then(|value| value.trim().parse::<usize>().ok())
+        })
+        .unwrap_or(0);
+      if request.len() >= header_end + 4 + content_length {
+        break;
+      }
+    }
+  }
+  String::from_utf8_lossy(&request).into_owned()
+}
+
+fn write_json_response(stream: &mut TcpStream, status: u16, reason: &str, body: &str) {
+  write!(
+    stream,
+    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+    body.len()
+  )
+  .expect("response should be writable");
 }
 
 fn unique_temp_workspace(label: &str) -> std::path::PathBuf {

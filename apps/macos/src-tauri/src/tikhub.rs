@@ -15,6 +15,8 @@ use crate::workspace::{open_workspace_database, DATABASE_FILE_NAME};
 
 mod account;
 mod collection;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 use account::parse_account_quota;
 pub use account::{
@@ -375,6 +377,11 @@ fn normalize_tikhub_base_url(base_url: Option<String>) -> AppResult<String> {
     .map(|value| value.trim().trim_end_matches('/').to_string())
     .filter(|value| !value.is_empty())
     .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+
+  #[cfg(test)]
+  if let Some(overridden) = test_support::overridden_base_url(&base_url) {
+    return Ok(overridden);
+  }
 
   match base_url.as_str() {
     DEFAULT_BASE_URL | CHINA_BASE_URL => Ok(base_url),
@@ -788,11 +795,3 @@ mod tests {
     assert!(error_for_status(StatusCode::TOO_EARLY, "已隐藏".to_string()).retryable);
   }
 }
-
-#[cfg(test)]
-#[path = "tikhub/collection_tests.rs"]
-mod collection_tests;
-
-#[cfg(test)]
-#[path = "tikhub/business_response_tests.rs"]
-mod business_response_tests;
