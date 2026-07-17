@@ -60,7 +60,7 @@ fn version_three_multi_target_plan_saves_confirms_and_persists_step_limits() {
       platform: "xiaohongshu".to_string(),
       data_type: None,
       data_types: vec!["item_detail".to_string(), "comments".to_string()],
-      params: serde_json::json!({ "keyword": "新能源汽车", "time_range": "近 30 天" }),
+      params: serde_json::json!({ "keyword": "新能源汽车", "time_range": "近 180 天" }),
       age_range: Some(crate::collection::AgeRangeInput { min: 18, max: 35 }),
       request_limit: Some(4),
       record_limit: Some(1200),
