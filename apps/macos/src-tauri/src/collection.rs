@@ -46,6 +46,7 @@ pub struct DataTypeCapabilityView {
   pub pagination_mode: PaginationMode,
   pub region_filter: FilterExecution,
   pub time_range_filter: FilterExecution,
+  pub provider_time_ranges: Vec<String>,
   pub max_page_size: i64,
   pub max_request_count: i64,
 }
@@ -291,6 +292,7 @@ pub fn validate_collection_plan_v3(plan_json: &Value) -> CollectionPlanValidatio
   validate_age_range(plan_json.get("age_range"), &mut errors);
   validate_gender_filter(plan_json.get("gender_filter"), &mut errors);
 
+  let top_level_time_range = filter_constraint(plan_json.get("time_range"));
   let mut prior_steps = std::collections::BTreeSet::new();
   if let Some(steps) = plan_json.get("steps").and_then(Value::as_array) {
     for (index, step) in steps.iter().enumerate() {
@@ -331,6 +333,31 @@ pub fn validate_collection_plan_v3(plan_json: &Value) -> CollectionPlanValidatio
         errors.push(format!("{prefix}.request_limit 必须是大于 0 的整数"));
       } else if endpoint.is_some_and(|endpoint| request_limit > Some(endpoint.max_request_count)) {
         errors.push(format!("{prefix}.request_limit 超过端点上限"));
+      }
+
+      if let Some(endpoint) =
+        endpoint.filter(|endpoint| endpoint.time_range_filter == FilterExecution::Provider)
+      {
+        let step_time_range = step
+          .get("params")
+          .and_then(Value::as_object)
+          .and_then(|params| params.get("time_range"))
+          .and_then(|value| filter_constraint(Some(value)));
+        validate_filter_constraint(
+          &prefix,
+          "time_range",
+          FilterExecution::Provider,
+          step_time_range.or(top_level_time_range),
+          endpoint.provider_time_ranges,
+          &mut errors,
+        );
+        validate_filter_values_match(
+          &prefix,
+          "time_range",
+          top_level_time_range,
+          step_time_range,
+          &mut errors,
+        );
       }
     }
   }
@@ -669,7 +696,7 @@ mod tests {
       data_types: vec!["item_detail".to_string(), "comments".to_string()],
       params: serde_json::json!({
         "keyword": "新能源汽车",
-        "time_range": "近 30 天",
+        "time_range": "近 180 天",
         "genders": ["female", "other"]
       }),
       age_range: Some(AgeRangeInput { min: 18, max: 35 }),

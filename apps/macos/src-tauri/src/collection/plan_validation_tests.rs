@@ -43,6 +43,7 @@ fn capability_contract_preserves_order_serialization_and_errors() {
       "pagination_mode": "cursor",
       "region_filter": "local",
       "time_range_filter": "local",
+      "provider_time_ranges": [],
       "max_page_size": 100,
       "max_request_count": 200
     })
@@ -121,6 +122,30 @@ fn filter_and_pagination_capabilities_match_execution_paths() {
     assert_eq!(capability.region_filter, region_filter);
     assert_eq!(capability.time_range_filter, time_range_filter);
   }
+}
+
+#[test]
+fn provider_time_ranges_are_exposed_by_platform_capabilities() {
+  for (platform, expected) in [
+    ("tiktok", &["1", "7", "30", "180"][..]),
+    ("douyin", &["1", "7", "180"][..]),
+    ("xiaohongshu", &["1", "7", "180"][..]),
+  ] {
+    let capability = list_platform_data_types(platform)
+      .expect("supported platform should expose capabilities")
+      .into_iter()
+      .find(|capability| capability.data_type == "keyword_search")
+      .expect("keyword search capability should be registered");
+
+    assert_eq!(capability.provider_time_ranges, expected);
+  }
+
+  let comments = list_platform_data_types("tiktok")
+    .expect("supported platform should expose capabilities")
+    .into_iter()
+    .find(|capability| capability.data_type == "comments")
+    .expect("comments capability should be registered");
+  assert!(comments.provider_time_ranges.is_empty());
 }
 
 #[test]
@@ -407,6 +432,43 @@ fn provider_time_ranges_match_the_current_adapter_mapping() {
 }
 
 #[test]
+fn v3_provider_time_ranges_fail_closed_against_the_adapter_mapping() {
+  for (platform, accepted_range) in [
+    ("tiktok", "30"),
+    ("douyin", "180"),
+    ("xiaohongshu", "近 180 天"),
+  ] {
+    let plan = complete_keyword_plan_v3(platform, accepted_range);
+    let result = validate_collection_plan_v3(&plan);
+
+    assert!(
+      result.valid,
+      "{platform} should accept {accepted_range}: {:?}",
+      result.errors
+    );
+  }
+
+  for (platform, rejected_range, supported_ranges) in [
+    ("tiktok", "近 90 天", "1/7/30/180"),
+    ("douyin", "30", "1/7/180"),
+    ("xiaohongshu", "2026-07-01/2026-07-07", "1/7/180"),
+  ] {
+    let plan = complete_keyword_plan_v3(platform, rejected_range);
+    let result = validate_collection_plan_v3(&plan);
+
+    assert!(!result.valid, "{platform} must reject {rejected_range}");
+    assert!(
+      result
+        .errors
+        .iter()
+        .any(|error| error.contains("time_range") && error.contains(supported_ranges)),
+      "{platform} should report its supported ranges: {:?}",
+      result.errors
+    );
+  }
+}
+
+#[test]
 fn complete_comment_plan_passes_authoritative_validation() {
   let result = validate_collection_plan(&complete_comment_plan());
 
@@ -516,6 +578,57 @@ fn complete_tiktok_keyword_plan_v2() -> Value {
       "amount_micros": 35_000_000
     },
     "missing_fields": [],
+    "requires_user_confirmation": true
+  })
+}
+
+fn complete_keyword_plan_v3(platform: &str, time_range: &str) -> Value {
+  let region = (platform == "tiktok").then_some("US");
+  let mut params = serde_json::json!({
+    "keyword": "car",
+    "time_range": time_range
+  });
+  if let Some(region) = region {
+    params["region"] = serde_json::json!(region);
+  }
+
+  serde_json::json!({
+    "schema_version": 3,
+    "platforms": [platform],
+    "data_types": ["keyword_search"],
+    "internal_data_types": [],
+    "region": region,
+    "keywords": ["car"],
+    "accounts": [],
+    "time_range": time_range,
+    "age_range": null,
+    "gender_filter": null,
+    "steps": [{
+      "step_key": "keyword_search",
+      "role": "entry",
+      "depends_on_step_key": null,
+      "input_binding": null,
+      "endpoint_key": format!("{platform}.keyword_search"),
+      "platform": platform,
+      "data_type": "keyword_search",
+      "params": params,
+      "request_limit": 1,
+      "output_selected": true
+    }],
+    "record_limit": 50,
+    "request_limit": 1,
+    "budget_limit": {
+      "currency": "USD",
+      "amount_micros": 2_000_000
+    },
+    "output_rules": {
+      "entity": "account",
+      "dedupe_key": ["platform", "platform_user_id"],
+      "fallback_dedupe_key": ["platform", "normalized_account"],
+      "selected_data_types": ["keyword_search"]
+    },
+    "missing_fields": [],
+    "confidence": 1.0,
     "requires_user_confirmation": true
   })
 }

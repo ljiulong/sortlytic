@@ -333,6 +333,11 @@ fn endpoint_to_view(endpoint: &EndpointDefinition) -> DataTypeCapabilityView {
     pagination_mode: endpoint.pagination_mode,
     region_filter: endpoint.region_filter,
     time_range_filter: endpoint.time_range_filter,
+    provider_time_ranges: endpoint
+      .provider_time_ranges
+      .iter()
+      .map(|value| (*value).to_string())
+      .collect(),
     max_page_size: endpoint.max_page_size,
     max_request_count: endpoint.max_request_count,
   }
