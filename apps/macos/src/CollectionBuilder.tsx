@@ -22,12 +22,22 @@ import {
   countryRegionOptions,
   genderFilterOptions,
   supportsRegionSelection,
+  type CollectionDataType,
 } from './collection-options'
+import { newCollectionFormDefaults } from './collection-form-defaults'
 import type { RuntimeCollectionPlan } from './use-workbench-backend'
-import { platformOptions } from './workbench-data'
+import { type DataType, platformOptions } from './workbench-data'
 
 export type CollectionFormInput = z.input<typeof collectionFormSchema>
 export type CollectionFormValues = z.output<typeof collectionFormSchema>
+
+const dataTypeLabels: Record<CollectionDataType, DataType> = {
+  keyword_search: '搜索结果账号',
+  item_detail: '作品/笔记作者',
+  account_profile: '账号公开信息',
+  account_posts: '账号作品所属账号',
+  comments: '评论用户',
+}
 
 export function CollectionBuilder({
   actionMessage,
@@ -44,17 +54,7 @@ export function CollectionBuilder({
   onGenerateFormPlan: (values: CollectionFormValues) => Promise<RuntimeCollectionPlan>
   onGenerateNaturalPlan: (intentText: string) => Promise<RuntimeCollectionPlan>
 }) {
-  const [plan, setPlan] = useState<RuntimeCollectionPlan>({
-    platform: '小红书',
-    dataType: '评论采集',
-    regionCode: 'CN',
-    keyword: '新能源汽车 女车主 安全感',
-    range: '近 30 天',
-    maxRecords: 1200,
-    budget: 35,
-    status: '等待确认',
-    missing: [],
-  })
+  const [plan, setPlan] = useState<RuntimeCollectionPlan | undefined>(activePlan)
   const [naturalText, setNaturalText] = useState(
     '分析中国小红书近 30 天新能源汽车女性车主评论，重点看安全感、补能和售后体验，成本控制在 35 美元以内。',
   )
@@ -73,25 +73,20 @@ export function CollectionBuilder({
     formState: { errors },
   } = useForm<CollectionFormInput, unknown, CollectionFormValues>({
     resolver: zodResolver(collectionFormSchema),
-    defaultValues: {
-      platform: plan.platform,
-      dataType: plan.dataType,
-      dataTypes: ['keyword_search'],
-      regionCode: plan.regionCode,
-      keyword: plan.keyword,
-      range: plan.range,
-      maxRecords: plan.maxRecords,
-      budget: plan.budget,
-      ageRangeEnabled: false,
-      genderFilterEnabled: false,
-      genders: [],
-    },
+    defaultValues: newCollectionFormDefaults,
   })
   const selectedPlatform = watch('platform')
   const selectedDataTypes = watch('dataTypes') ?? []
+  const primaryDataType = selectedDataTypes[0]
   const ageRangeEnabled = watch('ageRangeEnabled')
   const genderFilterEnabled = watch('genderFilterEnabled')
-  const regionEnabled = supportsRegionSelection(selectedPlatform, selectedDataTypes)
+  const regionEnabled = selectedPlatform
+    ? supportsRegionSelection(selectedPlatform, selectedDataTypes)
+    : false
+
+  useEffect(() => {
+    if (primaryDataType) setValue('dataType', dataTypeLabels[primaryDataType])
+  }, [primaryDataType, setValue])
 
   useEffect(() => {
     if (!regionEnabled) setValue('regionCode', '')
@@ -131,8 +126,9 @@ export function CollectionBuilder({
 
         <Tabs.Content className="tabs-content" value="form">
           <form className="collection-form" onSubmit={handleSubmit(submitForm)}>
-            <Field label="平台">
+            <Field error={errors.platform?.message} label="平台">
               <select {...register('platform')}>
+                <option value="">请选择平台</option>
                 {platformOptions.map((item) => (
                   <option key={item} value={item}>
                     {item}
@@ -169,10 +165,10 @@ export function CollectionBuilder({
               </datalist>
             </Field>
             <Field error={errors.keyword?.message} label="关键词或账号">
-              <input {...register('keyword')} />
+              <input {...register('keyword')} placeholder="例如：新能源汽车或账号 ID" />
             </Field>
             <Field error={errors.range?.message} label="时间范围">
-              <input {...register('range')} />
+              <input {...register('range')} placeholder="例如：近 30 天" />
             </Field>
             <Field label="年龄范围">
               <label className="inline-toggle">
@@ -224,10 +220,10 @@ export function CollectionBuilder({
               {errors.genders?.message ? <small>{errors.genders.message}</small> : null}
             </Field>
             <Field error={errors.maxRecords?.message} label="最大记录数">
-              <input type="number" {...register('maxRecords', { valueAsNumber: true })} />
+              <input placeholder="例如：500" type="number" {...register('maxRecords', { valueAsNumber: true })} />
             </Field>
             <Field error={errors.budget?.message} label="成本上限">
-              <input type="number" {...register('budget', { valueAsNumber: true })} />
+              <input placeholder="例如：20" type="number" {...register('budget', { valueAsNumber: true })} />
             </Field>
             <button className="primary-button form-submit" disabled={isBusy} type="submit">
               <Gauge size={16} aria-hidden="true" />
@@ -258,12 +254,19 @@ export function CollectionBuilder({
         </Tabs.Content>
       </Tabs.Root>
 
-      <CollectionPlanPreview
-        actionMessage={actionMessage}
-        isBusy={isBusy}
-        onConfirmPlan={onConfirmPlan}
-        plan={plan}
-      />
+      {plan ? (
+        <CollectionPlanPreview
+          actionMessage={actionMessage}
+          isBusy={isBusy}
+          onConfirmPlan={onConfirmPlan}
+          plan={plan}
+        />
+      ) : (
+        <div className="plan-preview">
+          <p className="eyebrow">采集计划</p>
+          <p className="muted-text">填写本次任务参数并生成计划后，才会显示确认内容。</p>
+        </div>
+      )}
     </section>
   )
 }

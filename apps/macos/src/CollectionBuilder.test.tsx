@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   CollectionPlanPreview,
 } from './CollectionBuilder'
+import { newCollectionFormDefaults } from './collection-form-defaults'
 import { collectionFormSchema, supportsRegionSelection } from './collection-options'
 import type { RuntimeCollectionPlan } from './use-workbench-backend'
 
@@ -131,6 +132,17 @@ describe('collection form controls', () => {
     genderFilterEnabled: false,
     genders: [],
   }
+
+  it('新建表单不把示例任务参数作为实际默认值', () => {
+    expect(newCollectionFormDefaults).toMatchObject({
+      dataTypes: [],
+      regionCode: '',
+      keyword: '',
+      range: '',
+      maxRecords: undefined,
+      budget: undefined,
+    })
+  })
 
   it('数据类型至少选择一项，且年龄范围使用闭区间校验', () => {
     expect(
