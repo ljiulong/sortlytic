@@ -634,6 +634,7 @@ function WorkspaceSettings({
 function LanguageSettings() {
   const { t } = useTranslation('settings')
   const [isChanging, setIsChanging] = useState(false)
+  const [feedback, setFeedback] = useState<'idle' | 'saved' | 'sessionOnly'>('idle')
   const language = normalizeLanguage(i18n.resolvedLanguage)
   const languageLabel = language === 'zh-CN'
     ? t('language.chinese')
@@ -680,14 +681,28 @@ function LanguageSettings() {
           onChange={(value) => {
             if (!isSupportedAppLanguage(value)) return
             setIsChanging(true)
-            void changeAppLanguage(value).finally(() => setIsChanging(false))
+            setFeedback('idle')
+            void changeAppLanguage(value)
+              .then(() => setFeedback('saved'))
+              .catch(() => setFeedback('sessionOnly'))
+              .finally(() => setIsChanging(false))
           }}
           options={options}
           placeholder={t('language.placeholder')}
           value={language}
         />
-        <span className="language-settings__feedback" aria-live="polite">
-          {isChanging ? t('language.switching') : ''}
+        <span
+          className="language-settings__feedback"
+          data-state={feedback}
+          aria-live="polite"
+        >
+          {isChanging
+            ? t('language.switching')
+            : feedback === 'saved'
+              ? t('language.saved')
+              : feedback === 'sessionOnly'
+                ? t('language.sessionOnly')
+                : ''}
         </span>
       </div>
     </section>

@@ -278,6 +278,43 @@ describe('SettingsPage 语言设置卡片', () => {
       /@media \(max-width: 680px\)[\s\S]*?\.language-settings__body\s*\{[^}]*padding:\s*14px 16px 16px;/su,
     )
   })
+
+  it('语言已切换但设备持久化失败时显示仅本次会话生效', async () => {
+    const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: () => null,
+        setItem: () => {
+        throw new Error('storage unavailable')
+        },
+      },
+    })
+    const mounted = mountSettingsPage()
+    await flushPromptSettings()
+    const trigger = mounted.container.querySelector<HTMLButtonElement>('#app-language')
+    expect(trigger).not.toBeNull()
+
+    act(() => trigger?.click())
+    const englishOption = mounted.container.querySelector<HTMLButtonElement>(
+      '#app-language-option-en-US',
+    )
+    expect(englishOption).not.toBeNull()
+    await act(async () => {
+      englishOption?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(mounted.container.textContent).toContain(
+      'Language changed but could not be saved; it may revert after restart.',
+    )
+    if (storageDescriptor) {
+      Object.defineProperty(globalThis, 'localStorage', storageDescriptor)
+    } else {
+      Reflect.deleteProperty(globalThis, 'localStorage')
+    }
+  })
 })
 
 describe('SettingsPage AI 提示词卡片', () => {
