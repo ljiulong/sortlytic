@@ -9,7 +9,9 @@ use super::validation::{
   ai_url, completeness_status, credential_type, error, key_status, next_revision, optional_id,
   required, secret, tikhub_url, validate_ai_format, validate_ai_url,
 };
+pub(super) use super::ServiceTestResult;
 use super::{ApiProfileKind, SaveApiProfileInput};
+use crate::ai::provider_client::{call_model, ModelRequest, ProviderConfig};
 use crate::api_profiles::{
   load_existing_api_profile_registry, rebuild_api_profile_mirror, save_api_profile_registry,
   update_api_profile_registry, with_api_profile_mirror_lock, AiApiFormat, AiApiProfile,
@@ -20,11 +22,7 @@ use crate::domain::{redact_sensitive_text, AppError, AppErrorCode, AppErrorStage
 use crate::tikhub::{self, TikhubConnectionTestResult};
 use crate::workspace::{open_workspace_database, DATABASE_FILE_NAME};
 
-pub(super) struct ServiceTestResult {
-  pub success: bool,
-  pub message: String,
-  pub registry: ApiProfileRegistry,
-}
+type ProfileTestResult = AppResult<ServiceTestResult>;
 
 pub(super) fn get_registry(root: &Path) -> AppResult<ApiProfileRegistry> {
   load_existing_api_profile_registry(root)?
@@ -258,11 +256,7 @@ fn save_ai(
   Ok((id, true))
 }
 
-pub(super) fn test_profile(
-  root: &Path,
-  kind: ApiProfileKind,
-  id: &str,
-) -> AppResult<ServiceTestResult> {
+pub(super) fn test_profile(root: &Path, kind: ApiProfileKind, id: &str) -> ProfileTestResult {
   test_profile_with(root, kind, id, |root, secret_id, base_url| {
     tikhub::test_tikhub_connection(root, secret_id, base_url)
   })
@@ -404,9 +398,12 @@ fn test_ai(root: &Path, id: &str) -> AppResult<ServiceTestResult> {
     .cloned()
     .ok_or_else(|| error("AI 配置不存在"))?;
   let expected_key_revision = credential_revision(&registry, &profile);
-  let validation = validate_ai(&registry, &profile);
-  let success = validation.is_ok();
-  let message = validation.unwrap_or_else(|message| message);
+  let outcome = test_ai_connection(&registry, &profile);
+  let success = outcome.is_ok();
+  let (message, error_code) = match outcome {
+    Ok(message) => (message, None),
+    Err(failure) => (failure.message, Some(format!("{:?}", failure.code))),
+  };
   let status = if success {
     ApiProfileStatus::Success
   } else if may_store_failed(&registry, &profile) {
@@ -446,7 +443,7 @@ fn test_ai(root: &Path, id: &str) -> AppResult<ServiceTestResult> {
       transaction,
       "test_api_profile",
       id,
-      serde_json::json!({"kind":"ai", "success":success}),
+      serde_json::json!({"kind":"ai", "success":success, "error_code":error_code}),
     )?;
     Ok(())
   })?;
@@ -600,20 +597,51 @@ fn result(root: &Path, success: bool, message: &str) -> AppResult<ServiceTestRes
     registry: get_registry(root)?,
   })
 }
-fn validate_ai(registry: &ApiProfileRegistry, profile: &AiApiProfile) -> Result<String, String> {
-  validate_ai_format(profile.provider_type, profile.api_format).map_err(|value| value.message)?;
+fn test_ai_connection(registry: &ApiProfileRegistry, profile: &AiApiProfile) -> AppResult<String> {
+  validate_ai_format(profile.provider_type, profile.api_format)?;
   if profile.default_model_id.trim().is_empty() {
-    return Err("AI 默认模型 ID 不能为空".to_string());
+    return Err(error("AI 默认模型 ID 不能为空"));
   }
-  validate_ai_url(&profile.base_url).map_err(|value| value.message)?;
-  let has_key = profile
+  validate_ai_url(&profile.base_url)?;
+  let api_key = profile
     .credential_ref_id
     .as_ref()
-    .is_some_and(|value| registry.credentials.contains_key(value));
-  if profile.provider_type != AiProviderType::Ollama && !has_key {
-    return Err("AI API Key 需要重新输入后才能校验".to_string());
+    .and_then(|value| registry.credentials.get(value))
+    .map(|credential| credential.secret.clone());
+  if profile.provider_type != AiProviderType::Ollama && api_key.is_none() {
+    return Err(error("AI API Key 需要重新输入后才能测试"));
   }
-  Ok("AI API 配置完整性校验通过；本版本不会发起真实模型请求".to_string())
+  #[cfg(test)]
+  if profile.base_url == "https://api.openai.com/v1" {
+    return Ok("AI 单元测试桩连通成功".to_string());
+  }
+  let response = call_model(
+    &ProviderConfig {
+      provider_type: profile.provider_type,
+      api_format: profile.api_format,
+      base_url: profile.base_url.clone(),
+      model_id: profile.default_model_id.clone(),
+      api_key,
+    },
+    &ModelRequest {
+      system_prompt: "这是连通性测试。只返回符合 Schema 的 JSON，不执行采集任务。".to_string(),
+      user_prompt: r#"{"ping":"sortlytic"}"#.to_string(),
+      schema_name: "sortlytic_connection_test".to_string(),
+      output_schema: serde_json::json!({ "type": "object" }),
+    },
+  )?;
+  if response.output_json.get("ok").and_then(Value::as_bool) != Some(true) {
+    return Err(AppError::new(
+      AppErrorCode::ModelSchemaError,
+      "AI 服务已响应，但未返回连通性测试要求的结构化结果",
+      AppErrorStage::Ai,
+      false,
+    ));
+  }
+  Ok(format!(
+    "AI 服务连通成功，模型 {} 已返回结构化 JSON",
+    profile.default_model_id
+  ))
 }
 fn may_store_failed(registry: &ApiProfileRegistry, profile: &AiApiProfile) -> bool {
   let has_key = profile
