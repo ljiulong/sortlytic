@@ -48,6 +48,23 @@ describe('Dashboard', () => {
     expect(markup).toContain('正在读取真实数据')
   })
 
+  it('历史 AI 连接状态也按真实模型链路展示，不回退到本地规则口径', () => {
+    const markup = renderDashboard({
+      connections: [{
+        name: 'AI API',
+        detail: '结构化输出',
+        status: 'local_rules',
+        tone: 'success',
+        icon: 'bot',
+        meta: '当前自然语言计划仍使用本地规则',
+      }],
+    })
+
+    expect(markup).toContain('真实模型')
+    expect(markup).toContain('自然语言计划使用当前 AI 配置与启用提示词')
+    expect(markup).not.toContain('本地规则')
+  })
+
   it('真实入库记录指标按当前语言显示覆盖任务数', async () => {
     const metrics = [{
       label: '入库记录',

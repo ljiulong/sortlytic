@@ -427,8 +427,8 @@ const connectionStatusKeys: Record<string, string> = {
   待选择: 'status.connection.pendingSelection',
   not_configured: 'status.connection.notConfigured',
   未配置: 'status.connection.notConfigured',
-  local_rules: 'status.connection.localRules',
-  本地规则: 'status.connection.localRules',
+  local_rules: 'status.connection.liveModel',
+  本地规则: 'status.connection.liveModel',
 }
 
 const connectionDetailKeys: Record<string, string> = {
@@ -440,7 +440,7 @@ const connectionMetaKeys: Record<string, string> = {
   结构化输出: 'connection.meta.structuredOutput',
   仅发送摘要: 'connection.meta.summaryOnly',
   在设置中选择当前配置: 'connection.meta.chooseInSettings',
-  当前自然语言计划仍使用本地规则: 'connection.meta.localRules',
+  当前自然语言计划仍使用本地规则: 'connection.meta.liveModel',
   'API 配置文件无法读取，历史数据仍可浏览': 'connection.meta.configurationUnavailable',
 }
 
