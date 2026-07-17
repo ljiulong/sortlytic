@@ -8,10 +8,11 @@ on:
       - apps/macos/**
       - .github/workflows/ci.yml
       - .github/workflows/release-macos.yml
+      - scripts/validate-english-release.mjs
   workflow_call:
     inputs:
       checkout_ref:
-        description: 要验证的分支、提交或标签
+        description: Branch, commit, or tag to verify
         required: false
         type: string
 
@@ -37,6 +38,10 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ inputs.checkout_ref || github.sha }}
+
+      - name: Validate pull request title
+        if: github.event_name == 'pull_request'
+        run: node scripts/validate-english-release.mjs
 
       - name: Set up Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
