@@ -91,6 +91,14 @@ describe('TaskQueue', () => {
     expect(markup).toContain('确认运行')
   })
 
+  it('无效计划明确显示计划需修正，且不提供确认运行入口', () => {
+    const markup = renderQueue([{ ...waitingTask, status: '待人工确认' }])
+
+    expect(markup).toContain('计划需修正')
+    expect(markup).not.toContain('>待人工确认</span>')
+    expect(markup).not.toContain('确认运行')
+  })
+
   it('取消和删除使用不同确认文案，删除明确提示关联数据不可恢复', () => {
     expect(confirmationForTaskAction('confirm-cancel')).toMatchObject({
       ariaLabel: '确认取消任务',
