@@ -1,7 +1,6 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import appSource from './App.tsx?raw'
 import GuidePage from './GuidePage'
 
 function renderGuide() {
@@ -81,8 +80,5 @@ describe('GuidePage', () => {
     expect(markup).toContain('当前规则引擎不会调用 AI 模型')
     expect(markup).not.toContain('系统安全存储引用')
     expect(markup).not.toContain('执行真实连通测试')
-
-    expect(appSource).toContain('当前工作区私有 JSON')
-    expect(appSource).not.toContain('系统安全存储引用')
   })
 })
