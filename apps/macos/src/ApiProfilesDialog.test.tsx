@@ -14,6 +14,7 @@ import type {
   TikhubApiProfileView,
 } from './api-profiles'
 import ApiProfilesDialog, { ApiProfileFormFields } from './ApiProfilesDialog'
+import { i18n } from './i18n'
 
 const {
   apiProfilesDialogReducer,
@@ -190,7 +191,8 @@ function dispatchBackdropMouseDown(container: HTMLElement) {
   })
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await i18n.changeLanguage('zh-CN')
   ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
     .IS_REACT_ACT_ENVIRONMENT = true
   useApiProfilesMock.mockReset()
