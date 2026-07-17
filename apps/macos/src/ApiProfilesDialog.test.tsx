@@ -1,8 +1,13 @@
+// @vitest-environment happy-dom
+
 // @ts-expect-error Vitest 在 Node 中运行，应用构建有意不加载 Node 类型。
 import { readFileSync } from 'node:fs'
-import { createElement } from 'react'
+// @ts-expect-error Vitest 在 Node 中运行，应用构建有意不加载 Node 类型。
+import { resolve } from 'node:path'
+import { act, createElement, type ComponentProps } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   AiApiProfileView,
   ApiProfileRegistryView,
@@ -117,7 +122,77 @@ function hookResult(overrides: Record<string, unknown> = {}) {
   }
 }
 
+type MountedDialog = {
+  container: HTMLDivElement
+  rerender: (props: ComponentProps<typeof ApiProfilesDialog>) => void
+  unmount: () => void
+}
+
+type MountedRoot = {
+  container: HTMLDivElement
+  root: Root
+}
+
+const mountedRoots = new Set<MountedRoot>()
+
+function mountDialog(
+  props: ComponentProps<typeof ApiProfilesDialog>,
+): MountedDialog {
+  const container = document.createElement('div')
+  const root = createRoot(container)
+  const mountedRoot = { container, root }
+  document.body.append(container)
+  mountedRoots.add(mountedRoot)
+  act(() => root.render(createElement(ApiProfilesDialog, props)))
+
+  return {
+    container,
+    rerender(nextProps) {
+      act(() => root.render(createElement(ApiProfilesDialog, nextProps)))
+    },
+    unmount() {
+      if (!mountedRoots.delete(mountedRoot)) return
+      act(() => root.unmount())
+      container.remove()
+    },
+  }
+}
+
+async function flushDialogFocus() {
+  await act(async () => {
+    await new Promise<void>((resolveFrame) => {
+      window.requestAnimationFrame(() => resolveFrame())
+    })
+  })
+}
+
+function dispatchDocumentKey(key: string, shiftKey = false) {
+  const event = new KeyboardEvent('keydown', {
+    bubbles: true,
+    cancelable: true,
+    key,
+    shiftKey,
+  })
+  act(() => document.dispatchEvent(event))
+  return event
+}
+
+function dispatchBackdropMouseDown(container: HTMLElement) {
+  const backdrop = container.querySelector<HTMLElement>(
+    '.api-profile-dialog__backdrop',
+  )
+  expect(backdrop).not.toBeNull()
+  act(() => {
+    backdrop?.dispatchEvent(new MouseEvent('mousedown', {
+      bubbles: true,
+      cancelable: true,
+    }))
+  })
+}
+
 beforeEach(() => {
+  ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
+    .IS_REACT_ACT_ENVIRONMENT = true
   useApiProfilesMock.mockReset()
   useApiProfilesMock.mockReturnValue(hookResult())
   saveAndTestProfileMock.mockReset()
@@ -125,6 +200,15 @@ beforeEach(() => {
   activateProfileMock.mockReset()
   deleteProfileMock.mockReset()
   refreshProfilesMock.mockReset()
+})
+
+afterEach(() => {
+  for (const mountedRoot of mountedRoots) {
+    act(() => mountedRoot.root.unmount())
+    mountedRoot.container.remove()
+  }
+  mountedRoots.clear()
+  document.body.replaceChildren()
 })
 
 describe('ApiProfilesDialog 列表优先界面', () => {
@@ -209,6 +293,123 @@ describe('ApiProfilesDialog 列表优先界面', () => {
     expect(errorMarkup).toContain('无法读取 API 配置')
     expect(errorMarkup).toContain('重新读取')
     expect(errorMarkup).not.toContain('尚未保存 TikHub API 配置')
+  })
+})
+
+describe('ApiProfilesDialog 真实 DOM 交互', () => {
+  it('Escape 与点击遮罩均会请求关闭弹窗', () => {
+    const onClose = vi.fn()
+    const mounted = mountDialog({
+      isOpen: true,
+      kind: 'tikhub',
+      onClose,
+    })
+
+    const escapeEvent = dispatchDocumentKey('Escape')
+    expect(escapeEvent.defaultPrevented).toBe(true)
+    expect(onClose).toHaveBeenCalledTimes(1)
+
+    dispatchBackdropMouseDown(mounted.container)
+    expect(onClose).toHaveBeenCalledTimes(2)
+  })
+
+  it('忙碌期间 Escape 与遮罩都不能关闭弹窗', () => {
+    useApiProfilesMock.mockReturnValue(hookResult({ isPending: true }))
+    const onClose = vi.fn()
+    const mounted = mountDialog({
+      isOpen: true,
+      kind: 'tikhub',
+      onClose,
+    })
+
+    const escapeEvent = dispatchDocumentKey('Escape')
+    dispatchBackdropMouseDown(mounted.container)
+
+    expect(escapeEvent.defaultPrevented).toBe(true)
+    expect(onClose).not.toHaveBeenCalled()
+    expect(mounted.container.querySelector('[role="dialog"]')
+      ?.getAttribute('aria-busy')).toBe('true')
+  })
+
+  it('Tab 与 Shift+Tab 在弹窗首尾可聚焦元素间循环', () => {
+    const mounted = mountDialog({
+      isOpen: true,
+      kind: 'tikhub',
+      onClose: vi.fn(),
+    })
+    const dialog = mounted.container.querySelector<HTMLElement>('[role="dialog"]')
+    const focusable = Array.from(dialog?.querySelectorAll<HTMLElement>([
+      'button:not([disabled])',
+      'input:not([disabled])',
+      'select:not([disabled])',
+      'textarea:not([disabled])',
+      '[href]',
+      '[tabindex]:not([tabindex="-1"])',
+    ].join(',')) ?? [])
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    expect(first).toBeDefined()
+    expect(last).toBeDefined()
+
+    first?.focus()
+    const reverseTabEvent = dispatchDocumentKey('Tab', true)
+    expect(reverseTabEvent.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(last)
+
+    const forwardTabEvent = dispatchDocumentKey('Tab')
+    expect(forwardTabEvent.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(first)
+  })
+
+  it('关闭或卸载后都会把焦点还给原触发按钮', async () => {
+    const trigger = document.createElement('button')
+    trigger.textContent = '配置 TikHub API'
+    document.body.append(trigger)
+    trigger.focus()
+    const props = {
+      isOpen: true,
+      kind: 'tikhub' as const,
+      onClose: vi.fn(),
+    }
+    const mounted = mountDialog(props)
+    await flushDialogFocus()
+    expect(document.activeElement).toBe(
+      mounted.container.querySelector('[role="dialog"]'),
+    )
+
+    mounted.rerender({ ...props, isOpen: false })
+    expect(document.activeElement).toBe(trigger)
+
+    mounted.rerender(props)
+    await flushDialogFocus()
+    mounted.unmount()
+    expect(document.activeElement).toBe(trigger)
+  })
+
+  it('即使安全视图意外携带完整密钥字段，完整值也不进入 DOM', () => {
+    const fullSecret = 'tikhub-full-secret-must-never-enter-dom'
+    const registryWithUnexpectedSecret = {
+      ...registry,
+      tikhubProfiles: registry.tikhubProfiles.map((profile) => ({
+        ...profile,
+        apiKey: profile.id === 'tikhub-main' ? fullSecret : undefined,
+      })),
+    }
+    useApiProfilesMock.mockReturnValue(hookResult({
+      registry: registryWithUnexpectedSecret,
+    }))
+
+    const mounted = mountDialog({
+      isOpen: true,
+      kind: 'tikhub',
+      onClose: vi.fn(),
+    })
+
+    expect(mounted.container.textContent).not.toContain(fullSecret)
+    expect(mounted.container.innerHTML).not.toContain(fullSecret)
+    expect(Array.from(mounted.container.querySelectorAll('input'))
+      .some((input) => input.value.includes(fullSecret))).toBe(false)
+    expect(mounted.container.textContent).toContain('tikh••••••5812')
   })
 })
 
@@ -321,7 +522,7 @@ describe('ApiProfilesDialog 表单与状态机', () => {
 
 describe('ApiProfilesDialog 样式安全线', () => {
   it('提供 40px 点击区、减少动态效果和响应式布局，不使用被禁用效果', () => {
-    const dialogCss = readFileSync(new URL('./ApiProfilesDialog.css', import.meta.url), 'utf8')
+    const dialogCss = readFileSync(resolve('src/ApiProfilesDialog.css'), 'utf8')
     expect(dialogCss).toMatch(/min-height:\s*40px/u)
     expect(dialogCss).toContain('@media (prefers-reduced-motion: reduce)')
     expect(dialogCss).toContain('@media (max-width: 560px)')
