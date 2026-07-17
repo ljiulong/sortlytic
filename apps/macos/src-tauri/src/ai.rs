@@ -6,15 +6,21 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::collection::validate_collection_plan_v2;
+use crate::api_profiles::{
+  load_api_profile_registry, AiApiFormat, AiProviderType, ApiProfileStatus,
+};
+use crate::collection::validate_collection_plan_v3;
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
-use crate::planning::generate_plan_json;
 use crate::prompts::seed_builtin_prompts;
 use crate::tasks::{
   save_collection_plan, update_collection_task, CollectionPlanView, SaveCollectionPlanInput,
   UpdateCollectionTaskInput,
 };
 use crate::workspace::{open_workspace_database, DATABASE_FILE_NAME};
+
+pub(crate) mod provider_client;
+
+use provider_client::{call_model, collection_plan_request, ProviderConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GenerateCollectionPlanFromTextInput {
@@ -74,18 +80,68 @@ pub fn generate_collection_plan_from_text(
   root_path: impl AsRef<Path>,
   input: GenerateCollectionPlanFromTextInput,
 ) -> AppResult<GeneratedCollectionPlanView> {
-  if input.provider_id.is_some() || input.model_id.is_some() {
-    return Err(ai_error(
-      "当前自然语言计划仅支持本地规则解析，真实模型调用尚未接入",
-    ));
-  }
-
   let root_path = root_path.as_ref().to_path_buf();
+  let intent_text = input.intent_text.trim();
+  if intent_text.is_empty() {
+    return Err(ai_error("自然语言采集需求不能为空"));
+  }
   seed_builtin_prompts(&root_path)?;
   let connection = open_workspace_connection(&root_path)?;
   ensure_task_exists(&connection, &input.task_id)?;
   let prompt = active_prompt_version(&connection, "collection_plan_from_text")?;
-  let generated = generate_plan_json(&input.intent_text);
+  let profile = active_ai_profile(&root_path, &input)?;
+  let now = Utc::now().to_rfc3339();
+  let runtime_snapshot_id = Uuid::new_v4().to_string();
+  let ai_run_id = Uuid::new_v4().to_string();
+
+  connection
+    .execute(
+      "INSERT INTO runtime_snapshot (
+        id, task_id, provider_id, model_id, api_format, base_url_type, prompt_version_id,
+        output_schema_id, capabilities_json, config_source, created_at
+      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'collection_plan_v3', ?8, 'active_api_profile', ?9)",
+      params![
+        runtime_snapshot_id,
+        input.task_id,
+        profile.profile_id,
+        profile.config.model_id,
+        api_format_name(profile.config.api_format),
+        base_url_type(profile.config.provider_type),
+        prompt.id,
+        serde_json::json!({
+          "structured_output": true,
+          "schema_enforced_locally": true,
+          "prompt_content_hash": prompt.content_hash,
+          "provider_type": provider_type_name(profile.config.provider_type)
+        })
+        .to_string(),
+        now
+      ],
+    )
+    .map_err(database_error)?;
+
+  let request = collection_plan_request(&prompt.content, intent_text);
+  let call_started_at = std::time::Instant::now();
+  let response = match call_model(&profile.config, &request) {
+    Ok(response) => response,
+    Err(error) => {
+      let latency_ms = i64::try_from(call_started_at.elapsed().as_millis()).unwrap_or(i64::MAX);
+      persist_failed_ai_run(
+        &connection,
+        FailedAiRunInput {
+          ai_run_id: &ai_run_id,
+          task_id: &input.task_id,
+          runtime_snapshot_id: &runtime_snapshot_id,
+          intent_text,
+          error: &error,
+          latency_ms,
+          created_at: &now,
+        },
+      )?;
+      return Err(error);
+    }
+  };
+  let generated = normalize_model_plan(response.output_json);
   let generated_platforms = json_string_array(generated.get("platforms"));
   let generated_data_types = json_string_array(generated.get("data_types"));
   if !generated_platforms.is_empty() && !generated_data_types.is_empty() {
@@ -99,36 +155,13 @@ pub fn generate_collection_plan_from_text(
       },
     )?;
   }
-  let plan_validation = validate_collection_plan_v2(&generated);
+  let plan_validation = validate_collection_plan_v3(&generated);
   let schema_valid = plan_validation.valid;
   let validation_status = if schema_valid {
     "valid"
   } else {
     "needs_review"
   };
-  let now = Utc::now().to_rfc3339();
-  let runtime_snapshot_id = Uuid::new_v4().to_string();
-  let ai_run_id = Uuid::new_v4().to_string();
-  let provider_id = "local-rule-engine";
-  let model_id = "rule-parser-v1";
-
-  connection
-    .execute(
-      "INSERT INTO runtime_snapshot (
-        id, task_id, provider_id, model_id, api_format, base_url_type, prompt_version_id,
-        output_schema_id, capabilities_json, config_source, created_at
-      ) VALUES (?1, ?2, ?3, ?4, 'local_rule', 'none', ?5, 'collection_plan_v2', ?6, 'local', ?7)",
-      params![
-        runtime_snapshot_id,
-        input.task_id,
-        provider_id,
-        model_id,
-        prompt.id,
-        serde_json::json!({ "structured_output": true }).to_string(),
-        now
-      ],
-    )
-    .map_err(database_error)?;
 
   connection
     .execute(
@@ -136,17 +169,18 @@ pub fn generate_collection_plan_from_text(
         id, task_id, runtime_snapshot_id, run_type, input_summary, output_json, schema_valid,
         validation_status, input_tokens, output_tokens, latency_ms, retry_count,
         cost_estimate_json, created_at
-      ) VALUES (?1, ?2, ?3, 'collection_plan_generation', ?4, ?5, ?6, ?7, ?8, ?9, 0, 0, ?10, ?11)",
+      ) VALUES (?1, ?2, ?3, 'collection_plan_generation', ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, ?11, ?12)",
       params![
         ai_run_id,
         input.task_id,
         runtime_snapshot_id,
-        input.intent_text,
+        intent_text,
         generated.to_string(),
         bool_to_i64(schema_valid),
         validation_status,
-        estimate_tokens(&input.intent_text),
-        estimate_tokens(&generated.to_string()),
+        response.input_tokens,
+        response.output_tokens,
+        response.latency_ms,
         generated
           .get("cost_estimate")
           .cloned()
@@ -164,7 +198,7 @@ pub fn generate_collection_plan_from_text(
       params![
         Uuid::new_v4().to_string(),
         input.task_id,
-        input.intent_text,
+        intent_text,
         validation_status,
         ai_run_id,
         now
@@ -266,20 +300,157 @@ fn json_string_array(value: Option<&Value>) -> Vec<String> {
     .unwrap_or_default()
 }
 
+fn active_ai_profile(
+  root_path: &Path,
+  input: &GenerateCollectionPlanFromTextInput,
+) -> AppResult<ResolvedAiProfile> {
+  let registry = load_api_profile_registry(root_path)?;
+  let profile_id = registry
+    .active_profile_ids
+    .ai
+    .as_deref()
+    .ok_or_else(|| ai_error("尚未设置当前 AI 配置，请先在设置中完成真实连通性测试"))?;
+  let profile = registry
+    .ai_profiles
+    .get(profile_id)
+    .ok_or_else(|| ai_error("当前 AI 配置不存在，请重新选择并测试"))?;
+  if profile.status != ApiProfileStatus::Success {
+    return Err(ai_error(
+      "当前 AI 配置尚未通过真实连通性测试，请先在设置中测试",
+    ));
+  }
+  if input
+    .provider_id
+    .as_deref()
+    .is_some_and(|selected| selected != profile.id)
+  {
+    return Err(ai_error("请求指定的 AI 配置与当前配置不一致"));
+  }
+  if input
+    .model_id
+    .as_deref()
+    .is_some_and(|selected| selected != profile.default_model_id)
+  {
+    return Err(ai_error("请求指定的模型与当前 AI 配置不一致"));
+  }
+  let api_key = profile
+    .credential_ref_id
+    .as_ref()
+    .and_then(|credential_id| registry.credentials.get(credential_id))
+    .map(|credential| credential.secret.clone());
+  if profile.provider_type != AiProviderType::Ollama && api_key.is_none() {
+    return Err(ai_error("当前 AI 配置缺少 API Key，请重新输入并测试"));
+  }
+  Ok(ResolvedAiProfile {
+    profile_id: profile.id.clone(),
+    config: ProviderConfig {
+      provider_type: profile.provider_type,
+      api_format: profile.api_format,
+      base_url: profile.base_url.clone(),
+      model_id: profile.default_model_id.clone(),
+      api_key,
+    },
+  })
+}
+
+fn persist_failed_ai_run(connection: &Connection, input: FailedAiRunInput<'_>) -> AppResult<()> {
+  let error_code = serde_json::to_value(&input.error.code)
+    .ok()
+    .and_then(|value| value.as_str().map(ToString::to_string))
+    .unwrap_or_else(|| "MODEL_PROTOCOL_ERROR".to_string());
+  connection
+    .execute(
+      "INSERT INTO ai_run (
+        id, task_id, runtime_snapshot_id, run_type, input_summary, schema_valid,
+        validation_status, error_code, error_message, latency_ms, retry_count,
+        cost_estimate_json, created_at
+      ) VALUES (?1, ?2, ?3, 'collection_plan_generation', ?4, 0, 'failed', ?5, ?6, ?7, 0, '{}', ?8)",
+      params![
+        input.ai_run_id,
+        input.task_id,
+        input.runtime_snapshot_id,
+        input.intent_text,
+        error_code,
+        input.error.message,
+        input.latency_ms,
+        input.created_at
+      ],
+    )
+    .map_err(database_error)?;
+  connection
+    .execute(
+      "INSERT INTO task_intent (id, task_id, intent_text, language, parse_status, ai_run_id, created_at)
+       VALUES (?1, ?2, ?3, 'zh-CN', 'failed', ?4, ?5)",
+      params![
+        Uuid::new_v4().to_string(),
+        input.task_id,
+        input.intent_text,
+        input.ai_run_id,
+        input.created_at
+      ],
+    )
+    .map(|_| ())
+    .map_err(database_error)
+}
+
+fn normalize_model_plan(mut output: Value) -> Value {
+  if let Some(steps) = output.get_mut("steps").and_then(Value::as_array_mut) {
+    for step in steps {
+      if let Some(params) = step.get_mut("params").and_then(Value::as_object_mut) {
+        params.retain(|_, value| !value.is_null());
+      }
+    }
+  }
+  output
+}
+
+fn api_format_name(format: AiApiFormat) -> &'static str {
+  match format {
+    AiApiFormat::OpenaiCompatible => "openai_compatible",
+    AiApiFormat::AnthropicMessages => "anthropic_messages",
+    AiApiFormat::Gemini => "gemini",
+    AiApiFormat::Ollama => "ollama",
+  }
+}
+
+fn provider_type_name(provider_type: AiProviderType) -> &'static str {
+  match provider_type {
+    AiProviderType::Openai => "openai",
+    AiProviderType::Anthropic => "anthropic",
+    AiProviderType::Gemini => "gemini",
+    AiProviderType::CustomOpenaiCompatible => "custom_openai_compatible",
+    AiProviderType::Ollama => "ollama",
+  }
+}
+
+fn base_url_type(provider_type: AiProviderType) -> &'static str {
+  match provider_type {
+    AiProviderType::Openai | AiProviderType::Anthropic | AiProviderType::Gemini => "official",
+    AiProviderType::CustomOpenaiCompatible => "custom",
+    AiProviderType::Ollama => "local",
+  }
+}
+
 fn active_prompt_version(
   connection: &Connection,
   template_key: &str,
 ) -> AppResult<ActivePromptVersion> {
   connection
     .query_row(
-      "SELECT pv.id
+      "SELECT pv.id, pv.content, pv.content_hash
        FROM prompt_version pv
        JOIN prompt_template pt ON pt.id = pv.template_id
        WHERE pt.template_key = ?1 AND pv.status = 'active'
        ORDER BY pv.version DESC
        LIMIT 1",
       params![template_key],
-      |row| Ok(ActivePromptVersion { id: row.get(0)? }),
+      |row| {
+        Ok(ActivePromptVersion {
+          id: row.get(0)?,
+          content: row.get(1)?,
+          content_hash: row.get(2)?,
+        })
+      },
     )
     .optional()
     .map_err(database_error)?
@@ -388,10 +559,6 @@ fn i64_to_bool(value: i64) -> bool {
   value != 0
 }
 
-fn estimate_tokens(text: &str) -> i64 {
-  (text.chars().count() as i64 / 2).max(1)
-}
-
 fn ai_error(message: impl Into<String>) -> AppError {
   AppError::new(
     AppErrorCode::ValidationError,
@@ -413,153 +580,25 @@ fn database_error(error: impl ToString) -> AppError {
 #[derive(Debug)]
 struct ActivePromptVersion {
   id: String,
+  content: String,
+  content_hash: String,
+}
+
+#[derive(Debug)]
+struct ResolvedAiProfile {
+  profile_id: String,
+  config: ProviderConfig,
+}
+
+struct FailedAiRunInput<'a> {
+  ai_run_id: &'a str,
+  task_id: &'a str,
+  runtime_snapshot_id: &'a str,
+  intent_text: &'a str,
+  error: &'a AppError,
+  latency_ms: i64,
+  created_at: &'a str,
 }
 
 #[cfg(test)]
-mod tests {
-  use super::*;
-  use crate::tasks::{create_collection_task, get_task, CreateCollectionTaskInput};
-  use crate::workspace::create_workspace;
-
-  #[test]
-  fn text_generation_saves_ai_run_snapshot_and_plan() {
-    let root_path = unique_temp_workspace("ai-plan");
-    create_workspace("AI 测试", &root_path).expect("workspace should be created");
-    let task = create_collection_task(
-      &root_path,
-      CreateCollectionTaskInput {
-        name: "自然语言任务".to_string(),
-        source_type: "natural_language".to_string(),
-        platforms: vec!["tiktok".to_string()],
-        data_types: vec!["comments".to_string()],
-      },
-    )
-    .expect("task should be created");
-
-    let result = generate_collection_plan_from_text(
-      &root_path,
-      GenerateCollectionPlanFromTextInput {
-        task_id: task.id,
-        intent_text: "采集美国 TikTok 汽车评论".to_string(),
-        provider_id: None,
-        model_id: None,
-      },
-    )
-    .expect("plan should generate");
-    let runs = list_ai_runs(
-      &root_path,
-      result.ai_run.task_id.clone(),
-      Some("collection_plan_generation".to_string()),
-    )
-    .expect("runs should list");
-
-    assert!(!result.ai_run.schema_valid);
-    assert_eq!(result.ai_run.validation_status, "needs_review");
-    assert_eq!(
-      result.runtime_snapshot.output_schema_id,
-      "collection_plan_v2"
-    );
-    assert_eq!(result.collection_plan.validation_status, "needs_review");
-    assert!(result
-      .collection_plan
-      .validation_errors_json
-      .as_array()
-      .is_some_and(|errors| errors
-        .iter()
-        .filter_map(Value::as_str)
-        .any(|error| error.contains("item_id"))));
-    assert_eq!(runs.len(), 1);
-
-    std::fs::remove_dir_all(root_path).ok();
-  }
-
-  #[test]
-  fn local_rule_generation_rejects_unimplemented_model_selection() {
-    let root_path = unique_temp_workspace("ai-model-selection");
-    create_workspace("AI 模型边界测试", &root_path).expect("workspace should be created");
-    let task = create_collection_task(
-      &root_path,
-      CreateCollectionTaskInput {
-        name: "不能伪装成真实模型调用".to_string(),
-        source_type: "natural_language".to_string(),
-        platforms: vec!["tiktok".to_string()],
-        data_types: vec!["comments".to_string()],
-      },
-    )
-    .expect("task should be created");
-
-    let error = generate_collection_plan_from_text(
-      &root_path,
-      GenerateCollectionPlanFromTextInput {
-        task_id: task.id,
-        intent_text: "采集美国 TikTok 汽车评论".to_string(),
-        provider_id: Some("provider-openai".to_string()),
-        model_id: Some("gpt-test".to_string()),
-      },
-    )
-    .expect_err("local rule path must reject unimplemented model selection");
-
-    assert_eq!(error.code, AppErrorCode::ValidationError);
-    assert!(error.message.contains("本地规则"));
-
-    std::fs::remove_dir_all(root_path).ok();
-  }
-
-  #[test]
-  fn domestic_platform_text_infers_cn_region() {
-    let generated = generate_plan_json("采集小红书汽车评论");
-
-    assert_eq!(generated["region"]["value"], "CN");
-    assert_eq!(generated["missing_fields"], serde_json::json!([]));
-  }
-
-  #[test]
-  fn multi_platform_plan_updates_task_scope_and_builds_every_step() {
-    let root_path = unique_temp_workspace("ai-multi-plan");
-    create_workspace("AI 测试", &root_path).expect("workspace should be created");
-    let task = create_collection_task(
-      &root_path,
-      CreateCollectionTaskInput {
-        name: "多平台自然语言任务".to_string(),
-        source_type: "natural_language".to_string(),
-        platforms: vec!["xiaohongshu".to_string()],
-        data_types: vec!["comments".to_string()],
-      },
-    )
-    .expect("task should be created");
-
-    let result = generate_collection_plan_from_text(
-      &root_path,
-      GenerateCollectionPlanFromTextInput {
-        task_id: task.id.clone(),
-        intent_text: "同时采集美国 TikTok 和抖音的评论与关键词".to_string(),
-        provider_id: None,
-        model_id: None,
-      },
-    )
-    .expect("multi-platform plan should generate");
-    let updated_task = get_task(&root_path, &task.id).expect("task should reload");
-
-    assert_eq!(
-      updated_task.platforms_json,
-      serde_json::json!(["tiktok", "douyin"])
-    );
-    assert_eq!(
-      updated_task.data_types_json,
-      serde_json::json!(["comments", "keyword_search"])
-    );
-    assert_eq!(
-      result.collection_plan.plan_json["steps"]
-        .as_array()
-        .map(Vec::len),
-      Some(4)
-    );
-    assert_eq!(result.collection_plan.validation_status, "needs_review");
-
-    std::fs::remove_dir_all(root_path).ok();
-  }
-
-  fn unique_temp_workspace(label: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("sortlytic-{label}-{}", Uuid::new_v4()))
-  }
-}
+mod tests;
