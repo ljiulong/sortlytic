@@ -11,6 +11,7 @@ use super::super::{
   CollectionTaskView, CreateCollectionTaskInput, SaveCollectionPlanInput, TaskRunView,
 };
 use super::*;
+use crate::tasks::test_support::install_successful_tikhub_profile;
 use crate::workspace::create_workspace;
 
 const T0: &str = "2026-07-13T08:00:00+00:00";
@@ -647,6 +648,7 @@ fn running_fixture(
 ) -> RunningFixture {
   let root_path = unique_temp_workspace(label);
   create_workspace("恢复测试", &root_path).expect("workspace should create");
+  install_successful_tikhub_profile(&root_path).expect("TikHub profile should install");
   let task = create_collection_task(
     &root_path,
     CreateCollectionTaskInput {

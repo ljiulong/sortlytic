@@ -1,8 +1,8 @@
 use super::*;
+use crate::tasks::test_support::install_successful_tikhub_profile;
 use crate::tasks::{
   cancel_task, claim_next_task, confirm_collection_plan, create_collection_task, enqueue_task,
-  get_task, get_task_run, retry_task, save_collection_plan, CreateCollectionTaskInput,
-  SaveCollectionPlanInput,
+  get_task, get_task_run, save_collection_plan, CreateCollectionTaskInput, SaveCollectionPlanInput,
 };
 use crate::workspace::create_workspace;
 use serde_json::json;
@@ -12,6 +12,7 @@ use uuid::Uuid;
 fn version_three_worker_executes_each_materialized_dependency_target() {
   let root = std::env::temp_dir().join(format!("worker-v3-targets-{}", Uuid::new_v4()));
   create_workspace("v3 依赖目标测试", &root).expect("workspace should be created");
+  install_successful_tikhub_profile(&root).expect("TikHub profile should install");
   let task = create_collection_task(
     &root,
     CreateCollectionTaskInput {
@@ -151,6 +152,7 @@ fn version_three_worker_executes_each_materialized_dependency_target() {
 fn version_three_worker_records_one_target_failure_and_continues() {
   let root = std::env::temp_dir().join(format!("worker-v3-partial-{}", Uuid::new_v4()));
   create_workspace("v3 逐目标失败测试", &root).expect("workspace should be created");
+  install_successful_tikhub_profile(&root).expect("TikHub profile should install");
   let task = create_collection_task(
     &root,
     CreateCollectionTaskInput {
@@ -293,6 +295,7 @@ fn version_three_worker_records_one_target_failure_and_continues() {
 fn version_three_worker_fails_when_every_target_fails() {
   let root = std::env::temp_dir().join(format!("worker-v3-all-failed-{}", Uuid::new_v4()));
   create_workspace("v3 全目标失败测试", &root).expect("workspace should be created");
+  install_successful_tikhub_profile(&root).expect("TikHub profile should install");
   let task = create_collection_task(
     &root,
     CreateCollectionTaskInput {
@@ -364,6 +367,7 @@ fn version_three_worker_fails_when_every_target_fails() {
 fn version_three_worker_counts_only_merged_age_qualified_accounts() {
   let root = std::env::temp_dir().join(format!("worker-v3-age-{}", Uuid::new_v4()));
   create_workspace("v3 年龄分页测试", &root).expect("workspace should be created");
+  install_successful_tikhub_profile(&root).expect("TikHub profile should install");
   let task = create_collection_task(
     &root,
     CreateCollectionTaskInput {
@@ -460,7 +464,7 @@ fn version_three_worker_counts_only_merged_age_qualified_accounts() {
 }
 
 #[test]
-fn worker_tick_does_not_leave_a_queued_task_unprocessed() {
+fn worker_tick_keeps_task_queued_without_an_active_tikhub_profile() {
   let root = std::env::temp_dir().join(format!("worker-{}", Uuid::new_v4()));
   create_workspace("执行器测试", &root).expect("workspace should be created");
   let task = create_collection_task(
@@ -502,21 +506,18 @@ fn worker_tick_does_not_leave_a_queued_task_unprocessed() {
   )
   .expect("plan should be saved");
   confirm_collection_plan(&root, &task.id, &plan.id).expect("plan should be confirmed");
-  enqueue_task(&root, &task.id).expect("task should be queued");
+  let queued = enqueue_task(&root, &task.id).expect("task should be queued");
 
-  let run = execute_next_task(&root)
-    .expect("worker tick should complete its state transition")
-    .expect("worker should claim the queued task");
-
-  assert_eq!(run.status, "failed");
-  assert_eq!(
-    run.error_code.as_deref(),
-    Some("RUNTIME_SNAPSHOT_NOT_READY")
-  );
-  assert!(run.retryable);
-  let retry =
-    retry_task(&root, &task.id, None).expect("connector setup failure should be retryable");
-  assert_eq!(retry.status, "queued");
+  let error = execute_next_task(&root)
+    .expect_err("worker tick must fail closed without an active TikHub profile");
+  assert!(error.message.contains("尚未选择当前 TikHub API 配置"));
+  let connection = super::open_workspace_connection(&root).expect("database should open");
+  let run = get_task_run(&connection, &queued.id).expect("queued run should remain readable");
+  drop(connection);
+  let task = get_task(&root, &task.id).expect("queued task should remain readable");
+  assert_eq!(run.status, "queued");
+  assert!(run.claimed_at.is_none());
+  assert_eq!(task.status, "queued");
   std::fs::remove_dir_all(root).ok();
 }
 
@@ -524,6 +525,7 @@ fn worker_tick_does_not_leave_a_queued_task_unprocessed() {
 fn worker_persists_a_page_and_completes_the_run() {
   let root = std::env::temp_dir().join(format!("worker-success-{}", Uuid::new_v4()));
   create_workspace("执行器成功测试", &root).expect("workspace should be created");
+  install_successful_tikhub_profile(&root).expect("TikHub profile should install");
   let task = create_collection_task(
     &root,
     CreateCollectionTaskInput {
@@ -610,6 +612,7 @@ fn worker_persists_a_page_and_completes_the_run() {
 fn worker_rejects_cost_before_recording_an_outbound_request() {
   let root = std::env::temp_dir().join(format!("worker-cost-gate-{}", Uuid::new_v4()));
   create_workspace("执行器成本门禁测试", &root).expect("workspace should be created");
+  install_successful_tikhub_profile(&root).expect("TikHub profile should install");
   let (task, _plan) = create_confirmed_item_detail_task(&root);
   enqueue_task(&root, &task.id).expect("task should be queued");
   let run = claim_next_task(&root)
@@ -654,6 +657,7 @@ fn worker_rejects_cost_before_recording_an_outbound_request() {
 fn worker_marks_checkpoint_uncertain_when_record_persistence_fails() {
   let root = std::env::temp_dir().join(format!("worker-persist-failure-{}", Uuid::new_v4()));
   create_workspace("执行器落库失败测试", &root).expect("workspace should be created");
+  install_successful_tikhub_profile(&root).expect("TikHub profile should install");
   let (task, plan) = create_confirmed_item_detail_task(&root);
   enqueue_task(&root, &task.id).expect("task should be queued");
   let run = claim_next_task(&root)

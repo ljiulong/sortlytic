@@ -1,11 +1,10 @@
-use std::path::Path;
-
 use rusqlite::params;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::*;
+use crate::tasks::test_support::install_successful_tikhub_profile;
 use crate::tasks::{
   confirm_collection_plan, create_collection_task, enqueue_task, recover_interrupted_runs,
   save_collection_plan, CreateCollectionTaskInput, SaveCollectionPlanInput,
@@ -16,6 +15,7 @@ use crate::workspace::{create_workspace, open_workspace_database, DATABASE_FILE_
 fn runtime_snapshot_remains_valid_after_current_connector_switch() {
   let root = std::env::temp_dir().join(format!("worker-snapshot-stale-{}", Uuid::new_v4()));
   create_workspace("快照过期测试", &root).expect("workspace should be created");
+  install_successful_tikhub_profile(&root).expect("TikHub profile should install");
   let task = create_collection_task(
     &root,
     CreateCollectionTaskInput {
@@ -55,7 +55,6 @@ fn runtime_snapshot_remains_valid_after_current_connector_switch() {
   )
   .expect("plan should be saved");
   confirm_collection_plan(&root, &task.id, &plan.id).expect("plan should be confirmed");
-  insert_ready_connector(&root);
   enqueue_task(&root, &task.id).expect("task should be queued");
   let claimed = claim_next_task(&root)
     .expect("task claim should succeed")
@@ -63,8 +62,11 @@ fn runtime_snapshot_remains_valid_after_current_connector_switch() {
 
   let original = load_runtime_snapshot(&root, &claimed.id)
     .expect("claimed run should load its immutable snapshot");
-  assert_eq!(original.base_url, "https://api.tikhub.dev");
-  assert_eq!(original.secret_ref_id, "secret-1");
+  assert_eq!(original.base_url, "https://api.tikhub.io");
+  assert_eq!(
+    original.secret_ref_id,
+    "00000000-0000-4000-8000-000000000002"
+  );
 
   let connection =
     open_workspace_database(root.join(DATABASE_FILE_NAME)).expect("database should open");
@@ -86,6 +88,7 @@ fn runtime_snapshot_remains_valid_after_current_connector_switch() {
 fn worker_rejects_a_page_that_exceeds_record_limit_before_persisting() {
   let root = std::env::temp_dir().join(format!("worker-record-limit-{}", Uuid::new_v4()));
   create_workspace("记录上限测试", &root).expect("workspace should be created");
+  install_successful_tikhub_profile(&root).expect("TikHub profile should install");
   let task = create_collection_task(
     &root,
     CreateCollectionTaskInput {
@@ -160,6 +163,7 @@ fn worker_rejects_a_page_that_exceeds_record_limit_before_persisting() {
 fn worker_resumes_a_prepared_checkpoint_after_recovery() {
   let root = std::env::temp_dir().join(format!("worker-recovery-prepared-{}", Uuid::new_v4()));
   create_workspace("恢复检查点测试", &root).expect("workspace should be created");
+  install_successful_tikhub_profile(&root).expect("TikHub profile should install");
   let task = create_collection_task(
     &root,
     CreateCollectionTaskInput {
@@ -275,6 +279,7 @@ fn worker_resumes_a_prepared_checkpoint_after_recovery() {
 fn worker_persists_a_response_received_checkpoint_after_recovery() {
   let root = std::env::temp_dir().join(format!("worker-recovery-response-{}", Uuid::new_v4()));
   create_workspace("响应恢复测试", &root).expect("workspace should be created");
+  install_successful_tikhub_profile(&root).expect("TikHub profile should install");
   let task = create_collection_task(
     &root,
     CreateCollectionTaskInput {
@@ -404,32 +409,4 @@ fn worker_persists_a_response_received_checkpoint_after_recovery() {
     .expect("recovered raw records should load");
   assert_eq!(raw_records, 1);
   std::fs::remove_dir_all(root).ok();
-}
-
-fn insert_ready_connector(root: &Path) {
-  let connection =
-    open_workspace_database(root.join(DATABASE_FILE_NAME)).expect("database should open");
-  let now = "2026-07-15T00:00:00+00:00";
-  connection
-    .execute(
-      "INSERT INTO secret_ref (
-         id, provider_type, provider_id, secret_store_key, masked_hint,
-         created_at, updated_at
-       ) VALUES ('secret-1', 'tikhub', 'default', 'test-store-key', '[REDACTED]', ?1, ?1)",
-      params![now],
-    )
-    .expect("secret metadata should be inserted");
-  let workspace_id: String = connection
-    .query_row("SELECT id FROM workspace", [], |row| row.get(0))
-    .expect("workspace should be readable");
-  connection
-    .execute(
-      "INSERT INTO tikhub_connector (
-         id, workspace_id, secret_ref_id, base_url, enabled, config_version,
-         last_tested_at, last_test_status, created_at, updated_at
-       ) VALUES ('default', ?1, 'secret-1', 'https://api.tikhub.dev', 1, 1,
-                 ?2, 'success', ?2, ?2)",
-      params![workspace_id, now],
-    )
-    .expect("connector should be ready");
 }
