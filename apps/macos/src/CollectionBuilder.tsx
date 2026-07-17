@@ -661,6 +661,11 @@ const actionMessageTranslationKeys: Record<string, string> = {
   '后端调用失败': 'action.backendCallFailed',
 }
 
+const dynamicPlanMessageTranslationKeys: Array<[RegExp, string]> = [
+  [/^region 尚未验证$/, 'message.regionNotVerified'],
+  [/^time_range 不能为空$/, 'message.timeRangeRequired'],
+]
+
 function localizedPlanStatus(t: CollectionTranslator, status: RuntimeCollectionPlan['status']) {
   return t(planStatusTranslationKeys[status] ?? 'status.unknown', { defaultValue: status })
 }
@@ -668,14 +673,18 @@ function localizedPlanStatus(t: CollectionTranslator, status: RuntimeCollectionP
 function localizePlanMessage(t: CollectionTranslator, message: string | undefined) {
   if (!message) return ''
   const key = planMessageTranslationKeys[message]
-  return key ? t(key) : message
+  if (key) return t(key)
+  const dynamicKey = dynamicPlanMessageTranslationKeys.find(([pattern]) => pattern.test(message))?.[1]
+  if (dynamicKey) return t(dynamicKey)
+  return /[^\p{ASCII}]/u.test(message) ? t('message.unknown') : message
 }
 
 function localizeActionMessage(t: CollectionTranslator, message: string) {
   const exportMatch = /^(Excel|PDF) 已导出到本地工作区$/.exec(message)
   if (exportMatch) return t('action.exported', { format: exportMatch[1] })
   const key = actionMessageTranslationKeys[message]
-  return key ? t(key) : message
+  if (key) return t(key)
+  return /[^\p{ASCII}]/u.test(message) ? t('action.unknown') : message
 }
 
 function formatNumber(value: number, language: string) {
@@ -701,7 +710,7 @@ function localizedCostEstimate(
       count: formatNumber(Number(requestQuote[1]), language),
     })
   }
-  return costEstimate
+  return /[^\p{ASCII}]/u.test(costEstimate) ? t('preview.estimateUnavailable') : costEstimate
 }
 
 function confirmationBlocker(
