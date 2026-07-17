@@ -402,6 +402,7 @@ function metricIsAvailable(value: string) {
     value.trim() !== '' &&
     value !== '—' &&
     value !== '未计算' &&
+    value !== 'Not calculated' &&
     value !== 'not_available' &&
     value !== 'not_calculated'
   )
@@ -446,6 +447,7 @@ const connectionMetaKeys: Record<string, string> = {
 const healthKeys: Record<string, string> = {
   available: 'status.health.available',
   可用: 'status.health.available',
+  运行正常: 'status.health.available',
   backend_unavailable: 'status.health.backendUnavailable',
   后端不可用: 'status.health.backendUnavailable',
   backend_not_connected: 'status.health.backendNotConnected',
@@ -457,33 +459,46 @@ const healthKeys: Record<string, string> = {
 const metricLabelKeys: Record<string, string> = {
   localTasks: 'metric.label.localTasks',
   本地任务: 'metric.label.localTasks',
+  'Local tasks': 'metric.label.localTasks',
   todayTasks: 'metric.label.todayTasks',
   今日任务: 'metric.label.todayTasks',
+  "Today's tasks": 'metric.label.todayTasks',
   storedRecords: 'metric.label.storedRecords',
   入库记录: 'metric.label.storedRecords',
+  'Stored records': 'metric.label.storedRecords',
   estimatedRequests: 'metric.label.estimatedRequests',
   预计请求: 'metric.label.estimatedRequests',
+  'Estimated requests': 'metric.label.estimatedRequests',
   estimatedCost: 'metric.label.estimatedCost',
   预计成本: 'metric.label.estimatedCost',
+  'Estimated cost': 'metric.label.estimatedCost',
   evidenceCoverage: 'metric.label.evidenceCoverage',
   证据覆盖: 'metric.label.evidenceCoverage',
+  'Evidence coverage': 'metric.label.evidenceCoverage',
 }
 
 const metricDeltaKeys: Record<string, string> = {
   waiting_for_real_data: 'metric.delta.waitingForRealData',
   等待读取真实数据: 'metric.delta.waitingForRealData',
+  'Waiting for live data': 'metric.delta.waitingForRealData',
   reading_real_data: 'metric.delta.readingRealData',
   正在读取真实数据: 'metric.delta.readingRealData',
+  'Reading live data': 'metric.delta.readingRealData',
   backend_read_failed: 'metric.delta.backendReadFailed',
   后端读取失败: 'metric.delta.backendReadFailed',
+  'Failed to read backend data': 'metric.delta.backendReadFailed',
   packaged_app_only: 'metric.delta.packagedAppOnly',
   '仅打包后的 macOS 应用可读取': 'metric.delta.packagedAppOnly',
+  'Only the packaged macOS app can read this data': 'metric.delta.packagedAppOnly',
   records_ingestion_unavailable: 'metric.delta.recordsIngestionUnavailable',
   真实记录读取尚未接入: 'metric.delta.recordsIngestionUnavailable',
+  'Live record ingestion is not connected': 'metric.delta.recordsIngestionUnavailable',
   no_real_records: 'metric.delta.noRealRecords',
   暂无真实记录: 'metric.delta.noRealRecords',
+  'No live records yet': 'metric.delta.noRealRecords',
   core_insights_have_sources: 'metric.delta.coreInsightsHaveSources',
   核心洞察有来源: 'metric.delta.coreInsightsHaveSources',
+  'Core insights have sources': 'metric.delta.coreInsightsHaveSources',
 }
 
 const recordStatusKeys: Record<string, string> = {
@@ -512,7 +527,8 @@ const promptRunStatusKeys: Record<string, string> = {
 }
 
 function translateHealth(t: DashboardT, health: string) {
-  const runningMatch = health.match(/^可用，运行 (\d+) 秒$/) ?? health.match(/^available_running:(\d+)$/)
+  const runningMatch =
+    health.match(/^可用，运行 (\d+(?:\.\d+)?) 秒$/) ?? health.match(/^available_running:(\d+(?:\.\d+)?)$/)
   if (runningMatch) {
     return t('status.health.availableRunning', { seconds: runningMatch[1] })
   }
@@ -530,9 +546,10 @@ function toneForHealth(health: string): Tone {
   ) return 'warning'
   if (
     health === '可用' ||
+    health === '运行正常' ||
     health === 'available' ||
-    /^可用，运行 \d+ 秒$/.test(health) ||
-    /^available_running:\d+$/.test(health)
+    /^可用，运行 \d+(?:\.\d+)? 秒$/.test(health) ||
+    /^available_running:\d+(?:\.\d+)?$/.test(health)
   ) return 'success'
   return 'warning'
 }
@@ -566,14 +583,16 @@ function translateMetricLabel(t: DashboardT, label: string) {
 }
 
 function translateMetricDelta(t: DashboardT, delta: string) {
-  const pendingMatch = delta.match(/^(\d+) 个待确认$/) ?? delta.match(/^pending_confirmation:(\d+)$/)
+  const pendingMatch =
+    delta.match(/^(\d[\d,.]*) 个待确认$/) ?? delta.match(/^pending_confirmation:(\d[\d,.]*)$/)
   if (pendingMatch) {
-    return t('metric.delta.pendingConfirmation', { count: pendingMatch[1] })
+    return t('metric.delta.pendingConfirmation', { count: numericInterpolationValue(pendingMatch[1]) })
   }
 
-  const queuedMatch = delta.match(/^(\d+) 个已入队$/) ?? delta.match(/^queued:(\d+)$/)
+  const queuedMatch =
+    delta.match(/^(\d[\d,.]*) 个已入队$/) ?? delta.match(/^queued:(\d[\d,.]*)$/)
   if (queuedMatch) {
-    return t('metric.delta.queued', { count: queuedMatch[1] })
+    return t('metric.delta.queued', { count: numericInterpolationValue(queuedMatch[1]) })
   }
 
   const validatedMatch =
@@ -595,7 +614,7 @@ function translateMetricValue(t: DashboardT, value: string) {
   if (value.trim() === '' || value === '—' || value === 'not_available') {
     return t('metric.value.notAvailable')
   }
-  if (value === '未计算' || value === 'not_calculated') {
+  if (value === '未计算' || value === 'Not calculated' || value === 'not_calculated') {
     return t('metric.value.notCalculated')
   }
   return value
@@ -606,10 +625,15 @@ function translateWorkspaceStorage(t: DashboardT, storage: string) {
 }
 
 function translateWorkspaceBackup(t: DashboardT, lastBackup: string) {
-  if (lastBackup === '尚未读取') return t('workspace.notRead')
+  if (lastBackup === '尚未读取' || lastBackup === '未读取') return t('workspace.notRead')
   if (lastBackup === '未创建备份') return t('workspace.backupNotCreated')
   if (lastBackup === '尚未备份') return t('workspace.noBackup')
   return lastBackup
+}
+
+function numericInterpolationValue(value: string) {
+  const numberValue = Number(value.replaceAll(',', ''))
+  return Number.isFinite(numberValue) ? numberValue : value
 }
 
 function translateRecordStatus(t: DashboardT, status: SocialRecord['status']) {
