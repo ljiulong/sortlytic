@@ -12,11 +12,8 @@ import {
   getTikhubConnector,
   installAppUpdate,
   quoteTikhubConnectorPrice,
-  saveTikhubConnector,
   type SecretRefView,
-  testTikhubConnector,
   type TikhubConnectorView,
-  updateSecret,
   updateCollectionTask,
   type WorkspaceSummary,
 } from './backend-api'
@@ -27,7 +24,6 @@ import {
   exportTaskArtifact,
   mapBackendData,
   planFromBackend,
-  saveAndTestTikhubToken,
   type RuntimeCollectionPlan,
   useWorkbenchBackend,
 } from './use-workbench-backend'
@@ -248,7 +244,7 @@ describe('任务页动作', () => {
 
   it('删除成功后更新状态消息并刷新工作台真实数据', async () => {
     renderWorkbenchHook()
-    const deleteMutation = mutationOptionsMock.current[7]
+    const deleteMutation = mutationOptionsMock.current[6]
     const actionMessageSetter = stateSettersMock.current[1]
 
     expect(deleteMutation).toBeDefined()
@@ -373,144 +369,21 @@ describe('应用更新 API', () => {
   })
 })
 
-describe('TikHub connector 后端 API', () => {
-  it('使用固定 command 和 camelCase 外层参数读写并测试 connector', async () => {
-    const input = {
-      secret_ref_id: tikhubSecret.id,
-      base_url: 'https://api.tikhub.io',
-      enabled: true,
-    }
+describe('TikHub connector 只读镜像', () => {
+  it('使用固定 command 读取镜像并获取实时价格', async () => {
     invokeMock.mockResolvedValue(undefined)
 
     await getTikhubConnector()
-    await saveTikhubConnector(input)
-    await testTikhubConnector()
     await quoteTikhubConnectorPrice('/api/v1/tiktok/app/v3/fetch_video_comments', 1)
 
     expect(invokeMock).toHaveBeenNthCalledWith(1, 'get_tikhub_connector', {
       rootPath: null,
     })
-    expect(invokeMock).toHaveBeenNthCalledWith(2, 'save_tikhub_connector', {
-      input,
-      rootPath: null,
-    })
-    expect(invokeMock).toHaveBeenNthCalledWith(3, 'test_tikhub_connector', {
-      rootPath: null,
-    })
-    expect(invokeMock).toHaveBeenNthCalledWith(4, 'quote_tikhub_connector_price', {
+    expect(invokeMock).toHaveBeenNthCalledWith(2, 'quote_tikhub_connector_price', {
       endpoint: '/api/v1/tiktok/app/v3/fetch_video_comments',
       requestPerDay: 1,
       rootPath: null,
     })
-  })
-
-  it('更新密钥时使用既有 secretRefId 且不创建新引用', async () => {
-    invokeMock.mockResolvedValue(undefined)
-
-    await updateSecret(tikhubSecret.id, 'replacement-token')
-
-    expect(invokeMock).toHaveBeenCalledWith('update_secret', {
-      secretRefId: tikhubSecret.id,
-      secret: 'replacement-token',
-      rootPath: null,
-    })
-  })
-
-  it('保存流程复用 connector 已绑定且仍存在的密钥引用', async () => {
-    const connector = connectorFixture()
-    invokeMock.mockImplementation(async (command: string) => {
-      if (command === 'get_tikhub_connector') return connector
-      if (command === 'list_secret_refs') return [tikhubSecret]
-      if (command === 'update_secret') return tikhubSecret
-      if (command === 'save_tikhub_connector') return connector
-      if (command === 'test_tikhub_connector') {
-        return {
-          success: true,
-          base_url: connector.base_url,
-          daily_usage_json: {},
-          message: 'TikHub Token 可用',
-        }
-      }
-      throw new Error(`意外命令：${command}`)
-    })
-
-    const result = await saveAndTestTikhubToken({
-      token: 'replacement-token',
-      baseUrl: connector.base_url,
-    })
-
-    expect(result.success).toBe(true)
-    expect(invokeMock.mock.calls.map(([command]) => command)).toEqual([
-      'get_tikhub_connector',
-      'list_secret_refs',
-      'save_tikhub_connector',
-      'update_secret',
-      'test_tikhub_connector',
-    ])
-    expect(invokeMock).not.toHaveBeenCalledWith('test_tikhub_connection', expect.anything())
-  })
-
-  it('connector 的密钥引用已丢失时创建新引用并重新绑定', async () => {
-    const connector = connectorFixture({ secret_ref_id: 'deleted-secret' })
-    const replacement = { ...tikhubSecret, id: 'replacement-secret' }
-    invokeMock.mockImplementation(async (command: string) => {
-      if (command === 'get_tikhub_connector') return connector
-      if (command === 'list_secret_refs') return [tikhubSecret]
-      if (command === 'save_secret') return replacement
-      if (command === 'save_tikhub_connector') return connector
-      if (command === 'test_tikhub_connector') {
-        return {
-          success: true,
-          base_url: connector.base_url,
-          daily_usage_json: {},
-          message: 'TikHub Token 可用',
-        }
-      }
-      throw new Error(`意外命令：${command}`)
-    })
-
-    await saveAndTestTikhubToken({ token: 'new-token', baseUrl: connector.base_url })
-
-    expect(invokeMock).toHaveBeenCalledWith('save_tikhub_connector', {
-      input: {
-        secret_ref_id: replacement.id,
-        base_url: connector.base_url,
-        enabled: true,
-      },
-      rootPath: null,
-    })
-    expect(invokeMock.mock.calls.map(([command]) => command)).not.toContain('update_secret')
-  })
-
-  it('已有 TikHub 密钥时留空 Token 也能切换已保存域名', async () => {
-    const connector = connectorFixture()
-    invokeMock.mockImplementation(async (command: string) => {
-      if (command === 'get_tikhub_connector') return connector
-      if (command === 'list_secret_refs') return [tikhubSecret]
-      if (command === 'save_tikhub_connector') return { ...connector, base_url: 'https://api.tikhub.dev' }
-      if (command === 'test_tikhub_connector') {
-        return {
-          success: true,
-          base_url: 'https://api.tikhub.dev',
-          daily_usage_json: {},
-          message: 'TikHub Token 可用',
-        }
-      }
-      if (command === 'update_secret') throw new Error('切换域名不应覆盖已有 Token')
-      throw new Error(`意外命令：${command}`)
-    })
-
-    await saveAndTestTikhubToken({ token: '', baseUrl: 'https://api.tikhub.dev' })
-
-    expect(invokeMock).toHaveBeenCalledWith('save_tikhub_connector', {
-      input: {
-        secret_ref_id: tikhubSecret.id,
-        base_url: 'https://api.tikhub.dev',
-        enabled: true,
-      },
-      rootPath: null,
-    })
-    expect(invokeMock).not.toHaveBeenCalledWith('update_secret', expect.anything())
   })
 })
 
@@ -577,9 +450,6 @@ describe('计划实时计价预检', () => {
       profileId: 'tikhub-profile-1',
       rootPath: null,
     })
-    expect(invokeMock.mock.calls.map(([command]) => command)).not.toContain(
-      'test_tikhub_connector',
-    )
   })
 
   it('免费额度与充值余额合计不足时阻止确认', async () => {
@@ -666,177 +536,6 @@ describe('计划实时计价预检', () => {
       'get_api_profile_registry',
       'test_api_profile',
     ])
-  })
-})
-
-describe('模型供应商密钥引用', () => {
-  it('更新已有供应商时复用既有 secretRefId，而不是创建孤立密钥', async () => {
-    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
-    const existingProvider = {
-      provider_id: 'openai',
-      display_name: 'OpenAI',
-      enabled: true,
-      auth_type: 'api_key',
-      secret_ref_id: 'model-secret-1',
-      base_url: 'https://api.openai.com/v1',
-      api_format: 'openai_compatible',
-      region: null,
-      default_model_id: 'gpt-4.1-mini',
-      cost_policy_json: {},
-      rate_limit_policy_json: {},
-      health_check_json: {},
-      id: 'provider-1',
-      created_at: '2026-07-13T00:00:00Z',
-      updated_at: '2026-07-13T00:00:00Z',
-    }
-    const commands: string[] = []
-    invokeMock.mockImplementation(async (command: string) => {
-      commands.push(command)
-      if (command === 'list_model_providers') return [existingProvider]
-      if (command === 'update_secret') return { id: 'model-secret-1' }
-      if (command === 'test_secret_connection') return { success: true }
-      if (command === 'update_model_provider') return existingProvider
-      if (command === 'upsert_model_profile') return { id: 'profile-1' }
-      if (command === 'set_default_model') return true
-      if (command === 'set_active_model_provider') return true
-      if (command === 'test_model_provider') {
-        return { provider_id: 'openai', success: true, message: '配置完整' }
-      }
-      if (command === 'save_secret') {
-        throw new Error('更新已有供应商时不应创建新的密钥引用')
-      }
-      throw new Error(`意外命令：${command}`)
-    })
-
-    const result = renderWorkbenchHook()
-    await result.saveAndValidateModelProvider({
-      providerId: 'openai',
-      displayName: 'OpenAI',
-      apiFormat: 'openai_compatible',
-      baseUrl: 'https://api.openai.com/v1',
-      defaultModelId: 'gpt-4.1-mini',
-      apiKey: 'replacement-token',
-    })
-
-    expect(commands).toContain('update_secret')
-    expect(commands).not.toContain('save_secret')
-    vi.unstubAllGlobals()
-  })
-
-  it('使用独立 command 持久化切换当前模型供应商', async () => {
-    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
-    invokeMock.mockResolvedValue(true)
-
-    const result = renderWorkbenchHook()
-    await result.activateModelProvider('ollama')
-
-    expect(invokeMock).toHaveBeenCalledWith('set_active_model_provider', {
-      providerId: 'ollama',
-      rootPath: null,
-    })
-    vi.unstubAllGlobals()
-  })
-
-  it('已有模型供应商留空 API Key 时复用安全存储密钥', async () => {
-    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
-    const existingProvider = {
-      provider_id: 'openai',
-      display_name: 'OpenAI',
-      enabled: true,
-      auth_type: 'api_key',
-      secret_ref_id: 'model-secret-1',
-      base_url: 'https://api.openai.com/v1',
-      api_format: 'openai_compatible',
-      region: null,
-      default_model_id: 'gpt-4.1-mini',
-      cost_policy_json: {},
-      rate_limit_policy_json: {},
-      health_check_json: {},
-      id: 'provider-1',
-      created_at: '2026-07-13T00:00:00Z',
-      updated_at: '2026-07-13T00:00:00Z',
-    }
-    invokeMock.mockImplementation(async (command: string) => {
-      if (command === 'list_model_providers') return [existingProvider]
-      if (command === 'test_secret_connection') return { success: true }
-      if (command === 'update_model_provider') return existingProvider
-      if (command === 'upsert_model_profile') return { id: 'profile-1' }
-      if (command === 'set_default_model' || command === 'set_active_model_provider') return true
-      if (command === 'test_model_provider') {
-        return { provider_id: 'openai', success: true, message: '配置完整' }
-      }
-      if (command === 'update_secret') throw new Error('留空 API Key 不应覆盖已有密钥')
-      if (command === 'save_secret') throw new Error('已有供应商不应新建密钥')
-      throw new Error(`意外命令：${command}`)
-    })
-
-    const result = renderWorkbenchHook()
-    await result.saveAndValidateModelProvider({
-      providerId: 'openai',
-      displayName: 'OpenAI',
-      apiFormat: 'openai_compatible',
-      baseUrl: 'https://api.openai.com/v1',
-      defaultModelId: 'gpt-4.1-mini',
-      apiKey: '',
-    })
-
-    expect(invokeMock).toHaveBeenCalledWith('test_secret_connection', {
-      secretRefId: 'model-secret-1',
-      rootPath: null,
-    })
-    expect(invokeMock).not.toHaveBeenCalledWith('update_secret', expect.anything())
-    vi.unstubAllGlobals()
-  })
-})
-
-describe('TikHub mutation 失败回读', () => {
-  it('清空旧测试结果并等待连接状态查询失效完成', async () => {
-    renderWorkbenchHook()
-    const tikhubMutation = mutationOptionsMock.current[4]
-    if (!tikhubMutation?.onSuccess || !tikhubMutation.onError) {
-      throw new Error('TikHub mutation 应为 Hook 中按顺序注册的第 5 个 mutation')
-    }
-    const oldResult = {
-      success: true,
-      base_url: 'https://api.tikhub.io',
-      daily_usage_json: {},
-      message: '旧成功状态',
-    }
-    await tikhubMutation.onSuccess(oldResult)
-    const tikhubResultSetter = stateSettersMock.current.find((setter) =>
-      setter.mock.calls.some(([value]) => value === oldResult),
-    )
-    const actionMessageSetter = stateSettersMock.current.find((setter) =>
-      setter.mock.calls.some(([value]) => value === oldResult.message),
-    )
-    if (!actionMessageSetter || !tikhubResultSetter) {
-      throw new Error('未捕获 TikHub mutation 使用的状态 setter')
-    }
-    expect(tikhubResultSetter).toHaveBeenCalledWith(oldResult)
-    tikhubResultSetter.mockClear()
-    actionMessageSetter.mockClear()
-    invalidateQueriesMock.mockReset()
-    let finishInvalidation: (() => void) | undefined
-    const invalidation = new Promise<void>((resolve) => {
-      finishInvalidation = resolve
-    })
-    invalidateQueriesMock.mockReturnValue(invalidation)
-
-    const completion = Promise.resolve(tikhubMutation.onError(new Error('Token 已失效')))
-    let completed = false
-    void completion.then(() => {
-      completed = true
-    })
-    await Promise.resolve()
-
-    expect(tikhubResultSetter).toHaveBeenCalledWith(undefined)
-    expect(actionMessageSetter).toHaveBeenCalledWith('Token 已失效')
-    expect(invalidateQueriesMock).toHaveBeenCalledWith({ queryKey: ['workbench-backend'] })
-    expect(completed).toBe(false)
-
-    finishInvalidation?.()
-    await completion
-    expect(completed).toBe(true)
   })
 })
 

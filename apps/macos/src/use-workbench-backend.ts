@@ -20,19 +20,14 @@ import {
   listSecretRefs,
   listTasks,
   saveCollectionPlan,
-  saveSecret,
-  saveTikhubConnector,
   type CollectionPlanView,
   type CollectionTaskView,
   type ExportJobView,
   type ModelProviderView,
   type SecretRefView,
-  type TikhubConnectionTestResult,
   type TikhubConnectorView,
   type WorkspaceSummary,
-  testTikhubConnector,
   updateCollectionTask,
-  updateSecret,
 } from './backend-api'
 import { useAppUpdater } from './use-app-updater'
 import { buildPlanParams } from './collection-plan-client'
@@ -41,7 +36,6 @@ import {
   pricingEndpointsForPlan,
 } from './collection-pricing'
 import type { CollectionDataType } from './collection-options'
-import { useModelSettings } from './use-model-settings'
 import {
   mapTaskRow,
   numberFromJson,
@@ -75,8 +69,6 @@ export type CollectionFormPayload = {
   genderFilterEnabled?: boolean
   genders?: Array<'male' | 'female' | 'other'>
 }
-
-export type { ModelSettingsInput } from './use-model-settings'
 
 export type TaskExportInput = {
   taskId: string
@@ -229,11 +221,6 @@ export function useWorkbenchBackend() {
   const [activePlan, setActivePlan] = useState<RuntimeCollectionPlan>()
   const [actionMessage, setActionMessage] = useState(initialActionMessage)
   const [latestExports, setLatestExports] = useState<ExportJobView[]>([])
-  const [tikhubTestResult, setTikhubTestResult] = useState<TikhubConnectionTestResult>()
-  const modelSettings = useModelSettings({
-    refreshWorkbench: () => queryClient.invalidateQueries({ queryKey }),
-    setActionMessage,
-  })
   const appUpdater = useAppUpdater()
 
   const dataQuery = useQuery({
@@ -294,23 +281,6 @@ export function useWorkbenchBackend() {
       void queryClient.invalidateQueries({ queryKey })
     },
     onError: (error) => setActionMessage(backendErrorMessage(error)),
-  })
-
-  const saveTikhubTokenMutation = useMutation({
-    mutationFn: async (input: { token: string; baseUrl: string }) => {
-      assertTauriRuntime()
-      return saveAndTestTikhubToken(input)
-    },
-    onSuccess: async (result) => {
-      setTikhubTestResult(result)
-      setActionMessage(result.message)
-      await queryClient.invalidateQueries({ queryKey })
-    },
-    onError: async (error) => {
-      setTikhubTestResult(undefined)
-      setActionMessage(backendErrorMessage(error))
-      await queryClient.invalidateQueries({ queryKey })
-    },
   })
 
   const updateTaskMutation = useMutation({
@@ -384,13 +354,10 @@ export function useWorkbenchBackend() {
       generateNaturalPlanMutation.isPending ||
       confirmPlanMutation.isPending ||
       exportMutation.isPending ||
-      saveTikhubTokenMutation.isPending ||
       updateTaskMutation.isPending ||
       cancelTaskMutation.isPending ||
       deleteTaskMutation.isPending ||
       confirmTaskMutation.isPending ||
-      modelSettings.isModelSettingsPending ||
-      modelSettings.isModelActivationPending ||
       appUpdater.isUpdateBusy,
     generateFormPlan: generateFormPlanMutation.mutateAsync,
     generateNaturalPlan: generateNaturalPlanMutation.mutateAsync,
@@ -400,9 +367,6 @@ export function useWorkbenchBackend() {
     deleteTask: deleteTaskMutation.mutateAsync,
     confirmTask: confirmTaskMutation.mutateAsync,
     exportTask: exportMutation.mutateAsync,
-    saveAndTestTikhubToken: saveTikhubTokenMutation.mutateAsync,
-    tikhubTestResult,
-    ...modelSettings,
     ...appUpdater,
     refresh: () => queryClient.invalidateQueries({ queryKey }),
   }
@@ -423,45 +387,6 @@ async function loadBackendWorkbench(): Promise<BackendWorkbenchData> {
   ])
 
   return mapBackendData(workspace, tasks, secretRefs, connector, providers, status.uptime_ms)
-}
-
-export async function saveAndTestTikhubToken(input: { token: string; baseUrl: string }) {
-  const token = input.token.trim()
-  const connector = await getTikhubConnector()
-  const secretRefs = await listSecretRefs('tikhub')
-  const boundSecret = connector?.secret_ref_id
-    ? secretRefs.find(
-        (secret) => secret.id === connector.secret_ref_id && secret.provider_type === 'tikhub',
-      )
-    : undefined
-  if (boundSecret) {
-    await saveTikhubConnector({
-      secret_ref_id: boundSecret.id,
-      base_url: input.baseUrl,
-      enabled: true,
-    })
-    if (token) {
-      await updateSecret(boundSecret.id, token)
-    }
-  } else {
-    if (token.length < 8) {
-      throw new Error('请先输入至少 8 位 TikHub Token')
-    }
-    const secret = await saveSecret({
-      provider_type: 'tikhub',
-      provider_id: 'default',
-      secret: token,
-      alias: input.baseUrl.includes('tikhub.dev')
-        ? 'TikHub 中国大陆域名'
-        : 'TikHub 国际域名',
-    })
-    await saveTikhubConnector({
-      secret_ref_id: secret.id,
-      base_url: input.baseUrl,
-      enabled: true,
-    })
-  }
-  return testTikhubConnector()
 }
 
 async function createFormPlan(values: CollectionFormPayload): Promise<RuntimeCollectionPlan> {
