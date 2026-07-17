@@ -635,6 +635,9 @@ function LanguageSettings() {
   const { t } = useTranslation('settings')
   const [isChanging, setIsChanging] = useState(false)
   const language = normalizeLanguage(i18n.resolvedLanguage)
+  const languageLabel = language === 'zh-CN'
+    ? t('language.chinese')
+    : t('language.english')
   const options = supportedLanguages.map((value) => ({
     value,
     label: value === 'zh-CN' ? t('language.chinese') : t('language.english'),
@@ -642,18 +645,37 @@ function LanguageSettings() {
   }))
 
   return (
-    <section className="workspace-settings" aria-labelledby="language-settings-heading">
+    <section
+      className="workspace-settings language-settings"
+      aria-busy={isChanging}
+      aria-labelledby="language-settings-heading"
+    >
       <header>
         <div>
           <p className="eyebrow">{t('language.eyebrow')}</p>
-          <h3 id="language-settings-heading">{t('language.title')}</h3>
+          <h3 id="language-settings-heading">{languageLabel}</h3>
         </div>
-        <StatusPill tone="info" label={isChanging ? t('language.switching') : language} />
       </header>
-      <div>
-        <p className="muted-text">{t('language.description')}</p>
+      <div
+        className="language-settings__body"
+        role="group"
+        aria-labelledby="app-language-label"
+      >
+        <span
+          className="language-settings__field-label"
+          id="app-language-label"
+        >
+          {t('language.title')}
+        </span>
+        <p
+          className="language-settings__description muted-text"
+          id="app-language-description"
+        >
+          {t('language.description')}
+        </p>
         <AppSelect
           id="app-language"
+          ariaDescribedBy="app-language-description"
           disabled={isChanging}
           onChange={(value) => {
             if (!isSupportedAppLanguage(value)) return
@@ -664,6 +686,9 @@ function LanguageSettings() {
           placeholder={t('language.placeholder')}
           value={language}
         />
+        <span className="language-settings__feedback" aria-live="polite">
+          {isChanging ? t('language.switching') : ''}
+        </span>
       </div>
     </section>
   )

@@ -253,6 +253,41 @@
   line-height: 1.55;
 }
 
+.language-settings > header {
+  align-items: center;
+}
+
+.language-settings__body {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 16px 18px 18px;
+  background: var(--surface-raised);
+}
+
+.language-settings__field-label {
+  color: var(--text-strong);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.language-settings__description,
+.language-settings__feedback {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.language-settings__description {
+  max-width: 62ch;
+}
+
+.language-settings__feedback {
+  min-height: 15px;
+  color: var(--text-muted);
+}
+
 @media (max-width: 960px) {
   .settings-page__status,
   .settings-page__group {
@@ -269,5 +304,13 @@
 
   .workspace-settings dl {
     grid-template-columns: 1fr;
+  }
+
+  .language-settings > header {
+    padding: 14px 16px;
+  }
+
+  .language-settings__body {
+    padding: 14px 16px 16px;
   }
 }

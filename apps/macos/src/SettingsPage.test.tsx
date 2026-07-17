@@ -235,6 +235,51 @@ describe('SettingsPage API 配置入口', () => {
   })
 })
 
+describe('SettingsPage 语言设置卡片', () => {
+  it('把当前语言作为事实标题展示，不再伪装成状态徽章或重复标题', () => {
+    const markup = renderToStaticMarkup(createElement(SettingsPage, {
+      backend: backend as never,
+    }))
+    const languageCard = markup.match(
+      /<section class="workspace-settings language-settings"[\s\S]*?<\/section>/u,
+    )?.[0] ?? ''
+
+    expect(languageCard).toContain('<p class="eyebrow">界面语言</p>')
+    expect(languageCard).toContain(
+      '<h3 id="language-settings-heading">简体中文</h3>',
+    )
+    expect(languageCard).toMatch(
+      /<span class="language-settings__field-label"[^>]*>选择应用语言<\/span>/u,
+    )
+    expect(languageCard).not.toContain('status-pill')
+    expect(languageCard).not.toContain('>zh-CN<')
+  })
+
+  it('把持久化说明和选择器收进同一内容区，并建立可访问描述关系', () => {
+    const markup = renderToStaticMarkup(createElement(SettingsPage, {
+      backend: backend as never,
+    }))
+
+    expect(markup).toContain('<div class="language-settings__body"')
+    expect(markup).toContain('id="app-language-description"')
+    expect(markup).toContain('aria-describedby="app-language-description"')
+    expect(markup).toContain('aria-live="polite"')
+  })
+
+  it('为桌面与窄窗提供独立的内容间距，不让选择器贴住卡片边缘', () => {
+    const css = readFileSync(resolve('src/SettingsPage.css'), 'utf8')
+
+    expect(css).toMatch(/\.language-settings__body\s*\{[^}]*display:\s*grid;/su)
+    expect(css).toMatch(/\.language-settings__body\s*\{[^}]*gap:\s*10px;/su)
+    expect(css).toMatch(
+      /\.language-settings__body\s*\{[^}]*padding:\s*16px 18px 18px;/su,
+    )
+    expect(css).toMatch(
+      /@media \(max-width: 680px\)[\s\S]*?\.language-settings__body\s*\{[^}]*padding:\s*14px 16px 16px;/su,
+    )
+  })
+})
+
 describe('SettingsPage AI 提示词卡片', () => {
   it('读取并展示当前自然语言采集提示词、状态和真实受控调用链路', async () => {
     const mounted = mountSettingsPage()
