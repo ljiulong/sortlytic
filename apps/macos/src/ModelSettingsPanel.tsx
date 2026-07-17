@@ -2,6 +2,7 @@ import { Bot, KeyRound, ShieldCheck, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ModelProviderView, ProviderTestResult } from './backend-api'
 import type { ModelSettingsInput } from './use-workbench-backend'
+import './SettingsPanels.css'
 
 type ApiFormat = ModelSettingsInput['apiFormat']
 
@@ -129,36 +130,60 @@ function ModelSettingsPanel({
   }
 
   return (
-    <section className="glass-panel compact-panel">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">模型 API 设置</p>
-          <h2>供应商、模型与安全密钥</h2>
+    <section className="settings-provider" aria-labelledby="model-provider-heading">
+      <header className="settings-provider__header">
+        <div className="settings-provider__identity">
+          <span className="settings-provider__icon" data-tone={isActiveProvider ? 'success' : 'info'}>
+            <Bot size={17} aria-hidden="true" />
+          </span>
+          <div>
+            <p className="eyebrow">模型 API</p>
+            <h3 id="model-provider-heading">供应商与结构化输出</h3>
+            <p>管理模型地址、默认模型和安全密钥。</p>
+          </div>
         </div>
         <span className="status-pill" data-tone={isActiveProvider || isValidated ? 'success' : configuredProvider ? 'info' : 'warning'}>
           {isActiveProvider ? '当前使用' : isValidated ? '配置已校验' : configuredProvider ? '已保存' : '待配置'}
         </span>
-      </div>
+      </header>
 
-      <div className="settings-summary">
-        <div className="settings-summary-copy">
-          <div className="connection-icon" data-tone={isActiveProvider ? 'success' : 'info'}>
-            <Bot size={17} aria-hidden="true" />
-          </div>
-          <div>
-            <strong>{activeProvider?.display_name ?? '尚未配置模型 API'}</strong>
-            <span>{activeProvider?.default_model_id ?? '保存后可在弹窗中切换供应商'}</span>
-          </div>
+      <div className="settings-provider__current">
+        <div>
+          <span>当前供应商</span>
+          <strong>{activeProvider?.display_name ?? '尚未配置模型 API'}</strong>
+          <p>{activeProvider?.default_model_id ?? '保存后可在弹窗中切换供应商'}</p>
         </div>
         <button className="primary-button" type="button" onClick={openModal}>
           <KeyRound size={16} aria-hidden="true" />
-          {providers.length > 0 ? '管理模型 API' : '配置模型 API'}
+          {providers.length > 0 ? '管理配置' : '配置 API'}
         </button>
       </div>
 
-      <div className="model-config-summary settings-summary-detail">
+      {activeProvider ? (
+        <dl className="settings-provider__facts settings-provider__facts--model">
+          <div>
+            <dt>供应商</dt>
+            <dd>{activeProvider.display_name}</dd>
+          </div>
+          <div>
+            <dt>默认模型</dt>
+            <dd>{activeProvider.default_model_id || '尚未设置'}</dd>
+          </div>
+          <div>
+            <dt>API 格式</dt>
+            <dd>{apiFormatLabels[toApiFormat(activeProvider.api_format) ?? 'openai_compatible']}</dd>
+          </div>
+        </dl>
+      ) : (
+        <div className="settings-provider__empty">
+          <strong>尚无可用模型配置</strong>
+          <p>保存并校验供应商、模型 ID 和 API Key 后，可以将它设为当前模型。</p>
+        </div>
+      )}
+
+      <div className="settings-provider__security">
         <ShieldCheck size={17} aria-hidden="true" />
-        <span>API Key 只写入 macOS 系统安全存储，应用数据库仅保存密钥引用。</span>
+        <p>API Key 只写入 macOS 系统安全存储，应用数据库仅保存密钥引用。</p>
       </div>
 
       {isOpen ? (
@@ -224,7 +249,7 @@ function ModelSettingsPanel({
                   <input autoComplete="new-password" autoFocus={Boolean(configuredProvider)} placeholder={configuredProvider ? '留空以复用已保存密钥' : '只保存到系统安全存储'} type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} />
                 </label>
               </div>
-              <div className="model-security-note">
+              <div className="settings-provider__dialog-security">
                 <ShieldCheck size={17} aria-hidden="true" />
                 <p>API Key 只写入 macOS 系统安全存储，当前操作校验配置完整性，不会发起真实模型请求。</p>
               </div>

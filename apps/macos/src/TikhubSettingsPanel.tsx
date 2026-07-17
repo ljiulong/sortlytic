@@ -1,6 +1,7 @@
-import { ChartNoAxesCombined, KeyRound, MonitorCheck, ShieldCheck, WalletCards, X } from 'lucide-react'
+import { KeyRound, MonitorCheck, ShieldCheck, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { TikhubConnectionTestResult, TikhubConnectorView } from './backend-api'
+import './SettingsPanels.css'
 
 type TikhubSettingsPanelProps = {
   connector?: TikhubConnectorView | null
@@ -40,40 +41,54 @@ function TikhubSettingsPanel({ connector, isBusy, result, onSaveAndTest }: Tikhu
   }
 
   return (
-    <section className="glass-panel compact-panel">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">TikHub 设置</p>
-          <h2>账户额度与可行性测试</h2>
+    <section className="settings-provider" aria-labelledby="tikhub-provider-heading">
+      <header className="settings-provider__header">
+        <div className="settings-provider__identity">
+          <span className="settings-provider__icon" data-tone={result?.success ? 'success' : 'info'}>
+            <MonitorCheck size={17} aria-hidden="true" />
+          </span>
+          <div>
+            <p className="eyebrow">TikHub API</p>
+            <h3 id="tikhub-provider-heading">账户与可用额度</h3>
+            <p>连接 TikTok、抖音和小红书的公开数据接口。</p>
+          </div>
         </div>
         <span className="status-pill" data-tone={result?.success ? 'success' : connector?.enabled ? 'info' : 'warning'}>
           {statusLabel}
         </span>
-      </div>
+      </header>
 
-      <div className="settings-summary">
-        <div className="settings-summary-copy">
-          <div className="connection-icon" data-tone={result?.success ? 'success' : 'info'}>
-            <MonitorCheck size={17} aria-hidden="true" />
-          </div>
-          <div>
-            <strong>{connector?.base_url ?? '尚未配置 TikHub API'}</strong>
-            <span>{hasSavedToken ? 'Token 已保存到系统安全存储' : 'Token 尚未绑定'}</span>
-          </div>
+      <div className="settings-provider__current">
+        <div>
+          <span>当前端点</span>
+          <strong>{connector?.base_url ?? '尚未配置 TikHub API'}</strong>
+          <p>{hasSavedToken ? 'Token 已保存到系统安全存储' : 'Token 尚未绑定'}</p>
         </div>
         <button className="primary-button" type="button" onClick={() => setIsOpen(true)}>
           <KeyRound size={16} aria-hidden="true" />
-          {hasSavedToken ? '编辑 TikHub 配置' : '配置 TikHub API'}
+          {hasSavedToken ? '管理配置' : '配置 API'}
         </button>
       </div>
 
-      <div className="export-grid">
-        <InfoItem icon={MonitorCheck} label="账号" value={result?.masked_email ?? '等待 Token 测试'} />
-        <InfoItem icon={WalletCards} label="充值余额" value={formatCredit(result?.balance)} />
-        <InfoItem icon={ShieldCheck} label="免费额度" value={formatCredit(result?.free_credit)} />
-        <InfoItem icon={WalletCards} label="可用额度合计" value={formatCredit(result?.available_credit)} />
-        <InfoItem icon={ChartNoAxesCombined} label="今日用量" value={formatDailyUsage(result?.daily_usage_json)} />
-        <InfoItem icon={ShieldCheck} label="邮箱验证" value={result?.email_verified == null ? '未知' : result.email_verified ? '已验证' : '未验证'} />
+      {result ? (
+        <dl className="settings-provider__facts">
+          <ProviderFact label="账号" value={result.masked_email ?? '未返回账号'} />
+          <ProviderFact label="邮箱验证" value={result.email_verified == null ? '未知' : result.email_verified ? '已验证' : '未验证'} />
+          <ProviderFact label="充值余额" value={formatCredit(result.balance)} numeric />
+          <ProviderFact label="免费额度" value={formatCredit(result.free_credit)} numeric />
+          <ProviderFact label="可用额度合计" value={formatCredit(result.available_credit)} numeric />
+          <ProviderFact label="今日用量" value={formatDailyUsage(result.daily_usage_json)} numeric />
+        </dl>
+      ) : (
+        <div className="settings-provider__empty">
+          <strong>尚无账户与额度结果</strong>
+          <p>保存并测试 Token 后，这里会显示真实账号、双额度和今日请求数。</p>
+        </div>
+      )}
+
+      <div className="settings-provider__security">
+        <ShieldCheck size={16} aria-hidden="true" />
+        <p>Token 只写入 macOS 系统安全存储，应用数据库仅保存密钥引用。</p>
       </div>
 
       {isOpen ? (
@@ -125,7 +140,7 @@ function TikhubSettingsPanel({ connector, isBusy, result, onSaveAndTest }: Tikhu
                   onChange={(event) => setToken(event.target.value)}
                 />
               </label>
-              <div className="model-security-note">
+              <div className="settings-provider__dialog-security">
                 <ShieldCheck size={17} aria-hidden="true" />
                 <p>Token 只写入 macOS 系统安全存储，应用数据库仅保存密钥引用。</p>
               </div>
@@ -163,24 +178,19 @@ function formatDailyUsage(value?: Record<string, unknown>) {
   return requestCount == null ? '已获取明细' : `${requestCount.toLocaleString()} 次请求`
 }
 
-function InfoItem({
-  icon: Icon,
+function ProviderFact({
   label,
   value,
+  numeric = false,
 }: {
-  icon: typeof MonitorCheck
   label: string
   value: string
+  numeric?: boolean
 }) {
   return (
-    <div className="export-item">
-      <div className="connection-icon" data-tone="info">
-        <Icon size={15} aria-hidden="true" />
-      </div>
-      <div>
-        <span>{label}</span>
-        <strong>{value}</strong>
-      </div>
+    <div>
+      <dt>{label}</dt>
+      <dd data-numeric={numeric}>{value}</dd>
     </div>
   )
 }
