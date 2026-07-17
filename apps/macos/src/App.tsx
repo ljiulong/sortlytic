@@ -191,7 +191,9 @@ function TopBar({
   onOpenGuide: () => void
 }) {
   const { t } = useTranslation('navigation')
+  const { t: tMessages } = useTranslation('messages')
   const pageCopy = pageMetaTranslationKeys[activeNav]
+  const actionCopy = localizeBackendMessage(actionMessage)
 
   return (
     <header className="topbar">
@@ -202,7 +204,7 @@ function TopBar({
       </div>
       <div className="topbar-actions">
         <p className="topbar-status" aria-live="polite">
-          {isInitializing ? t('initializingBackend') : actionMessage}
+          {isInitializing ? t('initializingBackend') : tMessages(actionCopy.key, actionCopy.options)}
         </p>
         <ThemeToggle />
         <button
@@ -218,4 +220,42 @@ function TopBar({
     </header>
   )
 }
+
+type MessageCopy = {
+  key: string
+  options?: Record<string, string | number>
+}
+
+const backendMessageKeys: Record<string, string> = {
+  '后端正在初始化本地工作区': 'action.initializing',
+  '等待生成': 'action.waitingForPlan',
+  '等待确认': 'action.awaitingConfirmation',
+  '采集计划已保存到本地 SQLite，等待确认运行': 'action.formPlanSaved',
+  '自然语言计划已生成，并保存了提示词运行快照': 'action.naturalPlanSaved',
+  '任务已确认并加入本地队列': 'action.confirmed',
+  '任务名称已更新': 'action.renamed',
+  '任务已取消': 'action.cancelled',
+  '任务已删除': 'action.deleted',
+  '当前未连接本地后端，不展示预览数据；请打开打包后的 macOS 应用': 'action.backendUnavailable',
+  '本地工作区已打开，后端可用': 'action.workspaceReady',
+  '计划需要修正': 'action.planNeedsRevision',
+  '后端调用失败': 'error.backendCallFailed',
+  '后端读取失败': 'error.backendReadFailed',
+  '数据库读取失败': 'error.databaseReadFailed',
+  '请先生成采集计划': 'error.generatePlanFirst',
+  '请先检查更新': 'error.checkUpdateFirst',
+  '请在打包后的 macOS 应用内使用后端能力': 'error.packagedAppRequired',
+  '任务名称至少需要 2 个字符': 'error.taskNameTooShort',
+}
+
+function localizeBackendMessage(message: string): MessageCopy {
+  const exportMatch = /^(Excel|PDF) 已导出到本地工作区$/.exec(message)
+  if (exportMatch) return { key: 'action.exported', options: { format: exportMatch[1] } }
+  const key = backendMessageKeys[message]
+  if (key) return { key }
+  return /[^\p{ASCII}]/u.test(message)
+    ? { key: 'error.unknown' }
+    : { key: 'error.raw', options: { message } }
+}
+
 export default App
