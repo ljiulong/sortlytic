@@ -35,7 +35,8 @@ function readStoredLanguage(): AppLanguage | null {
 }
 
 export function detectInitialLanguage(): AppLanguage {
-  return readStoredLanguage() ?? normalizeLanguage(globalThis.navigator?.language)
+  const systemLanguage = typeof window === 'undefined' ? undefined : globalThis.navigator?.language
+  return readStoredLanguage() ?? normalizeLanguage(systemLanguage)
 }
 
 export const i18n = i18next

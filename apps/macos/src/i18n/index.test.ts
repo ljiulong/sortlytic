@@ -17,6 +17,17 @@ function setNavigatorLanguage(language: string) {
   })
 }
 
+function setBrowserEnvironment(enabled: boolean) {
+  if (enabled) {
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: {},
+    })
+  } else {
+    Reflect.deleteProperty(globalThis, 'window')
+  }
+}
+
 const storage = new Map<string, string>()
 
 Object.defineProperty(globalThis, 'localStorage', {
@@ -31,11 +42,13 @@ Object.defineProperty(globalThis, 'localStorage', {
 describe('language configuration', () => {
   beforeEach(() => {
     globalThis.localStorage.clear()
+    setBrowserEnvironment(true)
     setNavigatorLanguage(originalNavigatorLanguage)
   })
 
   afterEach(() => {
     globalThis.localStorage.clear()
+    setBrowserEnvironment(false)
     setNavigatorLanguage(originalNavigatorLanguage)
   })
 
@@ -60,10 +73,42 @@ describe('language configuration', () => {
     expect(detectInitialLanguage()).toBe('en-US')
   })
 
+  it('falls back to Chinese when no browser environment is available', () => {
+    setBrowserEnvironment(false)
+    setNavigatorLanguage('en-US')
+
+    expect(detectInitialLanguage()).toBe('zh-CN')
+  })
+
   it('persists a valid language after changing the current session', async () => {
     await changeAppLanguage('en-US')
 
     expect(i18n.language).toBe('en-US')
     expect(globalThis.localStorage.getItem(languageStorageKey)).toBe('en-US')
+  })
+
+  it('keeps a session language change when local storage is unavailable', async () => {
+    const originalStorage = globalThis.localStorage
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: () => {
+          throw new Error('storage unavailable')
+        },
+        setItem: () => {
+          throw new Error('storage unavailable')
+        },
+      },
+    })
+
+    try {
+      await expect(changeAppLanguage('en-US')).resolves.toBeUndefined()
+      expect(i18n.language).toBe('en-US')
+    } finally {
+      Object.defineProperty(globalThis, 'localStorage', {
+        configurable: true,
+        value: originalStorage,
+      })
+    }
   })
 })
