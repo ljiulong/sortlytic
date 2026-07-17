@@ -12,6 +12,7 @@ pub mod prompts;
 pub mod providers;
 pub mod records;
 pub mod secrets;
+mod task_commands;
 pub mod tasks;
 pub mod tikhub;
 pub mod workspace;
@@ -35,10 +36,12 @@ use providers::{
   ModelProfileInput, ModelProfileView, ModelProviderInput, ModelProviderView, ProviderTestResult,
 };
 use secrets::{SecretConnectionTestResult, SecretRefView};
-use tasks::{
-  CollectionPlanView, CollectionTaskView, CostEstimateView, CreateCollectionTaskInput,
-  SaveCollectionPlanInput, TaskLogView, TaskRunView, UpdateCollectionTaskInput,
+use task_commands::{
+  cancel_task, confirm_collection_plan, copy_task, create_collection_task, delete_task,
+  enqueue_task, estimate_task_cost, execute_next_task, get_latest_collection_plan, get_task,
+  list_task_logs, list_tasks, retry_task, save_collection_plan, update_collection_task,
 };
+use tasks::CostEstimateView;
 use tauri::Manager;
 use tikhub::{
   TikhubConnectionTestResult, TikhubConnectorInput, TikhubConnectorView, TikhubPriceQuote,
@@ -350,159 +353,6 @@ fn set_active_model_provider(
 ) -> AppResult<bool> {
   let root_path = resolve_workspace_root(root_path, &state)?;
   providers::set_active_model_provider(root_path, &provider_id)
-}
-
-#[tauri::command]
-fn create_collection_task(
-  input: CreateCollectionTaskInput,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<CollectionTaskView> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  tasks::create_collection_task(root_path, input)
-}
-
-#[tauri::command]
-fn update_collection_task(
-  task_id: String,
-  input: UpdateCollectionTaskInput,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<CollectionTaskView> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  tasks::update_collection_task(root_path, &task_id, input)
-}
-
-#[tauri::command]
-fn save_collection_plan(
-  input: SaveCollectionPlanInput,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<CollectionPlanView> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  tasks::save_collection_plan(root_path, input)
-}
-
-#[tauri::command]
-fn estimate_task_cost(
-  task_id: Option<String>,
-  plan_json: Option<serde_json::Value>,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<CostEstimateView> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  tasks::estimate_task_cost(root_path, task_id, plan_json)
-}
-
-#[tauri::command]
-fn confirm_collection_plan(
-  task_id: String,
-  plan_id: String,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<CollectionTaskView> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  tasks::confirm_collection_plan(root_path, &task_id, &plan_id)
-}
-
-#[tauri::command]
-fn get_latest_collection_plan(
-  task_id: String,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<CollectionPlanView> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  tasks::get_latest_collection_plan(root_path, &task_id)
-}
-
-#[tauri::command]
-fn enqueue_task(
-  task_id: String,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<TaskRunView> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  tasks::enqueue_task(root_path, &task_id)
-}
-
-#[tauri::command]
-fn execute_next_task(
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<Option<TaskRunView>> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  tasks::execute_next_task(root_path)
-}
-
-#[tauri::command]
-fn cancel_task(
-  task_id: String,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<CollectionTaskView> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  tasks::cancel_task(root_path, &task_id)
-}
-
-#[tauri::command]
-fn delete_task(
-  task_id: String,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<()> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  tasks::delete_task(root_path, &task_id)
-}
-
-#[tauri::command]
-fn retry_task(
-  task_id: String,
-  stage: Option<String>,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<TaskRunView> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  tasks::retry_task(root_path, &task_id, stage)
-}
-
-#[tauri::command]
-fn copy_task(
-  task_id: String,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<CollectionTaskView> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  tasks::copy_task(root_path, &task_id)
-}
-
-#[tauri::command]
-fn get_task(
-  task_id: String,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<CollectionTaskView> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  tasks::get_task(root_path, &task_id)
-}
-
-#[tauri::command]
-fn list_tasks(
-  status: Option<String>,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<Vec<CollectionTaskView>> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  tasks::list_tasks(root_path, status)
-}
-
-#[tauri::command]
-fn list_task_logs(
-  task_run_id: String,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<Vec<TaskLogView>> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  tasks::list_task_logs(root_path, &task_run_id)
 }
 
 #[tauri::command]
