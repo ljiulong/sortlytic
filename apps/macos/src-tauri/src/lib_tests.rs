@@ -22,6 +22,19 @@ fn legacy_api_profile_reads_are_not_exposed_as_tauri_commands() {
 }
 
 #[test]
+fn prompt_activation_keeps_real_model_regressions_off_the_ui_thread() {
+  let source = include_str!("lib.rs");
+  let command = source
+    .split("async fn activate_prompt_version(")
+    .nth(1)
+    .and_then(|tail| tail.split("fn list_prompt_regression_cases(").next())
+    .expect("prompt activation should be an async Tauri command");
+
+  assert!(command.contains("tauri::async_runtime::spawn_blocking"));
+  assert!(command.contains("prompts::activate_prompt_version"));
+}
+
+#[test]
 fn default_workspace_initialization_preserves_an_explicit_workspace() {
   let active_root = std::env::temp_dir().join(format!("active-workspace-{}", uuid::Uuid::new_v4()));
   let default_root =

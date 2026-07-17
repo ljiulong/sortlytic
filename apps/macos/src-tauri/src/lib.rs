@@ -207,13 +207,24 @@ fn create_prompt_version(
 }
 
 #[tauri::command]
-fn activate_prompt_version(
+async fn activate_prompt_version(
   prompt_version_id: String,
   root_path: Option<String>,
   state: tauri::State<'_, AppState>,
 ) -> AppResult<PromptVersionView> {
   let root_path = resolve_workspace_root(root_path, &state)?;
-  prompts::activate_prompt_version(root_path, &prompt_version_id)
+  tauri::async_runtime::spawn_blocking(move || {
+    prompts::activate_prompt_version(root_path, &prompt_version_id)
+  })
+  .await
+  .map_err(|error| {
+    AppError::new(
+      domain::AppErrorCode::ModelProtocolError,
+      format!("提示词回归后台任务异常结束：{error}"),
+      AppErrorStage::Ai,
+      true,
+    )
+  })?
 }
 
 #[tauri::command]
