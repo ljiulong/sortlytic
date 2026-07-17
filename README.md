@@ -298,7 +298,6 @@ Do not commit signing keys, API tokens, or exported credentials to the repositor
 │   ├── src-tauri/              # Rust commands, storage, workers, and bundling
 │   └── package.json            # pnpm scripts and frontend dependencies
 ├── excel/                      # Spreadsheet templates used by the project
-├── plan/                       # Product, architecture, testing, and delivery notes
 ├── AGENTS.md                   # Repository collaboration rules
 ├── README.md                   # English documentation
 └── README-zh.md                # Simplified Chinese documentation
