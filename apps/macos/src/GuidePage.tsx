@@ -33,7 +33,7 @@ const guideChapters: GuideChapter[] = [
       },
       {
         title: '准备服务凭据',
-        detail: '采集需要已验证的 TikHub 账号和 API Token；AI 处理还需要一个支持结构化输出的模型供应商。',
+        detail: '采集需要已验证的 TikHub 账号和 API Token。旧配置需要重新输入 TikHub Token 和 AI API Key 一次，应用不会读取或删除旧钥匙串条目。',
       },
       {
         title: '确定最小验证目标',
@@ -72,7 +72,7 @@ const guideChapters: GuideChapter[] = [
     facts: [
       { label: '请求头', value: 'Authorization' },
       { label: '值格式', value: 'Bearer YOUR_API_KEY' },
-      { label: '保存方式', value: '数据库只保存系统安全存储引用，不保存明文 Token。' },
+      { label: '保存方式', value: 'Token 以明文写入当前工作区私有 JSON，不进入数据库、日志、导出或 Webhook。' },
       { label: '费用依据', value: '不同端点价格可能不同，创建计划时读取实时计价与双额度。' },
     ],
     action: 'settings',
@@ -80,30 +80,30 @@ const guideChapters: GuideChapter[] = [
   {
     id: 'model',
     title: '配置 AI 处理',
-    summary: '模型配置不仅是 API Key，还必须能稳定返回受约束的结构化结果。',
+    summary: '本版本只保存、校验和切换 AI 配置，不发起真实模型请求。',
     procedures: [
       {
-        title: '添加模型供应商',
-        detail: '填写供应商、API 格式、模型 ID 和密钥，并执行真实连通测试。模型 ID 必须是供应商当前可用的正式标识。',
+        title: '添加 AI 配置',
+        detail: '填写唯一名称、供应商、API 格式、Base URL、默认模型 ID 和密钥。Ollama 可以不填密钥。',
       },
       {
-        title: '确认结构化输出',
-        detail: '使用 Schema 约束字段、类型和必填项，避免自由文本直接进入标准化记录。',
+        title: '执行本地校验',
+        detail: '应用只检查协议、地址、模型和密钥是否完整，不调用供应商 API。未通过校验的配置不能设为当前配置。',
       },
       {
-        title: '固定提示词版本',
-        detail: '每次重要调整都保存新的提示词版本，并用基础回归样例检查字段完整性、规则与输出稳定性。',
+        title: '切换当前配置',
+        detail: '可以保存多个同类供应商、账号或端点，每次只有一个当前 AI 配置。切换不会修改其他配置。',
       },
       {
-        title: '保留来源证据',
-        detail: '模型结论应能追溯到原始记录、字段路径和转换理由；无来源的结论不能伪装成已验证事实。',
+        title: '了解当前边界',
+        detail: '当前自然语言计划仍由本地规则引擎生成。未来接入模型执行时，再引入提示词版本、Schema 约束和来源证据。',
       },
     ],
     facts: [
-      { label: '最低可用状态', value: '供应商已连接、默认模型 ID 有效、结构化输出测试通过。' },
-      { label: '版本边界', value: '提示词版本、Schema 版本和模型运行记录随结果保留。' },
-      { label: '回归检查', value: '至少覆盖成功样例、缺字段、格式错误和证据不足。' },
-      { label: '密钥边界', value: '模型密钥同样只保存为系统安全存储引用。' },
+      { label: '当前能力', value: '保存、查看、编辑、本地校验和切换 AI 配置。' },
+      { label: '校验方式', value: '只校验配置完整性，不发起真实模型请求。' },
+      { label: '任务边界', value: '当前规则引擎不会调用 AI 模型。' },
+      { label: '密钥边界', value: 'AI API Key 与 TikHub Token 使用同一个工作区私有 JSON。' },
     ],
   },
   {
@@ -209,14 +209,14 @@ const guideChapters: GuideChapter[] = [
     facts: [
       { label: 'Excel', value: '适合结构化明细、筛选、计算和运营交付。' },
       { label: 'PDF', value: '适合固定版式报告、阅读和审阅。' },
-      { label: '证据检查', value: '保留来源证据、提示词版本、Schema 与模型运行信息。' },
+      { label: '证据检查', value: '保留采集流程产生的来源证据；本版本不产生 AI 模型运行信息。' },
       { label: '导出边界', value: '每条任务独立选择一种格式，不强制同时生成两种文件。' },
     ],
   },
 ]
 
 const safetyChecks = [
-  'Token 和模型密钥只保存为系统安全存储引用，任务、日志和导出文件不写入明文密钥。',
+  '密钥以明文写入当前工作区私有 JSON，不进入数据库、日志、导出或 Webhook；目录权限为 0700，文件权限为 0600。',
   '年龄与性别筛选只使用接口或公开资料明确返回的值，禁止从头像、姓名或简介推断。',
   '生成计划不等于开始运行，必须完成费用与范围复核后再确认运行。',
   '删除任务会移除本地关联数据，确认前先完成需要的 Excel 或 PDF 导出。',
@@ -234,7 +234,7 @@ const troubleshootingItems = [
   },
   {
     symptom: '计划不能确认运行',
-    action: '查看计划底部第一条阻塞原因，补齐范围、实时计价、额度或模型配置，不要重复点击确认。',
+    action: '查看计划底部第一条阻塞原因，补齐范围、实时计价或额度，不要重复点击确认。',
   },
   {
     symptom: '任务没有结果',

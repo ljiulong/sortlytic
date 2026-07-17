@@ -81,7 +81,7 @@ function Workbench() {
 
         <div className="sidebar-footer">
           <StatusPill tone="success" label="本地优先" />
-          <p>密钥仅保存为系统安全存储引用。</p>
+          <p>密钥明文写入当前工作区私有 JSON，不进入数据库、日志或导出。</p>
         </div>
       </aside>
       <main className="workspace" id="main-content" tabIndex={-1}>
