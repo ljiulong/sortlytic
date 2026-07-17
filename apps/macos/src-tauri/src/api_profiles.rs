@@ -11,9 +11,13 @@ use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 mod mirror;
 mod storage;
 
+#[cfg(test)]
+mod concurrency_tests;
+
 pub const API_PROFILE_SCHEMA_VERSION: u32 = 1;
 
 static REGISTRY_LOCK: Mutex<()> = Mutex::new(());
+static MIRROR_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -182,29 +186,50 @@ pub fn initialize_api_profile_registry(
   root_path: impl AsRef<Path>,
 ) -> AppResult<ApiProfileRegistry> {
   let root_path = root_path.as_ref();
-  let registry = match load_existing_api_profile_registry(root_path)? {
-    Some(registry) => registry,
-    None => {
-      let registry = mirror::import_legacy_registry(root_path)?;
-      save_api_profile_registry(root_path, &registry)?;
-      registry
-    }
-  };
-  mirror::mirror_registry(root_path, &registry)?;
-  Ok(registry)
+  with_mirror_lock(|| {
+    let registry = match load_existing_api_profile_registry(root_path)? {
+      Some(registry) => registry,
+      None => {
+        let imported = mirror::import_legacy_registry(root_path)?;
+        with_registry_lock(|| match storage::load_optional_registry(root_path)? {
+          Some(registry) => Ok(registry),
+          None => {
+            validate_registry(&imported)?;
+            storage::write_registry(root_path, &imported)?;
+            Ok(imported)
+          }
+        })?
+      }
+    };
+    mirror::mirror_registry(root_path, &registry)?;
+    Ok(registry)
+  })
 }
 
 pub fn sync_api_profile_mirror(root_path: impl AsRef<Path>) -> AppResult<()> {
   let root_path = root_path.as_ref();
-  let registry = load_existing_api_profile_registry(root_path)?
-    .ok_or_else(|| registry_error("API 配置文件不存在，已拒绝重建 SQLite 镜像"))?;
-  mirror::mirror_registry(root_path, &registry)
+  with_mirror_lock(|| {
+    let registry = load_existing_api_profile_registry(root_path)?
+      .ok_or_else(|| registry_error("API 配置文件不存在，已拒绝重建 SQLite 镜像"))?;
+    #[cfg(test)]
+    concurrency_tests::run_before_mirror_hook(root_path);
+    mirror::mirror_registry(root_path, &registry)
+  })
 }
 
 fn with_registry_lock<T>(operation: impl FnOnce() -> AppResult<T>) -> AppResult<T> {
   let _guard = REGISTRY_LOCK
     .lock()
     .map_err(|_| registry_error("API 配置注册表锁已损坏，请重启应用后重试"))?;
+  #[cfg(test)]
+  let _state_guard = concurrency_tests::mark_registry_lock_held();
+  operation()
+}
+
+fn with_mirror_lock<T>(operation: impl FnOnce() -> AppResult<T>) -> AppResult<T> {
+  let _guard = MIRROR_LOCK
+    .lock()
+    .map_err(|_| registry_error("API 配置镜像锁已损坏，请重启应用后重试"))?;
   operation()
 }
 
