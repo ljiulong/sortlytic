@@ -369,6 +369,18 @@ export function createExportJob(reportId: string, exportType: 'xlsx' | 'pdf') {
   })
 }
 
+function isTauriRuntime() {
+  return typeof window !== 'undefined'
+    && '__TAURI_INTERNALS__' in window
+}
+
+export async function getCurrentAppVersion(): Promise<string | null> {
+  if (!isTauriRuntime()) return null
+
+  const { getVersion } = await import('@tauri-apps/api/app')
+  return getVersion()
+}
+
 export async function checkForAppUpdate(): Promise<AppUpdateInfo | null> {
   const { check } = await import('@tauri-apps/plugin-updater')
   const update = await check()
@@ -389,13 +401,21 @@ export async function checkForAppUpdate(): Promise<AppUpdateInfo | null> {
     : null
 }
 
-export async function installAppUpdate() {
+export async function prepareAppUpdate(): Promise<void> {
   if (!pendingAppUpdate) {
     throw new Error('请先检查更新')
   }
   await pendingAppUpdate.downloadAndInstall()
+}
+
+export async function relaunchAfterAppUpdate(): Promise<void> {
   const { relaunch } = await import('@tauri-apps/plugin-process')
   await relaunch()
+}
+
+export async function installAppUpdate(): Promise<void> {
+  await prepareAppUpdate()
+  await relaunchAfterAppUpdate()
 }
 
 export function backendErrorMessage(error: unknown) {
