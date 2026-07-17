@@ -74,11 +74,8 @@ fn snapshot_secret_reads_require_exact_profile_and_revision() {
     read_secret_for_snapshot(&root, &saved.id, "tikhub", &saved.provider_id, 1).unwrap(),
     original
   );
-  assert_eq!(
-    read_secret_for_snapshot(&root, &saved.id, "tikhub", "default", 1)
-      .expect("旧 v7 TikHub 快照标识应继续绑定同一凭据修订"),
-    original
-  );
+  read_secret_for_snapshot(&root, &saved.id, "tikhub", "default", 1)
+    .expect_err("没有活动数据库快照时不得仅凭旧别名读取密钥");
 
   update_secret(&root, &saved.id, replacement).unwrap();
   for error in [
@@ -96,6 +93,96 @@ fn snapshot_secret_reads_require_exact_profile_and_revision() {
     read_secret_for_snapshot(&root, &saved.id, "tikhub", &saved.provider_id, 2).unwrap(),
     replacement
   );
+  fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn legacy_tikhub_snapshot_alias_requires_an_exact_active_database_binding() {
+  let root = test_workspace("legacy-snapshot-alias");
+  let secret = "legacy-snapshot-secret-7193";
+  let saved = save_secret(
+    &root,
+    "tikhub",
+    "default",
+    secret,
+    Some("迁移后账号".into()),
+  )
+  .unwrap();
+  for (label, legacy_provider_id, status) in [
+    ("active-queued", "provider-legacy-queued", "queued"),
+    ("active-running", "provider-legacy-custom", "running"),
+  ] {
+    insert_runtime_snapshot(&root, label, legacy_provider_id, &saved.id, 1, status);
+    assert_eq!(
+      read_secret_for_snapshot(&root, &saved.id, "tikhub", legacy_provider_id, 1)
+        .expect("活动旧 TikHub 快照应继续读取绑定的当前 JSON 凭据"),
+      secret
+    );
+  }
+
+  let forged_alias =
+    read_secret_for_snapshot(&root, &saved.id, "tikhub", "provider-legacy-forged", 1)
+      .expect_err("没有完全匹配快照行的旧别名必须拒绝");
+  assert_eq!(forged_alias.code, AppErrorCode::PermissionError);
+
+  insert_runtime_snapshot(
+    &root,
+    "wrong-ref",
+    "provider-legacy-wrong-ref",
+    "foreign-secret-ref",
+    1,
+    "running",
+  );
+  let wrong_ref =
+    read_secret_for_snapshot(&root, &saved.id, "tikhub", "provider-legacy-wrong-ref", 1)
+      .expect_err("旧别名快照的 secret_ref_id 不一致时必须拒绝");
+  assert_eq!(wrong_ref.code, AppErrorCode::PermissionError);
+
+  insert_runtime_snapshot(
+    &root,
+    "wrong-revision",
+    "provider-legacy-wrong-revision",
+    &saved.id,
+    2,
+    "running",
+  );
+  let wrong_revision = read_secret_for_snapshot(
+    &root,
+    &saved.id,
+    "tikhub",
+    "provider-legacy-wrong-revision",
+    1,
+  )
+  .expect_err("旧别名快照的 secret_revision 不一致时必须拒绝");
+  assert_eq!(wrong_revision.code, AppErrorCode::PermissionError);
+
+  let forged_uuid = Uuid::new_v4().to_string();
+  insert_runtime_snapshot(&root, "active-uuid", &forged_uuid, &saved.id, 1, "queued");
+  let strict_identity = read_secret_for_snapshot(&root, &saved.id, "tikhub", &forged_uuid, 1)
+    .expect_err("新 UUID 配置身份即使出现在快照中也必须严格匹配 JSON profile");
+  assert_eq!(strict_identity.code, AppErrorCode::PermissionError);
+
+  insert_runtime_snapshot(
+    &root,
+    "inactive-legacy",
+    "provider-legacy-inactive",
+    &saved.id,
+    1,
+    "success",
+  );
+  let inactive =
+    read_secret_for_snapshot(&root, &saved.id, "tikhub", "provider-legacy-inactive", 1)
+      .expect_err("非 queued/running 的历史快照不得授权读取密钥");
+  assert_eq!(inactive.code, AppErrorCode::PermissionError);
+  for error in [
+    forged_alias,
+    wrong_ref,
+    wrong_revision,
+    strict_identity,
+    inactive,
+  ] {
+    assert!(!error.message.contains(secret));
+  }
   fs::remove_dir_all(root).ok();
 }
 
@@ -202,6 +289,56 @@ fn insert_legacy_tikhub(root: &Path, secret_ref_id: &str, store_key: &str) {
        ) VALUES ('default', ?1, ?2, 'https://api.tikhub.io', 1, 1,
                  ?3, 'success', ?3, ?3)",
       params![workspace_id, secret_ref_id, now],
+    )
+    .unwrap();
+}
+
+fn insert_runtime_snapshot(
+  root: &Path,
+  label: &str,
+  provider_id: &str,
+  secret_ref_id: &str,
+  secret_revision: u64,
+  status: &str,
+) {
+  let connection = open_workspace_database(root.join(DATABASE_FILE_NAME)).unwrap();
+  let now = Utc::now().to_rfc3339();
+  let secret_revision = i64::try_from(secret_revision).unwrap();
+  connection
+    .execute_batch("DROP TRIGGER IF EXISTS trg_collection_runtime_snapshot_insert;")
+    .unwrap();
+  connection
+    .execute(
+      "INSERT INTO collection_task (id,name,source_type,status,created_at,updated_at)
+       VALUES (?1,?2,'form',?3,?4,?4)",
+      params![format!("task-{label}"), label, status, now],
+    )
+    .unwrap();
+  connection
+    .execute(
+      "INSERT INTO task_run (id,task_id,status,started_at,claimed_at,current_stage)
+       VALUES (?1,?2,?3,?4,?4,'恢复待发送')",
+      params![format!("run-{label}"), format!("task-{label}"), status, now],
+    )
+    .unwrap();
+  connection
+    .execute(
+      "INSERT INTO collection_runtime_snapshot (
+         id,task_run_id,workspace_id,runtime_contract_version,plan_id,plan_schema_version,
+         plan_json,connector_type,connector_id,connector_config_version,base_url,secret_ref_id,
+         secret_revision,secret_provider_type,secret_provider_id,connector_tested_at,
+         connector_test_status,created_at
+       ) SELECT ?1,?2,id,1,?3,2,'{}','tikhub','default',1,'https://api.tikhub.io',?4,?5,
+                'tikhub',?6,?7,'success',?7 FROM workspace",
+      params![
+        format!("snapshot-{label}"),
+        format!("run-{label}"),
+        format!("plan-{label}"),
+        secret_ref_id,
+        secret_revision,
+        provider_id,
+        now,
+      ],
     )
     .unwrap();
 }
