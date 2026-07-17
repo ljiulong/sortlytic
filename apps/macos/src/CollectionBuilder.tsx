@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import * as Tabs from '@radix-ui/react-tabs'
 import { zodResolver } from '@hookform/resolvers/zod'
 import {
@@ -13,16 +13,19 @@ import {
   Wrench,
 } from 'lucide-react'
 import { Controller, useForm } from 'react-hook-form'
+import { useTranslation } from 'react-i18next'
 import type { z } from 'zod'
 import AppSelect from './AppSelect'
 import './CollectionBuilder.css'
 import {
   AGE_RANGE_LIMITS,
   collectionFormSchema,
-  collectionDataTypeOptions,
   countryRegionOptions,
-  genderFilterOptions,
+  createCollectionFormSchema,
+  getCollectionDataTypeOptions,
+  getGenderFilterOptions,
   supportsRegionSelection,
+  type CollectionTranslator,
   type CollectionDataType,
 } from './collection-options'
 import {
@@ -34,6 +37,7 @@ import {
   countryRegionSelectOptions,
   platformSelectOptions,
 } from './collection-select-options'
+import { i18n } from './i18n'
 import type { RuntimeCollectionPlan } from './use-workbench-backend'
 import type { DataType } from './workbench-data'
 
@@ -63,7 +67,11 @@ export function CollectionBuilder({
   onGenerateFormPlan: (values: CollectionFormValues) => Promise<RuntimeCollectionPlan>
   onGenerateNaturalPlan: (intentText: string) => Promise<RuntimeCollectionPlan>
 }) {
+  const { t } = useTranslation('collection', { i18n })
   const [naturalText, setNaturalText] = useState(naturalIntentDefault)
+  const formSchema = useMemo(() => createCollectionFormSchema(t), [t])
+  const localizedDataTypeOptions = useMemo(() => getCollectionDataTypeOptions(t), [t])
+  const localizedGenderFilterOptions = useMemo(() => getGenderFilterOptions(t), [t])
   const {
     control,
     register,
@@ -72,7 +80,7 @@ export function CollectionBuilder({
     watch,
     formState: { errors },
   } = useForm<CollectionFormInput, unknown, CollectionFormValues>({
-    resolver: zodResolver(collectionFormSchema),
+    resolver: zodResolver(formSchema),
     defaultValues: newCollectionFormDefaults,
   })
   const selectedPlatform = watch('platform')
@@ -106,41 +114,41 @@ export function CollectionBuilder({
     <section className="collection-builder" aria-labelledby="collection-builder-heading">
       <header className="collection-builder__heading">
         <div>
-          <p className="eyebrow">采集创建</p>
-          <h2 id="collection-builder-heading">定义一条可执行的采集任务</h2>
-          <p>先完成参数校验和实时计价，再由你确认是否进入运行队列。</p>
+          <p className="eyebrow">{t('header.eyebrow')}</p>
+          <h2 id="collection-builder-heading">{t('header.title')}</h2>
+          <p>{t('header.description')}</p>
         </div>
-        <StatusPill tone="warning" label="确认前不产生正式采集费用" />
+        <StatusPill tone="warning" label={t('header.noChargeBeforeConfirmation')} />
       </header>
 
       <Tabs.Root className="collection-builder__tabs" defaultValue="form">
         <div className="collection-builder__mode-bar">
-          <Tabs.List className="collection-builder__mode-list" aria-label="采集入口">
+          <Tabs.List className="collection-builder__mode-list" aria-label={t('modes.ariaLabel')}>
             <Tabs.Trigger className="collection-builder__mode-trigger" value="form">
               <Wrench size={15} aria-hidden="true" />
-              表单式
+              {t('modes.form')}
             </Tabs.Trigger>
             <Tabs.Trigger className="collection-builder__mode-trigger" value="natural">
               <MessageSquareText size={15} aria-hidden="true" />
-              自然语言
+              {t('modes.naturalLanguage')}
             </Tabs.Trigger>
           </Tabs.List>
-          <p>两种方式都会生成同一种计划，生成计划不会自动运行。</p>
+          <p>{t('modes.description')}</p>
         </div>
 
         <Tabs.Content className="collection-builder__content" value="form">
           <form className="collection-builder__form" onSubmit={handleSubmit(submitForm)}>
             <FormGroup
               number="01"
-              title="来源与目标"
-              description="选择数据平台和需要获取的公开数据类型。"
+              title={t('groups.source.title')}
+              description={t('groups.source.description')}
             >
               <div className="collection-builder__source-fields">
                 <FormField
                   error={errors.platform?.message}
                   errorId="platform-error"
                   htmlFor="platform"
-                  label="平台"
+                  label={t('fields.platform')}
                 >
                   <Controller
                     control={control}
@@ -152,7 +160,7 @@ export function CollectionBuilder({
                         invalid={Boolean(errors.platform)}
                         onChange={field.onChange}
                         options={platformSelectOptions}
-                        placeholder="请选择平台"
+                        placeholder={t('placeholders.platform')}
                         value={field.value ?? ''}
                       />
                     )}
@@ -160,10 +168,10 @@ export function CollectionBuilder({
                 </FormField>
 
                 <fieldset className="collection-builder__choice-fieldset">
-                  <legend>数据类型</legend>
+                  <legend>{t('fields.dataTypes')}</legend>
                   <input type="hidden" {...register('dataType')} />
                   <div className="collection-builder__option-list">
-                    {collectionDataTypeOptions.map((item) => (
+                    {localizedDataTypeOptions.map((item) => (
                       <label
                         className="collection-builder__option-row"
                         data-selected={selectedDataTypes.includes(item.value)}
@@ -184,21 +192,21 @@ export function CollectionBuilder({
 
             <FormGroup
               number="02"
-              title="采集范围"
-              description="说明任务目标、地区和需要覆盖的时间。"
+              title={t('groups.scope.title')}
+              description={t('groups.scope.description')}
             >
               <div className="collection-builder__range-fields">
                 <FormField
                   error={errors.keyword?.message}
                   errorId="keyword-error"
                   htmlFor="keyword"
-                  label="关键词或账号"
+                  label={t('fields.keyword')}
                 >
                   <input
                     id="keyword"
                     aria-describedby={errors.keyword ? 'keyword-error' : undefined}
                     aria-invalid={Boolean(errors.keyword)}
-                    placeholder="输入关键词或公开账号 ID"
+                    placeholder={t('placeholders.keyword')}
                     {...register('keyword')}
                   />
                 </FormField>
@@ -206,8 +214,8 @@ export function CollectionBuilder({
                   error={errors.regionCode?.message}
                   errorId="region-code-error"
                   htmlFor="region-code"
-                  label="国家/地区"
-                  hint={regionEnabled ? '显示名称，提交标准两位代码。' : '所选平台或数据类型暂不支持地区筛选。'}
+                  label={t('fields.region')}
+                  hint={regionEnabled ? t('fields.regionHintSupported') : t('fields.regionHintUnsupported')}
                 >
                   <Controller
                     control={control}
@@ -217,13 +225,13 @@ export function CollectionBuilder({
                         id="region-code"
                         ariaDescribedBy={errors.regionCode ? 'region-code-error' : undefined}
                         disabled={!regionEnabled}
-                        emptyLabel="没有匹配的国家或地区"
+                        emptyLabel={t('placeholders.regionEmpty')}
                         invalid={Boolean(errors.regionCode)}
                         onChange={field.onChange}
                         options={countryRegionSelectOptions}
-                        placeholder={regionEnabled ? '请选择国家/地区' : '当前不可用'}
+                        placeholder={regionEnabled ? t('placeholders.region') : t('placeholders.regionUnavailable')}
                         searchable
-                        searchPlaceholder="搜索国家、地区或两位代码"
+                        searchPlaceholder={t('placeholders.regionSearch')}
                         value={field.value ?? ''}
                       />
                     )}
@@ -233,13 +241,13 @@ export function CollectionBuilder({
                   error={errors.range?.message}
                   errorId="range-error"
                   htmlFor="range"
-                  label="时间范围"
+                  label={t('fields.range')}
                 >
                   <input
                     id="range"
                     aria-describedby={errors.range ? 'range-error' : undefined}
                     aria-invalid={Boolean(errors.range)}
-                    placeholder="输入平台支持的时间范围"
+                    placeholder={t('placeholders.range')}
                     {...register('range')}
                   />
                 </FormField>
@@ -248,23 +256,23 @@ export function CollectionBuilder({
 
             <FormGroup
               number="03"
-              title="数量与成本"
-              description="设置结果上限和本次任务可接受的金额上限。"
+              title={t('groups.volume.title')}
+              description={t('groups.volume.description')}
             >
               <div className="collection-builder__limit-fields">
                 <FormField
                   error={errors.maxRecords?.message}
                   errorId="max-records-error"
                   htmlFor="max-records"
-                  label="最大记录数"
-                  suffix="条"
+                  label={t('fields.maxRecords')}
+                  suffix={t('fields.recordsSuffix')}
                 >
                   <input
                     id="max-records"
                     aria-describedby={errors.maxRecords ? 'max-records-error' : undefined}
                     aria-invalid={Boolean(errors.maxRecords)}
                     min="1"
-                    placeholder="输入记录上限"
+                    placeholder={t('placeholders.maxRecords')}
                     type="number"
                     {...register('maxRecords', { valueAsNumber: true })}
                   />
@@ -273,15 +281,15 @@ export function CollectionBuilder({
                   error={errors.budget?.message}
                   errorId="budget-error"
                   htmlFor="budget"
-                  label="成本上限"
-                  suffix="USD"
+                  label={t('fields.budget')}
+                  suffix={t('fields.budgetCurrency')}
                 >
                   <input
                     id="budget"
                     aria-describedby={errors.budget ? 'budget-error' : undefined}
                     aria-invalid={Boolean(errors.budget)}
                     min="0"
-                    placeholder="输入金额上限"
+                    placeholder={t('placeholders.budget')}
                     step="0.01"
                     type="number"
                     {...register('budget', { valueAsNumber: true })}
@@ -292,42 +300,42 @@ export function CollectionBuilder({
 
             <FormGroup
               number="04"
-              title="公开信息筛选"
-              description="筛选默认关闭；启用后只接受接口或公开资料明确返回的值。"
+              title={t('groups.filters.title')}
+              description={t('groups.filters.description')}
             >
               <div className="collection-builder__filter-grid">
                 <fieldset className="collection-builder__filter-block" data-enabled={ageRangeEnabled}>
-                  <legend className="collection-builder__visually-hidden">年龄范围</legend>
+                  <legend className="collection-builder__visually-hidden">{t('fields.ageRange')}</legend>
                   <label className="collection-builder__filter-toggle">
                     <input type="checkbox" {...register('ageRangeEnabled')} />
                     <span>
-                      <strong>年龄范围</strong>
-                      <small>单一闭区间，不接收未知、异常或推断年龄。</small>
+                      <strong>{t('fields.ageRange')}</strong>
+                      <small>{t('fields.ageRangeDescription')}</small>
                     </span>
                   </label>
                   {ageRangeEnabled ? (
                     <div className="collection-builder__age-inputs">
                       <label>
-                        <span>最小年龄</span>
+                        <span>{t('fields.minimumAge')}</span>
                         <input
                           aria-describedby={errors.ageMin ? 'age-min-error' : undefined}
                           aria-invalid={Boolean(errors.ageMin)}
                           min={AGE_RANGE_LIMITS.min}
                           max={AGE_RANGE_LIMITS.max}
-                          placeholder="最小"
+                          placeholder={t('placeholders.minimumAge')}
                           type="number"
                           {...register('ageMin', { valueAsNumber: true })}
                         />
                       </label>
-                      <span aria-hidden="true">至</span>
+                      <span aria-hidden="true">{t('fields.ageRangeSeparator')}</span>
                       <label>
-                        <span>最大年龄</span>
+                        <span>{t('fields.maximumAge')}</span>
                         <input
                           aria-describedby={errors.ageMax ? 'age-max-error' : undefined}
                           aria-invalid={Boolean(errors.ageMax)}
                           min={AGE_RANGE_LIMITS.min}
                           max={AGE_RANGE_LIMITS.max}
-                          placeholder="最大"
+                          placeholder={t('placeholders.maximumAge')}
                           type="number"
                           {...register('ageMax', { valueAsNumber: true })}
                         />
@@ -339,17 +347,17 @@ export function CollectionBuilder({
                 </fieldset>
 
                 <fieldset className="collection-builder__filter-block" data-enabled={genderFilterEnabled}>
-                  <legend className="collection-builder__visually-hidden">性别筛选</legend>
+                  <legend className="collection-builder__visually-hidden">{t('fields.gender')}</legend>
                   <label className="collection-builder__filter-toggle">
                     <input type="checkbox" {...register('genderFilterEnabled')} />
                     <span>
-                      <strong>性别筛选</strong>
-                      <small>不根据头像、姓名或简介推断，仅使用明确公开性别。</small>
+                      <strong>{t('fields.gender')}</strong>
+                      <small>{t('fields.genderDescription')}</small>
                     </span>
                   </label>
                   {genderFilterEnabled ? (
                     <div className="collection-builder__gender-options">
-                      {genderFilterOptions.map((item) => (
+                      {localizedGenderFilterOptions.map((item) => (
                         <label key={item.value}>
                           <input type="checkbox" value={item.value} {...register('genders')} />
                           <span>{item.label}</span>
@@ -363,10 +371,10 @@ export function CollectionBuilder({
             </FormGroup>
 
             <div className="collection-builder__form-footer">
-              <p>生成计划只执行参数校验、实时计价和额度预检，不会自动入队。</p>
+              <p>{t('form.footer')}</p>
               <button className="primary-button" disabled={isBusy} type="submit">
                 <Gauge size={16} aria-hidden="true" />
-                {isBusy ? '正在生成' : '生成计划'}
+                {isBusy ? t('form.generating') : t('form.generatePlan')}
               </button>
             </div>
           </form>
@@ -375,19 +383,19 @@ export function CollectionBuilder({
         <Tabs.Content className="collection-builder__content" value="natural">
           <div className="collection-builder__natural">
             <div>
-              <p className="eyebrow">自然语言任务</p>
-              <h3>描述目标，不预填任何任务实例</h3>
-              <p>写明平台、对象、范围和限制；系统会先解析为同一套可检查计划。</p>
+              <p className="eyebrow">{t('natural.eyebrow')}</p>
+              <h3>{t('natural.title')}</h3>
+              <p>{t('natural.description')}</p>
             </div>
-            <label htmlFor="intent">任务需求</label>
+            <label htmlFor="intent">{t('fields.naturalIntent')}</label>
             <textarea
               id="intent"
               value={naturalText}
-              placeholder="描述平台、采集对象、范围和成本限制"
+              placeholder={t('placeholders.naturalIntent')}
               onChange={(event) => setNaturalText(event.target.value)}
             />
             <div className="collection-builder__natural-footer">
-              <p>输入内容只用于生成本次计划，不会直接运行任务。</p>
+              <p>{t('natural.footer')}</p>
               <button
                 className="primary-button"
                 disabled={isBusy || !normalizeNaturalIntent(naturalText)}
@@ -397,7 +405,7 @@ export function CollectionBuilder({
                 {activePlan
                   ? <RefreshCcw size={16} aria-hidden="true" />
                   : <Sparkles size={16} aria-hidden="true" />}
-                {activePlan ? '重新解析' : '解析为计划'}
+                {activePlan ? t('natural.reparse') : t('natural.parse')}
               </button>
             </div>
           </div>
@@ -414,11 +422,11 @@ export function CollectionBuilder({
       ) : (
         <div className="collection-plan-empty" role="status">
           <div>
-            <p className="eyebrow">采集计划</p>
-            <h3>尚未生成计划</h3>
-            <p>完成本次参数后，系统会先校验执行范围并读取实时计价。</p>
+            <p className="eyebrow">{t('empty.eyebrow')}</p>
+            <h3>{t('empty.title')}</h3>
+            <p>{t('empty.description')}</p>
           </div>
-          <StatusPill tone="info" label="等待生成" />
+          <StatusPill tone="info" label={t('empty.status')} />
         </div>
       )}
     </section>
@@ -492,52 +500,66 @@ export function CollectionPlanPreview({
   onConfirmPlan: () => Promise<unknown>
   plan: RuntimeCollectionPlan
 }) {
+  const { t } = useTranslation('collection', { i18n })
   const blockerId = useId()
-  const blocker = confirmationBlocker(plan, isBusy)
+  const localizedGenderFilterOptions = useMemo(() => getGenderFilterOptions(t), [t])
+  const blocker = confirmationBlocker(plan, isBusy, t)
   const isEnqueued = plan.status === '已排队' || plan.status === '运行中'
   const canConfirm = plan.status === '等待确认' && !blocker
   const showConfirmButton = plan.status === '等待确认' || plan.status === '待人工确认'
-  const regionLabel = countryRegionOptions.find(({ code }) => code === plan.regionCode)?.label
+  const region = countryRegionOptions.find(({ code }) => code === plan.regionCode)
+  const regionLabel = region
+    ? t('preview.countryRegion', {
+      code: region.code,
+      nameEn: region.nameEn,
+      nameZh: region.nameZh,
+    })
+    : undefined
   const ageLabel = plan.ageRangeEnabled && plan.ageMin !== undefined && plan.ageMax !== undefined
-    ? `${plan.ageMin}–${plan.ageMax} 岁（闭区间）`
-    : '未启用'
+    ? t('preview.ageRangeEnabled', { max: plan.ageMax, min: plan.ageMin })
+    : t('preview.filterDisabled')
   const genderLabel = plan.genderFilterEnabled && plan.genders?.length
     ? plan.genders.map((gender) => (
-      genderFilterOptions.find(({ value }) => value === gender)?.label ?? gender
-    )).join('、')
-    : '未启用'
-  const platforms = (plan.platforms?.length ? plan.platforms : [plan.platform]).join('、')
-  const dataTypes = (plan.dataTypes?.length ? plan.dataTypes : [plan.dataType]).join('、')
+      localizedGenderFilterOptions.find(({ value }) => value === gender)?.label ?? gender
+    )).join(t('preview.listSeparator'))
+    : t('preview.filterDisabled')
+  const platforms = (plan.platforms?.length ? plan.platforms : [plan.platform]).join(t('preview.listSeparator'))
+  const dataTypes = (plan.dataTypes?.length ? plan.dataTypes : [plan.dataType]).join(t('preview.listSeparator'))
   const range = plan.maxRecords > 0
-    ? `${plan.range}，最多 ${plan.maxRecords.toLocaleString()} 条`
+    ? t('preview.rangeWithLimit', {
+      maxRecords: formatNumber(plan.maxRecords, i18n.language),
+      range: plan.range,
+    })
     : plan.range
-  const budget = plan.budget > 0 ? `$${plan.budget}` : '未设置金额上限'
+  const budget = plan.budget > 0 ? `$${plan.budget}` : t('preview.budgetLimitUnset')
+  const costEstimate = localizedCostEstimate(t, plan.costEstimate, i18n.language)
+  const statusLabel = localizedPlanStatus(t, plan.status)
 
   return (
     <section className="collection-plan" aria-labelledby="collection-plan-heading">
       <header className="collection-plan__header">
         <div>
-          <p className="eyebrow">采集计划</p>
-          <h3 id="collection-plan-heading">{plan.keyword || '待补充任务目标'}</h3>
+          <p className="eyebrow">{t('preview.eyebrow')}</p>
+          <h3 id="collection-plan-heading">{plan.keyword || t('preview.pendingTarget')}</h3>
           <p>{platforms} · {dataTypes}</p>
         </div>
-        <StatusPill tone={toneForPlanStatus(plan.status)} label={plan.status} />
+        <StatusPill tone={toneForPlanStatus(plan.status)} label={statusLabel} />
       </header>
 
       <div className="collection-plan__body">
         <dl className="collection-plan__facts">
-          <PlanFact label="平台" value={platforms} />
-          <PlanFact label="数据类型" value={dataTypes} />
-          <PlanFact label="国家/地区" value={regionLabel ?? '未提供或目标不支持'} />
-          <PlanFact label="采集范围" value={range} />
+          <PlanFact label={t('preview.platform')} value={platforms} />
+          <PlanFact label={t('preview.dataType')} value={dataTypes} />
+          <PlanFact label={t('preview.region')} value={regionLabel ?? t('preview.regionUnavailable')} />
+          <PlanFact label={t('preview.range')} value={range} />
         </dl>
 
         <div className="collection-plan__detail-grid">
           <section className="collection-plan__filters" aria-labelledby="collection-plan-filters-heading">
-            <h4 id="collection-plan-filters-heading">公开信息筛选</h4>
+            <h4 id="collection-plan-filters-heading">{t('preview.filters')}</h4>
             <dl>
-              <PlanFact label="年龄范围" value={ageLabel} />
-              <PlanFact label="性别" value={genderLabel} />
+              <PlanFact label={t('preview.age')} value={ageLabel} />
+              <PlanFact label={t('preview.gender')} value={genderLabel} />
             </dl>
           </section>
           <section
@@ -546,11 +568,11 @@ export function CollectionPlanPreview({
             aria-labelledby="collection-plan-pricing-heading"
           >
             <div>
-              <h4 id="collection-plan-pricing-heading">请求与成本</h4>
-              <p>{plan.pricingReady === true ? '实时计价与额度预检已完成' : '等待实时计价与额度预检'}</p>
+              <h4 id="collection-plan-pricing-heading">{t('preview.pricing')}</h4>
+              <p>{plan.pricingReady === true ? t('preview.pricingReady') : t('preview.pricingPending')}</p>
             </div>
-            <strong>{plan.costEstimate ?? '尚无请求估算'}</strong>
-            <span>金额上限 {budget}</span>
+            <strong>{costEstimate}</strong>
+            <span>{t('preview.budgetLimit', { budget })}</span>
           </section>
         </div>
 
@@ -558,8 +580,8 @@ export function CollectionPlanPreview({
           <div className="collection-plan__missing">
             <AlertTriangle size={16} aria-hidden="true" />
             <div>
-              <strong>仍需补充</strong>
-              <p>{plan.missing.join('、')}</p>
+              <strong>{t('preview.missingTitle')}</strong>
+              <p>{plan.missing.map((message) => localizePlanMessage(t, message)).join(t('preview.listSeparator'))}</p>
             </div>
           </div>
         ) : null}
@@ -567,13 +589,13 @@ export function CollectionPlanPreview({
         {blocker && !isEnqueued ? (
           <p className="collection-plan__blocker" id={blockerId} role="status">
             <AlertTriangle size={15} aria-hidden="true" />
-            {plan.taskId ? `暂不能运行：${blocker}` : blocker}
+            {plan.taskId ? t('preview.blockerPrefix', { blocker }) : blocker}
           </p>
         ) : null}
       </div>
 
       <footer className="collection-plan__footer">
-        <p>{isEnqueued ? '任务已进入运行队列，请前往任务页查看进度。' : actionMessage}</p>
+        <p>{isEnqueued ? t('preview.enqueuedFooter') : localizeActionMessage(t, actionMessage)}</p>
         {showConfirmButton ? (
           <button
             aria-describedby={blocker ? blockerId : undefined}
@@ -583,10 +605,10 @@ export function CollectionPlanPreview({
             onClick={() => void onConfirmPlan()}
           >
             <CheckCircle2 size={16} aria-hidden="true" />
-            {plan.taskId ? '确认运行' : '先生成计划'}
+            {plan.taskId ? t('preview.confirmRun') : t('preview.generateFirst')}
           </button>
         ) : (
-          <span className="collection-plan__footer-state">{plan.status}</span>
+          <span className="collection-plan__footer-state">{statusLabel}</span>
         )}
       </footer>
     </section>
@@ -602,15 +624,103 @@ function PlanFact({ label, value }: { label: string; value: string }) {
   )
 }
 
-function confirmationBlocker(plan: RuntimeCollectionPlan, isBusy: boolean) {
-  if (isBusy) return '正在处理计划，请稍候'
-  if (!plan.taskId || !plan.planId) return '请先生成并保存采集计划'
-  if (plan.validationStatus !== 'valid') return plan.missing[0] ?? '计划校验未通过'
+const planStatusTranslationKeys: Record<RuntimeCollectionPlan['status'], string> = {
+  '已排队': 'status.queued',
+  '运行中': 'status.running',
+  '等待确认': 'status.awaitingConfirmation',
+  '部分成功': 'status.partialSuccess',
+  '成功': 'status.success',
+  '待人工确认': 'status.manualConfirmation',
+  '失败': 'status.failed',
+  '已取消': 'status.cancelled',
+}
+
+const planMessageTranslationKeys: Record<string, string> = {
+  '年龄范围必须填写上下限': 'message.ageRangeBoundsRequired',
+  '价格未知': 'message.priceUnknown',
+  'TikHub 免费额度与充值余额合计不足': 'message.tikhubCreditsInsufficient',
+  'TikHub 额度合计与免费额度、充值余额不一致': 'message.tikhubCreditsMismatch',
+  '未提供时间范围': 'message.rangeMissing',
+  '计划校验未通过': 'message.planValidationFailed',
+  '计划校验未通过，无法确认运行': 'message.planValidationFailedCannotRun',
+}
+
+const actionMessageTranslationKeys: Record<string, string> = {
+  '后端正在初始化本地工作区': 'action.initializing',
+  '等待生成': 'action.waitingForPlan',
+  '等待确认': 'status.awaitingConfirmation',
+  '采集计划已保存到本地 SQLite，等待确认运行': 'action.formPlanSaved',
+  '自然语言计划已生成，并保存了提示词运行快照': 'action.naturalPlanSaved',
+  '任务已确认并加入本地队列': 'action.confirmed',
+  '任务名称已更新': 'action.renamed',
+  '任务已取消': 'action.cancelled',
+  '任务已删除': 'action.deleted',
+  '当前未连接本地后端，不展示预览数据；请打开打包后的 macOS 应用': 'action.backendUnavailable',
+  '本地工作区已打开，后端可用': 'action.workspaceReady',
+  '计划需要修正': 'action.planNeedsRevision',
+  '后端调用失败': 'action.backendCallFailed',
+}
+
+function localizedPlanStatus(t: CollectionTranslator, status: RuntimeCollectionPlan['status']) {
+  return t(planStatusTranslationKeys[status] ?? 'status.unknown', { defaultValue: status })
+}
+
+function localizePlanMessage(t: CollectionTranslator, message: string | undefined) {
+  if (!message) return ''
+  const key = planMessageTranslationKeys[message]
+  return key ? t(key) : message
+}
+
+function localizeActionMessage(t: CollectionTranslator, message: string) {
+  const exportMatch = /^(Excel|PDF) 已导出到本地工作区$/.exec(message)
+  if (exportMatch) return t('action.exported', { format: exportMatch[1] })
+  const key = actionMessageTranslationKeys[message]
+  return key ? t(key) : message
+}
+
+function formatNumber(value: number, language: string) {
+  return value.toLocaleString(language)
+}
+
+function localizedCostEstimate(
+  t: CollectionTranslator,
+  costEstimate: string | undefined,
+  language: string,
+) {
+  if (!costEstimate) return t('preview.noEstimate')
+  const requestEstimate = /^(\d+) 次请求$/.exec(costEstimate)
+  if (requestEstimate) {
+    return t('preview.requestEstimate', {
+      count: formatNumber(Number(requestEstimate[1]), language),
+    })
+  }
+  const requestQuote = /^(\d+) 次请求，实时报价上限 \$([\d.]+)$/.exec(costEstimate)
+  if (requestQuote) {
+    return t('preview.requestQuote', {
+      amount: requestQuote[2],
+      count: formatNumber(Number(requestQuote[1]), language),
+    })
+  }
+  return costEstimate
+}
+
+function confirmationBlocker(
+  plan: RuntimeCollectionPlan,
+  isBusy: boolean,
+  t: CollectionTranslator,
+) {
+  if (isBusy) return t('blocker.busy')
+  if (!plan.taskId || !plan.planId) return t('blocker.unsaved')
+  if (plan.validationStatus !== 'valid') {
+    return localizePlanMessage(t, plan.missing[0]) || t('blocker.validationFailed')
+  }
   if (plan.pricingReady !== true) {
-    return plan.pricingBlocker ?? '实时计价或 TikHub 双额度尚未完成校验'
+    return localizePlanMessage(t, plan.pricingBlocker) || t('blocker.pricingNotReady')
   }
   if (plan.status === '已排队' || plan.status === '运行中') return undefined
-  if (plan.status !== '等待确认') return `计划状态为“${plan.status}”`
+  if (plan.status !== '等待确认') {
+    return t('blocker.status', { status: localizedPlanStatus(t, plan.status) })
+  }
   return undefined
 }
 

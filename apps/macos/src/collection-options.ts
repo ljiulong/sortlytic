@@ -1,40 +1,61 @@
+import type { TFunction } from 'i18next'
+import { z } from 'zod'
+import { i18n } from './i18n'
+import { dataTypeOptions, platformOptions } from './workbench-data'
+
 export const collectionDataTypeOptions = [
   {
     value: 'keyword_search',
-    label: '搜索结果账号',
-    description: '从关键词搜索结果提取公开作者账号。',
+    labelKey: 'options.dataType.keyword_search.label',
+    descriptionKey: 'options.dataType.keyword_search.description',
   },
   {
     value: 'item_detail',
-    label: '作品/笔记作者',
-    description: '读取作品或笔记详情中的公开作者信息。',
+    labelKey: 'options.dataType.item_detail.label',
+    descriptionKey: 'options.dataType.item_detail.description',
   },
   {
     value: 'account_profile',
-    label: '账号公开信息',
-    description: '补全账号简介、粉丝数和公开地区等资料。',
+    labelKey: 'options.dataType.account_profile.label',
+    descriptionKey: 'options.dataType.account_profile.description',
   },
   {
     value: 'account_posts',
-    label: '账号作品所属账号',
-    description: '读取账号作品列表并更新作品数和最近发文时间。',
+    labelKey: 'options.dataType.account_posts.label',
+    descriptionKey: 'options.dataType.account_posts.description',
   },
   {
     value: 'comments',
-    label: '评论用户',
-    description: '从公开评论中提取评论用户账号。',
+    labelKey: 'options.dataType.comments.label',
+    descriptionKey: 'options.dataType.comments.description',
   },
 ] as const
 
 export type CollectionDataType = (typeof collectionDataTypeOptions)[number]['value']
+export type CollectionTranslator = TFunction<'collection'>
+
+export function getCollectionDataTypeOptions(t: CollectionTranslator) {
+  return collectionDataTypeOptions.map(({ value, labelKey, descriptionKey }) => ({
+    value,
+    label: t(labelKey),
+    description: t(descriptionKey),
+  }))
+}
 
 export const AGE_RANGE_LIMITS = { min: 0, max: 130 } as const
 
 export const genderFilterOptions = [
-  { value: 'female', label: '女性' },
-  { value: 'male', label: '男性' },
-  { value: 'other', label: '其他明确性别' },
+  { value: 'female', labelKey: 'options.gender.female' },
+  { value: 'male', labelKey: 'options.gender.male' },
+  { value: 'other', labelKey: 'options.gender.other' },
 ] as const
+
+export function getGenderFilterOptions(t: CollectionTranslator) {
+  return genderFilterOptions.map(({ value, labelKey }) => ({
+    value,
+    label: t(labelKey),
+  }))
+}
 
 const ISO_COUNTRY_REGION_CODES = `
 AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ
@@ -72,47 +93,70 @@ export const countryRegionOptions = [
   }
 })
 
-const optionalAge = z.preprocess(
-  (value) => (value === '' || Number.isNaN(value) ? undefined : value),
-  z.coerce.number().int('年龄必须是整数').min(AGE_RANGE_LIMITS.min).max(AGE_RANGE_LIMITS.max).optional(),
-)
 const knownRegionCodes = new Set(countryRegionOptions.map(({ code }) => code))
 
-export const collectionFormSchema = z
-  .object({
-    platform: z.enum(platformOptions),
-    dataType: z.enum(dataTypeOptions),
-    dataTypes: z.array(z.enum(collectionDataTypeOptions.map(({ value }) => value))).min(1, '至少选择一种目标数据'),
-    regionCode: z
-      .string()
-      .transform((value) => value.trim().toUpperCase())
-      .refine((value) => !value || knownRegionCodes.has(value), '请选择下拉表中的国家/地区'),
-    keyword: z.string().min(2, '请输入关键词或账号').max(80, '关键词过长'),
-    range: z.string().min(4, '请选择时间范围'),
-    maxRecords: z.coerce.number().min(10, '至少 10 条').max(5000, 'MVP 单任务上限为 5000 条'),
-    budget: z.coerce.number().min(1, '请输入成本上限').max(500, 'MVP 单任务上限为 500'),
-    ageRangeEnabled: z.boolean(),
-    ageMin: optionalAge,
-    ageMax: optionalAge,
-    genderFilterEnabled: z.boolean(),
-    genders: z.array(z.enum(genderFilterOptions.map(({ value }) => value))).default([]),
-  })
-  .superRefine((values, context) => {
-    if (values.ageRangeEnabled) {
-      if (values.ageMin === undefined) {
-        context.addIssue({ code: 'custom', path: ['ageMin'], message: '请输入最小年龄' })
+export function createCollectionFormSchema(t: CollectionTranslator) {
+  const optionalAge = z.preprocess(
+    (value) => (value === '' || Number.isNaN(value) ? undefined : value),
+    z.coerce.number()
+      .int(t('validation.ageInteger'))
+      .min(AGE_RANGE_LIMITS.min, t('validation.ageMin', { min: AGE_RANGE_LIMITS.min }))
+      .max(AGE_RANGE_LIMITS.max, t('validation.ageMax', { max: AGE_RANGE_LIMITS.max }))
+      .optional(),
+  )
+  const collectionDataTypeSchema = z.enum(
+    collectionDataTypeOptions.map(({ value }) => value),
+    { error: t('validation.dataTypeValueInvalid') },
+  )
+  const genderSchema = z.enum(
+    genderFilterOptions.map(({ value }) => value),
+    { error: t('validation.genderValueInvalid') },
+  )
+
+  return z
+    .object({
+      platform: z.enum(platformOptions, { error: t('validation.platformRequired') }),
+      dataType: z.enum(dataTypeOptions, { error: t('validation.dataTypeRequired') }),
+      dataTypes: z.array(collectionDataTypeSchema).min(1, t('validation.dataTypesRequired')),
+      regionCode: z
+        .string()
+        .transform((value) => value.trim().toUpperCase())
+        .refine((value) => !value || knownRegionCodes.has(value), t('validation.regionInvalid')),
+      keyword: z.string().min(2, t('validation.keywordMin')).max(80, t('validation.keywordMax')),
+      range: z.string().min(4, t('validation.rangeRequired')),
+      maxRecords: z.coerce.number()
+        .min(10, t('validation.maxRecordsMin'))
+        .max(5000, t('validation.maxRecordsMax')),
+      budget: z.coerce.number()
+        .min(1, t('validation.budgetMin'))
+        .max(500, t('validation.budgetMax')),
+      ageRangeEnabled: z.boolean(),
+      ageMin: optionalAge,
+      ageMax: optionalAge,
+      genderFilterEnabled: z.boolean(),
+      genders: z.array(genderSchema).default([]),
+    })
+    .superRefine((values, context) => {
+      if (values.ageRangeEnabled) {
+        if (values.ageMin === undefined) {
+          context.addIssue({ code: 'custom', path: ['ageMin'], message: t('validation.ageMinRequired') })
+        }
+        if (values.ageMax === undefined) {
+          context.addIssue({ code: 'custom', path: ['ageMax'], message: t('validation.ageMaxRequired') })
+        }
+        if (values.ageMin !== undefined && values.ageMax !== undefined && values.ageMin > values.ageMax) {
+          context.addIssue({ code: 'custom', path: ['ageMax'], message: t('validation.ageOrder') })
+        }
       }
-      if (values.ageMax === undefined) {
-        context.addIssue({ code: 'custom', path: ['ageMax'], message: '请输入最大年龄' })
+      if (values.genderFilterEnabled && values.genders.length === 0) {
+        context.addIssue({ code: 'custom', path: ['genders'], message: t('validation.gendersRequired') })
       }
-      if (values.ageMin !== undefined && values.ageMax !== undefined && values.ageMin > values.ageMax) {
-        context.addIssue({ code: 'custom', path: ['ageMax'], message: '最大年龄不能小于最小年龄' })
-      }
-    }
-    if (values.genderFilterEnabled && values.genders.length === 0) {
-      context.addIssue({ code: 'custom', path: ['genders'], message: '请至少选择一种明确性别' })
-    }
-  })
+    })
+}
+
+export const collectionFormSchema = createCollectionFormSchema(
+  i18n.getFixedT('zh-CN', 'collection'),
+)
 
 const REGION_CAPABLE_TYPES: Record<(typeof platformOptions)[number], ReadonlySet<CollectionDataType>> = {
   TikTok: new Set(['keyword_search', 'account_posts', 'comments']),
@@ -126,5 +170,3 @@ export function supportsRegionSelection(
 ) {
   return dataTypes.some((dataType) => REGION_CAPABLE_TYPES[platform].has(dataType))
 }
-import { z } from 'zod'
-import { dataTypeOptions, platformOptions } from './workbench-data'
