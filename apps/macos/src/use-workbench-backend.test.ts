@@ -3,9 +3,11 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   backendErrorMessage,
+  cancelTask,
   checkForAppUpdate,
   type CollectionPlanView,
   type CollectionTaskView,
+  getLatestCollectionPlan,
   getTikhubConnector,
   installAppUpdate,
   quoteTikhubConnectorPrice,
@@ -14,11 +16,14 @@ import {
   testTikhubConnector,
   type TikhubConnectorView,
   updateSecret,
+  updateCollectionTask,
   type WorkspaceSummary,
 } from './backend-api'
 import {
   browserFallbackData,
   buildFormPlanRequest,
+  confirmPersistedTask,
+  exportTaskArtifact,
   mapBackendData,
   planFromBackend,
   saveAndTestTikhubToken,
@@ -149,6 +154,7 @@ function renderWorkbenchHook() {
 }
 
 beforeEach(() => {
+  vi.unstubAllGlobals()
   invokeMock.mockReset()
   invalidateQueriesMock.mockReset()
   invalidateQueriesMock.mockResolvedValue(undefined)
@@ -163,6 +169,114 @@ beforeEach(() => {
   updaterCheckMock.mockReset()
   updaterInstallMock.mockReset()
   relaunchMock.mockReset()
+})
+
+describe('任务页动作', () => {
+  it('使用稳定的 Tauri 命令读取、更新并取消指定任务', async () => {
+    invokeMock.mockResolvedValue({})
+
+    await getLatestCollectionPlan('task-1')
+    await updateCollectionTask('task-1', { name: '更新后的任务名' })
+    await cancelTask('task-1')
+
+    expect(invokeMock).toHaveBeenNthCalledWith(1, 'get_latest_collection_plan', {
+      taskId: 'task-1',
+      rootPath: null,
+    })
+    expect(invokeMock).toHaveBeenNthCalledWith(2, 'update_collection_task', {
+      taskId: 'task-1',
+      input: { name: '更新后的任务名' },
+      rootPath: null,
+    })
+    expect(invokeMock).toHaveBeenNthCalledWith(3, 'cancel_task', {
+      taskId: 'task-1',
+      rootPath: null,
+    })
+  })
+
+  it('从持久化计划完成计价、确认和入队，不依赖页面内存中的 activePlan', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'get_latest_collection_plan') {
+        return {
+          id: 'plan-1',
+          task_id: 'task-1',
+          source: 'form_generated',
+          schema_version: 3,
+          plan_json: {
+            platforms: ['tiktok'],
+            data_types: ['comments'],
+            keywords: ['electric vehicle'],
+            time_range: '近 30 天',
+            record_limit: 100,
+            budget_limit: { amount_micros: 1_000_000 },
+            steps: [{ endpoint_key: 'tiktok.comments' }],
+          },
+          validation_status: 'valid',
+          validation_errors_json: [],
+          cost_estimate_json: { request_count_estimate: 3 },
+          confirmed_by_user: false,
+          created_at: '2026-07-17T00:00:00Z',
+          updated_at: '2026-07-17T00:00:00Z',
+        }
+      }
+      if (command === 'test_tikhub_connector') {
+        return {
+          balance: 1,
+          free_credit: 1,
+          available_credit: 2,
+        }
+      }
+      if (command === 'quote_tikhub_connector_price') {
+        return { total_price: 0.01 }
+      }
+      if (command === 'confirm_collection_plan') return task
+      if (command === 'enqueue_task') return { id: 'run-1', task_id: 'task-1', status: 'queued' }
+      throw new Error(`意外命令：${command}`)
+    })
+
+    await expect(confirmPersistedTask('task-1')).resolves.toMatchObject({
+      task_id: 'task-1',
+      status: 'queued',
+    })
+    expect(invokeMock.mock.calls.map(([command]) => command)).toEqual([
+      'get_latest_collection_plan',
+      'test_tikhub_connector',
+      'quote_tikhub_connector_price',
+      'confirm_collection_plan',
+      'enqueue_task',
+    ])
+  })
+
+  it('单任务导出只生成用户选择的文件格式', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'build_report_model') return { id: 'report-1' }
+      if (command === 'create_export_job') {
+        return {
+          id: 'export-1',
+          report_id: 'report-1',
+          export_type: args?.exportType,
+          status: 'success',
+        }
+      }
+      throw new Error(`意外命令：${command}`)
+    })
+
+    await expect(exportTaskArtifact({ taskId: 'task-1', format: 'pdf' })).resolves.toMatchObject({
+      export_type: 'pdf',
+    })
+    expect(invokeMock).toHaveBeenCalledWith('create_export_job', {
+      reportId: 'report-1',
+      exportType: 'pdf',
+      targetPath: null,
+      rootPath: null,
+    })
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      'create_export_job',
+      expect.objectContaining({ exportType: 'xlsx' }),
+    )
+  })
 })
 
 describe('应用更新 API', () => {

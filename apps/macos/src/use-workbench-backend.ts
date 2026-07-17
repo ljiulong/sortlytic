@@ -3,6 +3,7 @@ import { useState } from 'react'
 import {
   backendErrorMessage,
   buildReportModel,
+  cancelTask,
   confirmCollectionPlan,
   createModelProvider,
   createCollectionTask,
@@ -11,6 +12,7 @@ import {
   ensureDefaultWorkspace,
   generateCollectionPlanFromText,
   generateFormCollectionPlan,
+  getLatestCollectionPlan,
   type GenerateFormPlanInput,
   getBackendStatus,
   getTikhubConnector,
@@ -35,6 +37,7 @@ import {
   testTikhubConnector,
   testModelProvider,
   updateModelProvider,
+  updateCollectionTask,
   updateSecret,
   upsertModelProfile,
 } from './backend-api'
@@ -86,6 +89,11 @@ export type ModelSettingsInput = {
   baseUrl: string
   defaultModelId: string
   apiKey: string
+}
+
+export type TaskExportInput = {
+  taskId: string
+  format: 'xlsx' | 'pdf'
 }
 
 export type RuntimeCollectionPlan = Omit<CollectionFormPayload, 'dataTypes'> & {
@@ -198,6 +206,37 @@ function createEmptyWorkbenchData(mode: 'loading' | 'error' | 'unavailable'): Ba
 
 export const browserFallbackData = createEmptyWorkbenchData('unavailable')
 
+export async function confirmPersistedTask(taskId: string) {
+  assertTauriRuntime()
+  const plan = await getLatestCollectionPlan(taskId)
+  const platforms = stringArrayFromJson(plan.plan_json.platforms)
+  const dataTypes = stringArrayFromJson(plan.plan_json.data_types)
+  const runtimePlan = planFromBackend(
+    {
+      platform: toUiPlatform(platforms[0] ?? nonEmptyString(plan.plan_json.platform) ?? ''),
+      dataType: toUiDataType(dataTypes[0] ?? nonEmptyString(plan.plan_json.data_type) ?? ''),
+      regionCode: '',
+      keyword: '',
+      range: '',
+      maxRecords: 0,
+      budget: 0,
+    },
+    plan,
+  )
+  if (runtimePlan.validationStatus !== 'valid') {
+    throw new Error(runtimePlan.missing[0] ?? '计划校验未通过，无法确认运行')
+  }
+  await preflightCollectionPlanPricing(runtimePlan)
+  await confirmCollectionPlan(taskId, plan.id)
+  return enqueueTask(taskId)
+}
+
+export async function exportTaskArtifact({ taskId, format }: TaskExportInput) {
+  assertTauriRuntime()
+  const report = await buildReportModel(taskId)
+  return createExportJob(report.id, format)
+}
+
 export function useWorkbenchBackend() {
   const queryClient = useQueryClient()
   const [activePlan, setActivePlan] = useState<RuntimeCollectionPlan>()
@@ -255,20 +294,15 @@ export function useWorkbenchBackend() {
   })
 
   const exportMutation = useMutation({
-    mutationFn: async () => {
-      assertTauriRuntime()
-      const taskId = activePlan?.taskId ?? dataQuery.data?.latestTaskId
-      if (!taskId) {
-        throw new Error('请先创建一个采集任务再导出')
-      }
-      const report = await buildReportModel(taskId)
-      const xlsx = await createExportJob(report.id, 'xlsx')
-      const pdf = await createExportJob(report.id, 'pdf')
-      return [xlsx, pdf]
-    },
-    onSuccess: (exports) => {
-      setLatestExports(exports)
-      setActionMessage('Excel 与 PDF 已导出到本地工作区')
+    mutationFn: exportTaskArtifact,
+    onSuccess: (exportJob) => {
+      setLatestExports((exports) => [
+        exportJob,
+        ...exports.filter((item) => item.export_type !== exportJob.export_type),
+      ])
+      setActionMessage(
+        `${exportJob.export_type === 'xlsx' ? 'Excel' : 'PDF'} 已导出到本地工作区`,
+      )
       void queryClient.invalidateQueries({ queryKey })
     },
     onError: (error) => setActionMessage(backendErrorMessage(error)),
@@ -289,6 +323,44 @@ export function useWorkbenchBackend() {
       setActionMessage(backendErrorMessage(error))
       await queryClient.invalidateQueries({ queryKey })
     },
+  })
+
+  const updateTaskMutation = useMutation({
+    mutationFn: async ({ taskId, name }: { taskId: string; name: string }) => {
+      assertTauriRuntime()
+      const normalizedName = name.trim()
+      if (normalizedName.length < 2) throw new Error('任务名称至少需要 2 个字符')
+      return updateCollectionTask(taskId, { name: normalizedName })
+    },
+    onSuccess: () => {
+      setActionMessage('任务名称已更新')
+      void queryClient.invalidateQueries({ queryKey })
+    },
+    onError: (error) => setActionMessage(backendErrorMessage(error)),
+  })
+
+  const cancelTaskMutation = useMutation({
+    mutationFn: async (taskId: string) => {
+      assertTauriRuntime()
+      return cancelTask(taskId)
+    },
+    onSuccess: () => {
+      setActionMessage('任务已取消')
+      void queryClient.invalidateQueries({ queryKey })
+    },
+    onError: (error) => setActionMessage(backendErrorMessage(error)),
+  })
+
+  const confirmTaskMutation = useMutation({
+    mutationFn: confirmPersistedTask,
+    onSuccess: (run) => {
+      setActivePlan((plan) => (
+        plan?.taskId === run.task_id ? { ...plan, status: '已排队' } : plan
+      ))
+      setActionMessage('任务已确认并加入本地队列')
+      void queryClient.invalidateQueries({ queryKey })
+    },
+    onError: (error) => setActionMessage(backendErrorMessage(error)),
   })
 
   const saveAndValidateModelProvider = async (input: ModelSettingsInput) => {
@@ -401,13 +473,19 @@ export function useWorkbenchBackend() {
       confirmPlanMutation.isPending ||
       exportMutation.isPending ||
       saveTikhubTokenMutation.isPending ||
+      updateTaskMutation.isPending ||
+      cancelTaskMutation.isPending ||
+      confirmTaskMutation.isPending ||
       isModelSettingsPending ||
       isModelActivationPending ||
       appUpdater.isUpdateBusy,
     generateFormPlan: generateFormPlanMutation.mutateAsync,
     generateNaturalPlan: generateNaturalPlanMutation.mutateAsync,
     confirmActivePlan: confirmPlanMutation.mutateAsync,
-    exportLatestReport: exportMutation.mutateAsync,
+    updateTask: updateTaskMutation.mutateAsync,
+    cancelTask: cancelTaskMutation.mutateAsync,
+    confirmTask: confirmTaskMutation.mutateAsync,
+    exportTask: exportMutation.mutateAsync,
     saveAndTestTikhubToken: saveTikhubTokenMutation.mutateAsync,
     tikhubTestResult,
     saveAndValidateModelProvider,

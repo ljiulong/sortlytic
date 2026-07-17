@@ -170,6 +170,12 @@ export type CollectionTaskView = {
   actual_cost_json: Record<string, unknown>
 }
 
+export type UpdateCollectionTaskInput = {
+  name?: string
+  platforms?: string[]
+  data_types?: string[]
+}
+
 export type CollectionPlanDraftView = {
   source: string
   schema_version: number
@@ -410,6 +416,28 @@ export function createCollectionTask(input: {
 }) {
   return invoke<CollectionTaskView>('create_collection_task', {
     input,
+    rootPath: null,
+  })
+}
+
+export function getLatestCollectionPlan(taskId: string) {
+  return invoke<CollectionPlanView>('get_latest_collection_plan', {
+    taskId,
+    rootPath: null,
+  })
+}
+
+export function updateCollectionTask(taskId: string, input: UpdateCollectionTaskInput) {
+  return invoke<CollectionTaskView>('update_collection_task', {
+    taskId,
+    input,
+    rootPath: null,
+  })
+}
+
+export function cancelTask(taskId: string) {
+  return invoke<CollectionTaskView>('cancel_task', {
+    taskId,
     rootPath: null,
   })
 }
