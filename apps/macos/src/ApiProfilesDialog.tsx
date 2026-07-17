@@ -228,7 +228,9 @@ function ApiProfilesDialog({ isOpen, kind, onClose }: ApiProfilesDialogProps) {
       dispatch({ type: 'showList' })
       setFeedback({
         tone: result.success ? 'success' : 'warning',
-        text: result.success ? t('feedback.saveSuccess') : t('feedback.saveFailed'),
+        text: result.success
+          ? t(kind === 'ai' ? 'feedback.aiSaveSuccess' : 'feedback.saveSuccess')
+          : t(kind === 'ai' ? 'feedback.aiSaveFailed' : 'feedback.saveFailed'),
       })
     } catch {
       setFeedback({
@@ -242,10 +244,15 @@ function ApiProfilesDialog({ isOpen, kind, onClose }: ApiProfilesDialogProps) {
       const result = await controller.retestProfile(kind, profile.id)
       setFeedback({
         tone: result.success ? 'success' : 'warning',
-        text: result.success ? t('feedback.testSuccess') : t('feedback.testFailed'),
+        text: result.success
+          ? t(kind === 'ai' ? 'feedback.aiValidationSuccess' : 'feedback.testSuccess')
+          : t(kind === 'ai' ? 'feedback.aiValidationFailed' : 'feedback.testFailed'),
       })
     } catch {
-      setFeedback({ tone: 'danger', text: t('feedback.testError') })
+      setFeedback({
+        tone: 'danger',
+        text: t(kind === 'ai' ? 'feedback.aiValidationError' : 'feedback.testError'),
+      })
     }
   }
   const activate = async (profile: ApiProfileView) => {
@@ -342,9 +349,7 @@ function ApiProfilesDialog({ isOpen, kind, onClose }: ApiProfilesDialogProps) {
           ) : (
             <form className="api-profile-form" onSubmit={(event) => void saveProfile(event)}>
               <ApiProfileFormFields
-                canKeepSavedKey={Boolean(
-                  editingProfile?.hasCredential && editingProfile.status !== 'needs_rebind',
-                )}
+                canKeepSavedKey={canReuseSavedCredential(draft, editingProfile)}
                 disabled={controller.isPending}
                 draft={draft}
                 isEditing={Boolean(editingProfile)}
@@ -380,7 +385,9 @@ function ApiProfilesDialog({ isOpen, kind, onClose }: ApiProfilesDialogProps) {
                 }}
               >
                 <KeyRound size={16} aria-hidden="true" />
-                {controller.isSaving ? t('form.saving') : t('form.save')}
+                {controller.isSaving
+                  ? t(kind === 'ai' ? 'form.savingAndValidating' : 'form.saving')
+                  : t(kind === 'ai' ? 'form.saveAndValidate' : 'form.save')}
               </button>
             </>
           )}
@@ -450,6 +457,9 @@ function ProfileList({
         {profiles.map((profile) => {
           const isActive = profile.isActive || profile.id === activeProfileId
           const status = STATUS_COPY[profile.status]
+          const statusLabelKey = profile.kind === 'ai' && profile.status === 'success'
+            ? 'profileStatus.aiValidated'
+            : status.labelKey
           const isConfirmingDelete = confirmingDeleteId === profile.id
           return (
             <article className="api-profile-list__item" data-active={isActive} key={profile.id}>
@@ -470,7 +480,7 @@ function ProfileList({
                   <p>{profileDescriptor(profile, t)}</p>
                 </div>
                 <span className="api-profile-list__status" data-tone={status.tone}>
-                  {t(status.labelKey)}
+                  {t(statusLabelKey)}
                 </span>
               </header>
               <dl className="api-profile-list__facts">
@@ -499,7 +509,7 @@ function ProfileList({
                 <button disabled={busy || profile.status === 'needs_rebind'}
                   type="button" onClick={() => onRetest(profile)}>
                   <RefreshCw size={15} aria-hidden="true" />
-                  {t('list.retest')}
+                  {t(profile.kind === 'ai' ? 'list.revalidate' : 'list.retest')}
                 </button>
                 <button disabled={busy || isActive || profile.status !== 'success'}
                   type="button" onClick={() => onActivate(profile)}>
@@ -675,9 +685,7 @@ function canSaveProfile(
   profile: ApiProfileView | null,
 ) {
   if (!draft.name.trim() || !isSupportedUrl(draft.baseUrl)) return false
-  const editingHasReusableKey = Boolean(
-    profile?.hasCredential && profile.status !== 'needs_rebind',
-  )
+  const editingHasReusableKey = canReuseSavedCredential(draft, profile)
   const hasRequiredKey = draft.apiKey.trim().length >= 8 || editingHasReusableKey
   if (draft.kind === 'tikhub') {
     return [
@@ -687,6 +695,16 @@ function canSaveProfile(
   }
   if (!draft.defaultModelId.trim()) return false
   return draft.providerType === 'ollama' || hasRequiredKey
+}
+function canReuseSavedCredential(
+  draft: ApiProfileDraft,
+  profile: ApiProfileView | null,
+) {
+  if (!profile?.hasCredential || profile.status === 'needs_rebind' || draft.kind !== profile.kind) {
+    return false
+  }
+  return draft.kind === 'tikhub'
+    || (profile.kind === 'ai' && draft.providerType === profile.providerType)
 }
 function requiresApiKey(draft: ApiProfileDraft, canKeepSavedKey: boolean) {
   return draft.kind === 'tikhub'
@@ -734,6 +752,8 @@ const ApiProfilesDialogWithTestUtils = Object.assign(ApiProfilesDialog, {
   testUtils: {
     apiProfilesDialogReducer,
     buildSaveProfileInput,
+    canReuseSavedCredential,
+    canSaveProfile,
     createProfileDraft,
     initialApiProfilesDialogState,
   },

@@ -19,6 +19,8 @@ import { i18n } from './i18n'
 const {
   apiProfilesDialogReducer,
   buildSaveProfileInput,
+  canReuseSavedCredential,
+  canSaveProfile,
   createProfileDraft,
   initialApiProfilesDialogState,
 } = ApiProfilesDialog.testUtils
@@ -268,6 +270,9 @@ describe('ApiProfilesDialog 列表优先界面', () => {
     expect(markup).toContain('gpt-4.1-mini')
     expect(markup).toContain('https://api.openai.com/v1')
     expect(markup).toContain('sk-p••••••C7x9')
+    expect(markup).toContain('完整性校验通过')
+    expect(markup).toContain('重新校验')
+    expect(markup).not.toContain('配置测试成功')
   })
 
   it('加载中与错误态不会错误显示最终空状态', () => {
@@ -473,6 +478,30 @@ describe('ApiProfilesDialog 表单与状态机', () => {
       id: 'ai-openai-main',
       apiKey: 'replacement-secret-value',
     })
+  })
+
+  it('切换 AI 供应商后不能复用旧供应商密钥', () => {
+    const openAiDraft = createProfileDraft('ai', aiProfiles[0])
+    if (openAiDraft.kind !== 'ai') throw new Error('Expected an AI profile draft')
+    const anthropicDraft = {
+      ...openAiDraft,
+      providerType: 'anthropic' as const,
+      apiFormat: 'anthropic_messages' as const,
+      baseUrl: 'https://api.anthropic.com',
+      apiKey: '',
+    }
+
+    expect(canReuseSavedCredential(openAiDraft, aiProfiles[0])).toBe(true)
+    expect(canReuseSavedCredential(anthropicDraft, aiProfiles[0])).toBe(false)
+    expect(canSaveProfile(anthropicDraft, aiProfiles[0])).toBe(false)
+    expect(canSaveProfile({ ...anthropicDraft, apiKey: 'new-anthropic-key' }, aiProfiles[0]))
+      .toBe(true)
+    expect(canReuseSavedCredential({
+      ...anthropicDraft,
+      providerType: 'ollama',
+      apiFormat: 'ollama',
+      baseUrl: 'http://127.0.0.1:11434',
+    }, aiProfiles[0])).toBe(false)
   })
 
   it('新增、编辑、返回与删除确认都在同一个弹窗视图状态中切换', () => {
