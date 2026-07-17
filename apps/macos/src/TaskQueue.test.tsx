@@ -1,7 +1,10 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import TaskQueue, { capabilitiesForStatus } from './TaskQueue'
+import TaskQueue, {
+  capabilitiesForStatus,
+  confirmationForTaskAction,
+} from './TaskQueue'
 import type { WorkbenchRuntimeData } from './use-workbench-backend'
 import type { TaskStatus } from './workbench-data'
 
@@ -24,26 +27,36 @@ function renderQueue(tasks: WorkbenchRuntimeData['tasks']) {
       onUpdateTask: vi.fn(),
       onCancelTask: vi.fn(),
       onConfirmTask: vi.fn(),
+      onDeleteTask: vi.fn(),
       onExportTask: vi.fn(),
     }),
   )
 }
 
 describe('TaskQueue', () => {
-  it.each<[TaskStatus, boolean, boolean, boolean, boolean]>([
-    ['等待确认', true, true, true, false],
-    ['待人工确认', true, true, false, false],
-    ['已排队', false, true, false, false],
-    ['运行中', false, true, false, false],
-    ['成功', false, false, false, true],
-    ['部分成功', false, false, false, true],
-    ['失败', false, false, false, false],
-  ])('%s 状态使用正确的任务操作权限', (status, canEdit, canCancel, canConfirm, canExport) => {
+  it.each<[TaskStatus, boolean, boolean, boolean, boolean, boolean]>([
+    ['等待确认', true, true, true, false, true],
+    ['待人工确认', true, true, false, false, true],
+    ['已排队', false, true, false, false, false],
+    ['运行中', false, true, false, false, false],
+    ['成功', false, false, false, true, true],
+    ['部分成功', false, false, false, true, true],
+    ['失败', false, false, false, false, true],
+    ['已取消', false, false, false, false, true],
+  ])('%s 状态使用正确的任务操作权限', (
+    status,
+    canEdit,
+    canCancel,
+    canConfirm,
+    canExport,
+    canDelete,
+  ) => {
     expect(capabilitiesForStatus(status)).toEqual({
       canEdit,
       canCancel,
       canConfirm,
       canExport,
+      canDelete,
     })
   })
 
@@ -64,12 +77,27 @@ describe('TaskQueue', () => {
     expect(markup).toContain('aria-valuenow="0"')
   })
 
-  it('等待确认任务提供编辑、取消与确认运行入口', () => {
+  it('等待确认任务提供编辑、取消、删除与确认运行四个独立入口', () => {
     const markup = renderQueue([waitingTask])
 
     expect(markup).toContain('编辑')
-    expect(markup).toContain('取消任务')
+    expect(markup).toContain('title="取消任务"')
+    expect(markup).toContain('title="删除任务"')
     expect(markup).toContain('确认运行')
+  })
+
+  it('取消和删除使用不同确认文案，删除明确提示关联数据不可恢复', () => {
+    expect(confirmationForTaskAction('confirm-cancel')).toMatchObject({
+      ariaLabel: '确认取消任务',
+      buttonLabel: '确认取消',
+    })
+    expect(confirmationForTaskAction('confirm-delete')).toMatchObject({
+      ariaLabel: '确认删除任务',
+      buttonLabel: '确认删除',
+    })
+    expect(confirmationForTaskAction('confirm-cancel').message).toContain('保留任务与运行记录')
+    expect(confirmationForTaskAction('confirm-delete').message).toContain('关联本地数据')
+    expect(confirmationForTaskAction('confirm-delete').message).toContain('无法恢复')
   })
 
   it('每条任务可选择 Excel 或 PDF，未完成任务不允许提前导出', () => {

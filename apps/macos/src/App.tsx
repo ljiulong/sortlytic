@@ -121,6 +121,7 @@ function Workbench() {
                 tasks={data.tasks}
                 onCancelTask={backend.cancelTask}
                 onConfirmTask={backend.confirmTask}
+                onDeleteTask={backend.deleteTask}
                 onExportTask={backend.exportTask}
                 onUpdateTask={backend.updateTask}
               />

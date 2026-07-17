@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Download, ListTodo, Pencil, Play, Save, Trash2, X } from 'lucide-react'
+import { Ban, Download, ListTodo, Pencil, Play, Save, Trash2, X } from 'lucide-react'
 import { StatusPill } from './CollectionBuilder'
 import type { TaskExportInput, WorkbenchRuntimeData } from './use-workbench-backend'
 import type { TaskStatus } from './workbench-data'
@@ -10,6 +10,7 @@ type ActiveTaskMode =
   | { taskId: string; type: 'edit' }
   | { taskId: string; type: 'confirm-run' }
   | { taskId: string; type: 'confirm-cancel' }
+  | { taskId: string; type: 'confirm-delete' }
 type ConfirmationMode = Exclude<ActiveTaskMode, { type: 'edit' }>
 
 type TaskQueueProps = {
@@ -18,6 +19,7 @@ type TaskQueueProps = {
   onUpdateTask: (input: { taskId: string; name: string }) => Promise<unknown>
   onCancelTask: (taskId: string) => Promise<unknown>
   onConfirmTask: (taskId: string) => Promise<unknown>
+  onDeleteTask: (taskId: string) => Promise<unknown>
   onExportTask: (input: TaskExportInput) => Promise<unknown>
 }
 
@@ -27,7 +29,34 @@ export function capabilitiesForStatus(status: TaskStatus) {
     canEdit: status === '等待确认' || status === '待人工确认',
     canCancel: ['等待确认', '待人工确认', '已排队', '运行中'].includes(status),
     canConfirm: status === '等待确认',
+    canDelete: status !== '已排队' && status !== '运行中',
     canExport: status === '成功' || status === '部分成功',
+  }
+}
+
+// oxlint-disable-next-line react/only-export-components
+export function confirmationForTaskAction(type: ConfirmationMode['type']) {
+  if (type === 'confirm-run') {
+    return {
+      ariaLabel: '确认运行任务',
+      buttonLabel: '确认运行',
+      message: '确认后任务将进入执行队列并可能产生费用。',
+      tone: 'primary' as const,
+    }
+  }
+  if (type === 'confirm-cancel') {
+    return {
+      ariaLabel: '确认取消任务',
+      buttonLabel: '确认取消',
+      message: '取消会停止任务，但保留任务与运行记录。',
+      tone: 'danger' as const,
+    }
+  }
+  return {
+    ariaLabel: '确认删除任务',
+    buttonLabel: '确认删除',
+    message: '删除会移除任务及关联本地数据，且无法恢复。',
+    tone: 'danger' as const,
   }
 }
 
@@ -37,6 +66,7 @@ function TaskQueue({
   onUpdateTask,
   onCancelTask,
   onConfirmTask,
+  onDeleteTask,
   onExportTask,
 }: TaskQueueProps) {
   const [activeMode, setActiveMode] = useState<ActiveTaskMode>()
@@ -66,8 +96,10 @@ function TaskQueue({
     try {
       if (action.type === 'confirm-run') {
         await onConfirmTask(action.taskId)
-      } else {
+      } else if (action.type === 'confirm-cancel') {
         await onCancelTask(action.taskId)
+      } else {
+        await onDeleteTask(action.taskId)
       }
       setActiveMode(undefined)
     } catch {
@@ -107,14 +139,23 @@ function TaskQueue({
           {tasks.map((task) => {
             const taskMode = activeMode?.taskId === task.id ? activeMode : undefined
             const isEditing = taskMode?.type === 'edit'
-            const confirmation = taskMode?.type === 'confirm-run' || taskMode?.type === 'confirm-cancel'
+            const confirmation = taskMode?.type === 'confirm-run'
+              || taskMode?.type === 'confirm-cancel'
+              || taskMode?.type === 'confirm-delete'
               ? taskMode
               : undefined
             const isConfirming = Boolean(confirmation)
+            const confirmationContent = confirmation
+              ? confirmationForTaskAction(confirmation.type)
+              : {
+                  ariaLabel: '任务操作确认',
+                  buttonLabel: '确认操作',
+                  message: '请确认当前任务操作。',
+                  tone: 'danger' as const,
+                }
             const capabilities = capabilitiesForStatus(task.status)
             const progress = Math.min(100, Math.max(0, task.progress))
             const titleId = `task-title-${task.id}`
-            const confirmationIsRun = confirmation?.type === 'confirm-run'
 
             return (
               <article
@@ -217,14 +258,24 @@ function TaskQueue({
                           编辑
                         </button>
                         <button
-                          className="ghost-button task-card__danger-button"
+                          className="ghost-button"
                           disabled={isBusy || isEditing || !capabilities.canCancel || isConfirming}
                           title={capabilities.canCancel ? '取消任务' : '终态任务不能取消'}
                           type="button"
                           onClick={() => setActiveMode({ taskId: task.id, type: 'confirm-cancel' })}
                         >
-                          <Trash2 size={15} aria-hidden="true" />
+                          <Ban size={15} aria-hidden="true" />
                           取消
+                        </button>
+                        <button
+                          className="ghost-button task-card__danger-button"
+                          disabled={isBusy || isEditing || !capabilities.canDelete || isConfirming}
+                          title={capabilities.canDelete ? '删除任务' : '请先取消任务再删除'}
+                          type="button"
+                          onClick={() => setActiveMode({ taskId: task.id, type: 'confirm-delete' })}
+                        >
+                          <Trash2 size={15} aria-hidden="true" />
+                          删除
                         </button>
                       </div>
                       <div className="task-card__run-action">
@@ -271,30 +322,24 @@ function TaskQueue({
 
                     <div
                       aria-hidden={!isConfirming}
-                      aria-label={confirmation
-                        ? confirmationIsRun ? '确认运行任务' : '确认取消任务'
-                        : '任务操作确认'}
+                      aria-label={confirmationContent.ariaLabel}
                       aria-live="polite"
                       className="task-card__confirmation"
                       data-visible={isConfirming}
                       role="group"
                     >
-                      <p>
-                        {confirmation
-                          ? confirmationIsRun
-                            ? '确认后任务将进入执行队列并可能产生费用。'
-                            : '取消后当前任务不能继续运行。'
-                          : '请确认当前任务操作。'}
-                      </p>
+                      <p>{confirmationContent.message}</p>
                       <div className="task-card__confirmation-actions">
                         <button
-                          className={confirmationIsRun ? 'primary-button' : 'task-card__confirm-danger'}
+                          className={confirmationContent.tone === 'primary'
+                            ? 'primary-button'
+                            : 'task-card__confirm-danger'}
                           disabled={isBusy || !confirmation}
                           tabIndex={confirmation ? 0 : -1}
                           type="button"
                           onClick={() => confirmation && void confirmAction(confirmation)}
                         >
-                          {confirmation ? (confirmationIsRun ? '确认运行' : '确认取消') : '确认操作'}
+                          {confirmationContent.buttonLabel}
                         </button>
                         <button
                           className="ghost-button"
