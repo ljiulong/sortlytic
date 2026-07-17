@@ -1,10 +1,4 @@
-import { useMemo, useState } from 'react'
-import {
-  type ColumnDef,
-  flexRender,
-  getCoreRowModel,
-  useReactTable,
-} from '@tanstack/react-table'
+import { useState } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   Bot,
@@ -22,6 +16,7 @@ import './App.responsive.css'
 import { type WorkbenchRuntimeData, useWorkbenchBackend } from './use-workbench-backend'
 import { CollectionBuilder, StatusPill } from './CollectionBuilder'
 import AppLogo from './AppLogo'
+import Dashboard from './Dashboard'
 import GuidePage from './GuidePage'
 import ModelSettingsPanel from './ModelSettingsPanel'
 import TaskQueue from './TaskQueue'
@@ -34,9 +29,6 @@ import {
   primaryNavigation,
 } from './navigation'
 import { pageMeta } from './page-meta'
-import {
-  type SocialRecord,
-} from './workbench-data'
 const queryClient = new QueryClient()
 const navigationIcons: Record<PrimaryNavKey, typeof House> = {
   overview: House,
@@ -174,35 +166,18 @@ function Workbench() {
             </div>
           </section>
         ) : (
-          <>
-            <section className="metric-grid" aria-label="工作区指标">
-              {data.metrics.map((metric) => (
-                <MetricCard key={metric.label} {...metric} />
-              ))}
-            </section>
-            <section className={pageLayoutClassName}>
-              <div className="main-column">
-                <ConnectionStrip
-                  connections={data.connections}
-                  isBusy={backend.isBusy}
-                  onRefresh={backend.refresh}
-                />
-                <LocalWorkspacePanel
-                  health={data.workspace.health}
-                  storage={data.workspace.storage}
-                />
-                <RecordTable
-                  records={data.records}
-                  selectedRecordId={selectedRecordId}
-                  onSelectRecord={setSelectedRecordId}
-                />
-              </div>
-              <aside className="inspector" aria-label="详情与证据">
-                <EvidencePanel records={data.records} selectedRecordId={selectedRecordId} />
-                <PromptRegressionPanel runs={data.promptRuns} />
-              </aside>
-            </section>
-          </>
+          <Dashboard
+            connections={data.connections}
+            isBusy={backend.isBusy}
+            metrics={data.metrics}
+            promptRuns={data.promptRuns}
+            records={data.records}
+            selectedRecordId={selectedRecordId}
+            workspace={data.workspace}
+            onCreateTask={() => setActiveNav('new-task')}
+            onRefresh={backend.refresh}
+            onSelectRecord={setSelectedRecordId}
+          />
         )}
       </main>
     </div>
@@ -291,26 +266,6 @@ function LocalWorkspacePanel({
     </section>
   )
 }
-function MetricCard({
-  label,
-  value,
-  delta,
-  tone,
-}: {
-  label: string
-  value: string
-  delta: string
-  tone: string
-}) {
-  return (
-    <article className="metric-card" data-tone={tone}>
-      <p>{label}</p>
-      <strong>{value}</strong>
-      <span>{delta}</span>
-    </article>
-  )
-}
-
 function ConnectionStrip({
   connections,
   isBusy,
@@ -354,199 +309,6 @@ function ConnectionStrip({
       </div>
     </section>
   )
-}
-
-function RecordTable({
-  records,
-  selectedRecordId,
-  onSelectRecord,
-}: {
-  records: SocialRecord[]
-  selectedRecordId: string
-  onSelectRecord: (recordId: string) => void
-}) {
-  const columns = useMemo<ColumnDef<SocialRecord>[]>(
-    () => [
-      {
-        accessorKey: 'id',
-        header: '记录 ID',
-        cell: ({ row }) => <span className="mono">{row.original.id}</span>,
-      },
-      {
-        accessorKey: 'platform',
-        header: '平台',
-      },
-      {
-        accessorKey: 'title',
-        header: '内容摘要',
-        cell: ({ row }) => <span className="title-cell">{row.original.title}</span>,
-      },
-      {
-        accessorKey: 'region',
-        header: '国家/地区',
-      },
-      {
-        accessorKey: 'sentiment',
-        header: '情绪',
-      },
-      {
-        accessorKey: 'confidence',
-        header: '置信度',
-        cell: ({ row }) => <span>{Math.round(row.original.confidence * 100)}%</span>,
-      },
-      {
-        accessorKey: 'status',
-        header: '校验状态',
-        cell: ({ row }) => <StatusPill tone={toneForRecord(row.original.status)} label={row.original.status} />,
-      },
-    ],
-    [],
-  )
-
-  const table = useReactTable({
-    data: records,
-    columns,
-    getCoreRowModel: getCoreRowModel(),
-  })
-
-  return (
-    <section className="glass-panel">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">数据资产</p>
-          <h2>原始数据、AI 结果与来源联动</h2>
-        </div>
-      </div>
-      <div className="table-shell" role="region" aria-label="标准化记录表">
-        <table>
-          <thead>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <tr key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <th key={header.id}>
-                    {flexRender(header.column.columnDef.header, header.getContext())}
-                  </th>
-                ))}
-              </tr>
-            ))}
-          </thead>
-          <tbody>
-            {table.getRowModel().rows.map((row) => (
-              <tr
-                data-active={selectedRecordId === row.original.id}
-                key={row.id}
-                onClick={() => onSelectRecord(row.original.id)}
-              >
-                {row.getVisibleCells().map((cell) => (
-                  <td key={cell.id}>
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  )
-}
-
-function EvidencePanel({
-  records,
-  selectedRecordId,
-}: {
-  records: SocialRecord[]
-  selectedRecordId: string
-}) {
-  const selectedRecord = records.find((record) => record.id === selectedRecordId) ?? records[0]
-
-  if (!selectedRecord) {
-    return (
-      <section className="glass-panel compact-panel">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">来源追溯</p>
-            <h2>暂无真实记录</h2>
-          </div>
-          <StatusPill tone="info" label="等待采集" />
-        </div>
-        <p className="muted-text">完成真实采集并入库后，这里会显示来源、模型运行和转换理由。</p>
-      </section>
-    )
-  }
-
-  return (
-    <section className="glass-panel compact-panel">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">来源追溯</p>
-          <h2>{selectedRecord.id}</h2>
-        </div>
-        <StatusPill tone={toneForRecord(selectedRecord.status)} label={selectedRecord.status} />
-      </div>
-      <div className="evidence-body">
-        <h3>{selectedRecord.insight}</h3>
-        <p>{selectedRecord.evidence}</p>
-        <dl>
-          <div>
-            <dt>原始链接</dt>
-            <dd>{selectedRecord.source}</dd>
-          </div>
-          <div>
-            <dt>模型运行</dt>
-            <dd>run-ai-20260705-014，提示词 v1.3.2</dd>
-          </div>
-          <div>
-            <dt>转换理由</dt>
-            <dd>字段证据、评论集合与平台元数据一致。</dd>
-          </div>
-        </dl>
-      </div>
-    </section>
-  )
-}
-
-function PromptRegressionPanel({
-  runs,
-}: {
-  runs: WorkbenchRuntimeData['promptRuns']
-}) {
-  const failedCount = runs.filter((run) => run.status === '失败').length
-  const hasRuns = runs.length > 0
-
-  return (
-    <section className="glass-panel compact-panel">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">提示词回归</p>
-          <h2>版本与 Schema</h2>
-        </div>
-        <StatusPill
-          tone={!hasRuns ? 'info' : failedCount ? 'warning' : 'success'}
-          label={!hasRuns ? '未运行' : `${failedCount} 项失败`}
-        />
-      </div>
-      <div className="regression-list">
-        {!hasRuns ? <p className="muted-text">尚无真实回归执行结果。</p> : null}
-        {runs.map((run) => (
-          <article className="regression-row" key={run.name}>
-            <div>
-              <strong>{run.name}</strong>
-              <span>{run.provider}</span>
-            </div>
-            <StatusPill tone={run.status === '通过' ? 'success' : 'danger'} label={run.status} />
-            <p>{run.diff}</p>
-          </article>
-        ))}
-      </div>
-    </section>
-  )
-}
-
-function toneForRecord(status: SocialRecord['status']) {
-  if (status === '已校验') return 'success'
-  if (status === '证据不足') return 'danger'
-  return 'warning'
 }
 
 export default App
