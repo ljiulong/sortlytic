@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 use active_run_migration::{apply_active_run_migration, validate_existing_active_run_migration};
+use api_profile_migration::{apply_api_profile_migration, validate_existing_api_profile_migration};
 use collection_pipeline_migration::{
   apply_collection_pipeline_migration, validate_existing_collection_pipeline_migration,
 };
@@ -33,13 +34,14 @@ use security::{
 };
 
 mod active_run_migration;
+mod api_profile_migration;
 mod collection_pipeline_migration;
 mod collection_runtime_migration;
 mod run_checkpoint_migration;
 mod schema;
 mod security;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 7;
+pub const CURRENT_SCHEMA_VERSION: i64 = 8;
 pub const DATABASE_FILE_NAME: &str = "app.sqlite";
 
 const WORKSPACE_DIRS: &[&str] = &[
@@ -286,6 +288,7 @@ fn apply_schema(connection: &mut Connection) -> AppResult<()> {
   validate_existing_active_run_migration(connection)?;
   validate_existing_collection_runtime_migration(connection)?;
   validate_existing_collection_pipeline_migration(connection)?;
+  validate_existing_api_profile_migration(connection)?;
   connection
     .execute_batch(SCHEMA_SQL)
     .map_err(database_error)?;
@@ -303,7 +306,8 @@ fn apply_schema(connection: &mut Connection) -> AppResult<()> {
   apply_run_checkpoint_migration(connection)?;
   apply_active_run_migration(connection)?;
   apply_collection_runtime_migration(connection)?;
-  apply_collection_pipeline_migration(connection)
+  apply_collection_pipeline_migration(connection)?;
+  apply_api_profile_migration(connection)
 }
 
 fn apply_record_observation_migration(connection: &mut Connection) -> AppResult<()> {
