@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::accounts::{persist_account_observations, AccountObservationInput, AgeRange};
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 use crate::records::{persist_collection_page, PersistCollectionPageInput};
-use crate::secrets::read_secret_for_backend;
+use crate::secrets::read_secret_for_snapshot;
 use crate::tikhub::{
   build_collection_request, send_collection_request, CollectionPage, TikHubCollectionRequest,
 };
@@ -75,12 +75,22 @@ pub fn execute_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRu
 
 fn execute_claimed_run(root_path: &Path, run: &TaskRunView) -> AppResult<()> {
   let snapshot = load_runtime_snapshot(root_path, &run.id)?;
-  let token = read_secret_for_backend(root_path, &snapshot.secret_ref_id, "tikhub")?;
+  let token = load_runtime_token(root_path, &snapshot)?;
   execute_claimed_run_with_guard(
     root_path,
     run,
     |request| pricing::guard_request(root_path, &run.id, request).map(|_| ()),
     |request| send_collection_request(Some(snapshot.base_url.clone()), &token, request),
+  )
+}
+
+fn load_runtime_token(root_path: &Path, snapshot: &runtime::RuntimeSnapshot) -> AppResult<String> {
+  read_secret_for_snapshot(
+    root_path,
+    &snapshot.secret_ref_id,
+    "tikhub",
+    &snapshot.secret_provider_id,
+    snapshot.secret_revision,
   )
 }
 

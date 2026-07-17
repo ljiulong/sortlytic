@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::*;
+use crate::secrets::update_secret;
 use crate::tasks::test_support::install_successful_tikhub_profile;
 use crate::tasks::{
   confirm_collection_plan, create_collection_task, enqueue_task, recover_interrupted_runs,
@@ -67,6 +68,22 @@ fn runtime_snapshot_remains_valid_after_current_connector_switch() {
     original.secret_ref_id,
     "00000000-0000-4000-8000-000000000002"
   );
+  assert_eq!(original.secret_revision, 1);
+  assert_eq!(
+    original.secret_provider_id,
+    "00000000-0000-4000-8000-000000000001"
+  );
+  assert_eq!(
+    super::load_runtime_token(&root, &original).expect("snapshot token should load"),
+    "sortlytic-test-only-tikhub-token"
+  );
+
+  let replacement = "worker-must-not-use-replacement-token";
+  update_secret(&root, &original.secret_ref_id, replacement)
+    .expect("test should simulate a credential revision race");
+  let error = super::load_runtime_token(&root, &original)
+    .expect_err("worker must reject a token newer than its immutable snapshot");
+  assert!(!error.message.contains(replacement));
 
   let connection =
     open_workspace_database(root.join(DATABASE_FILE_NAME)).expect("database should open");

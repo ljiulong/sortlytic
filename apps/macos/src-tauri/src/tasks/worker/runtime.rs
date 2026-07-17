@@ -11,6 +11,8 @@ use super::worker_error;
 pub(super) struct RuntimeSnapshot {
   pub(super) base_url: String,
   pub(super) secret_ref_id: String,
+  pub(super) secret_revision: u64,
+  pub(super) secret_provider_id: String,
 }
 
 pub(super) fn load_runtime_snapshot(
@@ -20,7 +22,8 @@ pub(super) fn load_runtime_snapshot(
   let connection = open_workspace_database(root_path.as_ref().join(DATABASE_FILE_NAME))?;
   let snapshot = connection
     .query_row(
-      "SELECT snapshot.base_url, snapshot.secret_ref_id
+      "SELECT snapshot.base_url, snapshot.secret_ref_id,
+              snapshot.secret_revision, snapshot.secret_provider_id
        FROM collection_runtime_snapshot AS snapshot
        JOIN task_run AS run ON run.id = snapshot.task_run_id
          AND run.plan_id = snapshot.plan_id AND run.status = 'running'
@@ -37,9 +40,13 @@ pub(super) fn load_runtime_snapshot(
          AND snapshot.connector_test_status = 'success'",
       params![run_id],
       |row| {
+        let revision = row.get::<_, i64>(2)?;
         Ok(RuntimeSnapshot {
           base_url: row.get(0)?,
           secret_ref_id: row.get(1)?,
+          secret_revision: u64::try_from(revision)
+            .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(2, revision))?,
+          secret_provider_id: row.get(3)?,
         })
       },
     )
