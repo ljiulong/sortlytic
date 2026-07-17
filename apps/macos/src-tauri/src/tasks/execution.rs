@@ -616,7 +616,7 @@ pub(super) fn quarantine_run_for_reconfirmation(
       connection
         .execute(
           "UPDATE collection_task
-           SET status = 'waiting_confirmation', confirmed_at = NULL,
+           SET status = 'draft', confirmed_at = NULL,
                completed_at = NULL, cancelled_at = NULL, updated_at = ?1
            WHERE id = ?2 AND status IN ('queued', 'running')",
           params![now, task_id],

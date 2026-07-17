@@ -967,7 +967,7 @@ fn assert_reconfirmation_quarantine(root_path: &Path, run_id: &str, task_id: &st
     Some("PLAN_RECONFIRMATION_REQUIRED")
   );
   assert!(!run.retryable);
-  assert_eq!(task.status, "waiting_confirmation");
+  assert_eq!(task.status, "draft");
   assert!(task.confirmed_at.is_none());
   assert_eq!(plan_state.0, "needs_review");
   assert!(plan_state.1.contains("重新确认"));
