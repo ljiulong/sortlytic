@@ -1,5 +1,15 @@
 use super::*;
-use crate::workspace::create_workspace;
+use crate::workspace::create_workspace as create_workspace_without_api_profile;
+
+fn create_workspace(
+  name: &str,
+  root_path: impl AsRef<Path>,
+) -> AppResult<crate::workspace::WorkspaceSummary> {
+  let root_path = root_path.as_ref();
+  let workspace = create_workspace_without_api_profile(name, root_path)?;
+  super::test_support::install_successful_tikhub_profile(root_path)?;
+  Ok(workspace)
+}
 
 #[path = "execution_claim_tests.rs"]
 mod execution_claim_tests;

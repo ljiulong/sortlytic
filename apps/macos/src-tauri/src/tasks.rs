@@ -16,6 +16,9 @@ mod snapshot;
 mod validation;
 mod worker;
 
+#[cfg(test)]
+mod test_support;
+
 pub use execution::{
   cancel_task, claim_next_task, complete_task_run, enqueue_task, fail_task_run, retry_task,
 };
