@@ -1,5 +1,6 @@
 pub mod accounts;
 pub mod ai;
+pub mod api_profiles;
 mod app_runtime;
 pub mod app_state;
 pub mod collection;
