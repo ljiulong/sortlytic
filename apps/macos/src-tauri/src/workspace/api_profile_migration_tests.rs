@@ -6,7 +6,9 @@ use rusqlite::{params, Connection};
 use uuid::Uuid;
 
 use super::*;
-use crate::workspace::{create_workspace, open_workspace_database, DATABASE_FILE_NAME};
+use crate::workspace::{
+  create_workspace, open_workspace_database, CURRENT_SCHEMA_VERSION, DATABASE_FILE_NAME,
+};
 
 #[test]
 fn v8_backup_precedes_cleanup_and_only_fresh_queue_snapshots_are_removed() {
@@ -75,7 +77,7 @@ fn fresh_workspace_records_v8_without_creating_a_rollback_backup() {
   let summary = create_workspace("新 v8 工作区", &root).unwrap();
   let connection = open_workspace_database(root.join(DATABASE_FILE_NAME)).unwrap();
 
-  assert_eq!(summary.schema_version, 8);
+  assert_eq!(summary.schema_version, CURRENT_SCHEMA_VERSION);
   assert_eq!(
     connection
       .query_row(

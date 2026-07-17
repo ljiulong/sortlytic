@@ -574,7 +574,7 @@ mod tests {
     load_existing_api_profile_registry, save_api_profile_registry, sync_api_profile_mirror,
     CredentialProviderType,
   };
-  use crate::workspace::{create_workspace, open_workspace};
+  use crate::workspace::{create_workspace, open_workspace, CURRENT_SCHEMA_VERSION};
 
   fn legacy_workspace() -> (std::path::PathBuf, String, String) {
     let root = std::env::temp_dir().join(format!("api-import-{}", Uuid::new_v4()));
@@ -648,7 +648,7 @@ mod tests {
     let (root, tikhub_secret_id, ai_secret_id) = legacy_workspace();
 
     let summary = open_workspace(&root).expect("legacy workspace should open");
-    assert_eq!(summary.schema_version, 8);
+    assert_eq!(summary.schema_version, CURRENT_SCHEMA_VERSION);
     assert!(api_profile_registry_path(&root).is_file());
     let registry = load_api_profile_registry(&root).unwrap();
 
@@ -748,7 +748,7 @@ mod tests {
     drop(connection);
 
     let summary = open_workspace(&root).expect("local workspace should remain browseable");
-    assert_eq!(summary.schema_version, 8);
+    assert_eq!(summary.schema_version, CURRENT_SCHEMA_VERSION);
     let connection = open_workspace_database(root.join(DATABASE_FILE_NAME)).unwrap();
     let migration_count: i64 = connection
       .query_row(
