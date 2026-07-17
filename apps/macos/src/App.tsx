@@ -18,7 +18,6 @@ import GuidePage from './GuidePage'
 import SettingsPage from './SettingsPage'
 import TaskQueue from './TaskQueue'
 import ThemeToggle from './ThemeToggle'
-import { i18n } from './i18n'
 import {
   type NavKey,
   type PrimaryNavKey,
@@ -77,14 +76,14 @@ function App() {
   )
 }
 function Workbench() {
-  const { t } = useTranslation(['navigation', 'common'])
+  const { i18n, t } = useTranslation(['navigation', 'common'])
   const backend = useWorkbenchBackend()
   const data = backend.data
   const [activeNav, setActiveNav] = useState<NavKey>('overview')
   const [selectedRecordId, setSelectedRecordId] = useState('')
   const pageLayoutClassName = `page-layout page-layout--${pageMeta[activeNav].layout}`
   return (
-    <div className="app-shell" lang={i18n.language}>
+    <div className="app-shell" lang={i18n.resolvedLanguage ?? i18n.language}>
       <a className="skip-link" href="#main-content">{t('skipToContent')}</a>
       <aside className="sidebar" aria-label={t('mainNavigation')}>
         <div className="brand-block">
@@ -92,8 +91,8 @@ function Workbench() {
             <AppLogo />
           </div>
           <div>
-            <p className="brand-name">Sortlytic</p>
-            <p className="brand-subtitle">macOS 本地工作区</p>
+            <p className="brand-name">{t('common:appName')}</p>
+            <p className="brand-subtitle">{t('common:brandSubtitle')}</p>
           </div>
         </div>
 
