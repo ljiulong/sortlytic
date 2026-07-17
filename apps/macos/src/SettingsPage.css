@@ -1,0 +1,210 @@
+.settings-page {
+  display: grid;
+  gap: 32px;
+  min-width: 0;
+}
+
+.settings-page__status {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.36fr) minmax(0, 1.64fr);
+  gap: 28px;
+  align-items: end;
+  padding: 2px 2px 22px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.settings-page__status > header {
+  display: grid;
+  gap: 5px;
+}
+
+.settings-page__status .eyebrow,
+.settings-page__group .eyebrow,
+.workspace-settings .eyebrow {
+  margin: 0;
+}
+
+.settings-page__status dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  margin: 0;
+  background: var(--border-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.settings-page__status dl > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px 10px;
+  align-items: center;
+  min-width: 0;
+  padding: 12px;
+  background: var(--surface-raised);
+}
+
+.settings-page__status dt,
+.settings-page__status dd {
+  margin: 0;
+}
+
+.settings-page__status dt {
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.settings-page__status dd {
+  grid-column: 1 / -1;
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.settings-page__status .status-pill {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.settings-page__group {
+  display: grid;
+  grid-template-columns: minmax(190px, 0.34fr) minmax(0, 1.66fr);
+  gap: 28px;
+  min-width: 0;
+  padding: 0 2px 30px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.settings-page__group:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.settings-page__group > header {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 11px;
+  align-content: start;
+  min-width: 0;
+}
+
+.settings-page__group-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  color: var(--text);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.settings-page__group > header > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.settings-page__group > header p:last-child {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.settings-page__group-body {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.settings-page__group-body > .glass-panel {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.settings-page__group-body > .glass-panel > .section-heading {
+  margin-bottom: 14px;
+}
+
+.workspace-settings {
+  min-width: 0;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
+}
+
+.workspace-settings > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.workspace-settings > header > div {
+  display: grid;
+  gap: 5px;
+}
+
+.workspace-settings dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  background: var(--border-subtle);
+}
+
+.workspace-settings dl > div {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 13px 18px;
+  background: var(--surface-raised);
+}
+
+.workspace-settings dt,
+.workspace-settings dd {
+  margin: 0;
+}
+
+.workspace-settings dt {
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.workspace-settings dd {
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+@media (max-width: 960px) {
+  .settings-page__status,
+  .settings-page__group {
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+}
+
+@media (max-width: 680px) {
+  .settings-page__status dl {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-settings dl {
+    grid-template-columns: 1fr;
+  }
+}

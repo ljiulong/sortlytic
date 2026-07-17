@@ -1,15 +1,11 @@
 import { useState } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
-  Bot,
   BookOpen,
   CirclePlus,
   House,
-  KeyRound,
   ListTodo,
-  RefreshCcw,
   Settings,
-  Share2,
 } from 'lucide-react'
 import './App.css'
 import './App.responsive.css'
@@ -18,11 +14,9 @@ import { CollectionBuilder, StatusPill } from './CollectionBuilder'
 import AppLogo from './AppLogo'
 import Dashboard from './Dashboard'
 import GuidePage from './GuidePage'
-import ModelSettingsPanel from './ModelSettingsPanel'
+import SettingsPage from './SettingsPage'
 import TaskQueue from './TaskQueue'
 import ThemeToggle from './ThemeToggle'
-import TikhubSettingsPanel from './TikhubSettingsPanel'
-import UpdateSettingsPanel from './UpdateSettingsPanel'
 import {
   type NavKey,
   type PrimaryNavKey,
@@ -40,13 +34,6 @@ const navItems = primaryNavigation.map((item) => ({
   ...item,
   icon: navigationIcons[item.key],
 }))
-const appIdentifier = 'com.steven.sortlytic'
-const defaultWorkspaceDirectory = 'default-workspace'
-const connectionIcons = {
-  key: KeyRound,
-  bot: Bot,
-  share: Share2,
-}
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -111,33 +98,7 @@ function Workbench() {
           </div>
         ) : activeNav === 'settings' ? (
           <section className={pageLayoutClassName} aria-label="连接与本地设置">
-            <div className="main-column">
-              <LocalWorkspacePanel
-                health={data.workspace.health}
-                storage={data.workspace.storage}
-              />
-              <ConnectionStrip
-                connections={data.connections}
-                isBusy={backend.isBusy}
-                onRefresh={backend.refresh}
-              />
-              <TikhubSettingsPanel
-                connector={data.tikhubConnector}
-                isBusy={backend.isBusy}
-                result={backend.tikhubTestResult}
-                onSaveAndTest={backend.saveAndTestTikhubToken}
-              />
-              <ModelSettingsPanel
-                {...backend}
-                isPending={backend.isModelSettingsPending}
-                providers={data.modelProviders}
-                result={backend.modelValidationResult}
-              />
-              <UpdateSettingsPanel
-                {...backend}
-                isTauriApp={data.runtimeMode === 'backend'}
-              />
-            </div>
+            <SettingsPage backend={backend} />
           </section>
         ) : activeNav === 'new-task' ? (
           <section className={pageLayoutClassName} aria-label="新建任务">
@@ -223,92 +184,4 @@ function TopBar({
     </header>
   )
 }
-function LocalWorkspacePanel({
-  health,
-  storage,
-}: {
-  health: string
-  storage: string
-}) {
-  const healthTone = health === '后端不可用'
-    ? 'danger'
-    : health === '未连接本地后端' || health === '正在加载'
-      ? 'warning'
-      : 'success'
-
-  return (
-    <section className="glass-panel local-workspace-panel" aria-label="本地工作区">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">本地工作区</p>
-          <h2>应用身份与运行状态</h2>
-        </div>
-        <StatusPill tone={healthTone} label={health} />
-      </div>
-      <dl className="workspace-detail-grid">
-        <div>
-          <dt>应用标识</dt>
-          <dd>{appIdentifier}</dd>
-        </div>
-        <div>
-          <dt>工作区目录</dt>
-          <dd>{defaultWorkspaceDirectory}</dd>
-        </div>
-        <div>
-          <dt>本地路径</dt>
-          <dd>{storage}</dd>
-        </div>
-        <div>
-          <dt>后端状态</dt>
-          <dd>{health}</dd>
-        </div>
-      </dl>
-    </section>
-  )
-}
-function ConnectionStrip({
-  connections,
-  isBusy,
-  onRefresh,
-}: {
-  connections: WorkbenchRuntimeData['connections']
-  isBusy: boolean
-  onRefresh: () => void
-}) {
-  return (
-    <section className="glass-panel">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">连接状态</p>
-          <h2>TikHub、模型与自动化</h2>
-        </div>
-        <button className="ghost-button" disabled={isBusy} type="button" onClick={onRefresh}>
-          <RefreshCcw size={16} aria-hidden="true" />
-          <span>重新测试</span>
-        </button>
-      </div>
-      <div className="connection-grid">
-        {connections.map((item) => {
-          const Icon = connectionIcons[item.icon]
-          return (
-            <article className="connection-card" key={item.name}>
-              <div className="connection-icon" data-tone={item.tone}>
-                <Icon size={18} aria-hidden="true" />
-              </div>
-              <div>
-                <p className="connection-name">{item.name}</p>
-                <p className="muted-text">{item.detail}</p>
-              </div>
-              <div className="connection-status">
-                <StatusPill tone={item.tone} label={item.status} />
-                <span>{item.meta}</span>
-              </div>
-            </article>
-          )
-        })}
-      </div>
-    </section>
-  )
-}
-
 export default App
