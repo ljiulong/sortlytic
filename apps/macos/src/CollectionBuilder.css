@@ -706,39 +706,3 @@
     padding-inline: 14px;
   }
 }
-
-/* 指南页迁移到专属样式前保留的兼容规则。 */
-.plan-preview {
-  display: grid;
-  gap: 13px;
-  padding: 14px;
-  background: var(--surface-raised);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-}
-
-.plan-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.info-line {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.info-line span {
-  color: var(--text-faint);
-  font-size: 10px;
-}
-
-.info-line strong {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.65;
-}
