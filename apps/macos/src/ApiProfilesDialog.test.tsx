@@ -237,6 +237,48 @@ describe('ApiProfilesDialog 列表优先界面', () => {
     expect(markup).not.toContain('<form')
   })
 
+  it('展示 TikHub 真实测试返回的额度构成、今日用量和检测时间', () => {
+    const markup = renderToStaticMarkup(createElement(ApiProfilesDialog, {
+      isOpen: true,
+      kind: 'tikhub',
+      onClose: vi.fn(),
+    }))
+
+    expect(markup).toContain('充值余额')
+    expect(markup).toContain('$18.60')
+    expect(markup).toContain('免费额度')
+    expect(markup).toContain('$2.40')
+    expect(markup).toContain('可用总额')
+    expect(markup).toContain('$21.00')
+    expect(markup).toContain('今日用量')
+    expect(markup).toContain('<dd>37</dd>')
+    expect(markup).toContain('最近检测')
+    expect(markup).toContain('dateTime="2026-07-17T08:30:00Z"')
+  })
+
+  it('TikHub 测试未返回今日用量时不渲染该项', () => {
+    useApiProfilesMock.mockReturnValue(hookResult({
+      registry: {
+        ...registry,
+        tikhubProfiles: [{
+          ...tikhubProfiles[0],
+          testSummary: {
+            ...tikhubProfiles[0].testSummary!,
+            todayUsage: null,
+          },
+        }],
+      },
+    }))
+
+    const markup = renderToStaticMarkup(createElement(ApiProfilesDialog, {
+      isOpen: true,
+      kind: 'tikhub',
+      onClose: vi.fn(),
+    }))
+
+    expect(markup).not.toContain('今日用量')
+  })
+
   it('空注册表仍先展示空列表与新增按钮，不直接进入表单', () => {
     useApiProfilesMock.mockReturnValue(hookResult({
       registry: {

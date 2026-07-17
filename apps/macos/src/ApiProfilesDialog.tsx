@@ -411,7 +411,8 @@ function ProfileList({
   profiles, onActivate, onCancelDelete, onConfirmDelete, onEdit, onRefresh,
   onRequestDelete, onRetest,
 }: ProfileListProps) {
-  const { t } = useTranslation('settings')
+  const { i18n, t } = useTranslation('settings')
+  const locale = i18n.resolvedLanguage ?? i18n.language
   if (loading) {
     return (
       <div className="api-profile-dialog__state" role="status">
@@ -501,6 +502,27 @@ function ProfileList({
                   </dd>
                 </div>
               </dl>
+              {profile.kind === 'tikhub' ? (
+                <dl aria-label={t('list.tikhubQuotaSummary')} className="api-profile-list__facts">
+                  <div><dt>{t('list.balance')}</dt>
+                    <dd>{formatUsd(profile.testSummary?.balance ?? null, locale, t)}</dd></div>
+                  <div><dt>{t('list.freeCredit')}</dt>
+                    <dd>{formatUsd(profile.testSummary?.freeCredit ?? null, locale, t)}</dd></div>
+                  <div><dt>{t('list.availableCredit')}</dt>
+                    <dd>{formatUsd(profile.testSummary?.availableCredit ?? null, locale, t)}</dd></div>
+                  {profile.testSummary?.todayUsage !== null
+                    && profile.testSummary?.todayUsage !== undefined ? (
+                      <div><dt>{t('list.todayUsage')}</dt>
+                        <dd>{new Intl.NumberFormat(locale).format(profile.testSummary.todayUsage)}</dd></div>
+                    ) : null}
+                  <div><dt>{t('list.lastTestedAt')}</dt>
+                    <dd>
+                      {profile.lastTestedAt ? (
+                        <time dateTime={profile.lastTestedAt}>{formatTestedAt(profile.lastTestedAt, locale)}</time>
+                      ) : t('list.valueUnavailable')}
+                    </dd></div>
+                </dl>
+              ) : null}
               <div className="api-profile-list__actions">
                 <button disabled={busy} type="button" onClick={() => onEdit(profile)}>
                   <Pencil size={15} aria-hidden="true" />
@@ -736,6 +758,22 @@ function maskedKeyLabel(profile: ApiProfileView, t: (key: string) => string) {
   return profile.status === 'needs_rebind'
     ? t('credentialStatus.needsRebind')
     : t('credentialStatus.notBound')
+}
+function formatUsd(value: number | null, locale: string, t: (key: string) => string) {
+  if (value === null || !Number.isFinite(value)) return t('list.valueUnavailable')
+  return new Intl.NumberFormat(locale, {
+    currency: 'USD', currencyDisplay: 'narrowSymbol',
+    maximumFractionDigits: 2, minimumFractionDigits: 2,
+    style: 'currency',
+  }).format(value)
+}
+function formatTestedAt(value: string, locale: string) {
+  const testedAt = new Date(value)
+  if (Number.isNaN(testedAt.getTime())) return value
+  return new Intl.DateTimeFormat(locale, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(testedAt)
 }
 function getFocusableElements(container: HTMLElement | null) {
   if (!container) return []
