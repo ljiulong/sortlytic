@@ -160,11 +160,15 @@ fn backend_validation_overrides_client_supplied_status() {
   invalid_input.validation_status = "valid".to_string();
   invalid_input.validation_errors_json = Some(serde_json::json!([]));
   let invalid_plan = save_collection_plan(&root_path, invalid_input).expect("invalid plan saved");
+  let task_after_invalid_plan =
+    get_task(&root_path, &task.id).expect("task should remain available after invalid plan");
 
   assert_eq!(valid_plan.schema_version, 2);
   assert_eq!(valid_plan.validation_status, "valid");
   assert_eq!(invalid_plan.schema_version, 2);
   assert_eq!(invalid_plan.validation_status, "needs_review");
+  assert_eq!(task_after_invalid_plan.status, "draft");
+  assert!(task_after_invalid_plan.confirmed_at.is_none());
   assert!(invalid_plan
     .validation_errors_json
     .as_array()
@@ -338,7 +342,8 @@ fn confirmation_revalidates_persisted_v2_limits() {
     let persisted = connection
       .query_row(
         "SELECT schema_version, validation_status, validation_errors_json, confirmed_by_user,
-                (SELECT confirmed_at FROM collection_task WHERE id = ?2)
+                (SELECT confirmed_at FROM collection_task WHERE id = ?2),
+                (SELECT status FROM collection_task WHERE id = ?2)
          FROM collection_plan WHERE id = ?1",
         params![plan.id, task.id],
         |row| {
@@ -348,6 +353,7 @@ fn confirmation_revalidates_persisted_v2_limits() {
             row.get::<_, String>(2)?,
             row.get::<_, i64>(3)?,
             row.get::<_, Option<String>>(4)?,
+            row.get::<_, String>(5)?,
           ))
         },
       )
@@ -357,6 +363,7 @@ fn confirmation_revalidates_persisted_v2_limits() {
     assert!(persisted.2.contains(expected_error));
     assert_eq!(persisted.3, 0);
     assert!(persisted.4.is_none());
+    assert_eq!(persisted.5, "draft");
 
     std::fs::remove_dir_all(root_path).ok();
   }

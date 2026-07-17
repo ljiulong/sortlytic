@@ -40,6 +40,11 @@ pub fn save_collection_plan(
   } else {
     "needs_review"
   };
+  let task_status = if validation_status == "valid" {
+    "waiting_confirmation"
+  } else {
+    "draft"
+  };
   let validation_errors = serde_json::json!(validation_errors);
   let cost_estimate = estimate_from_plan_json(&input.plan_json).cost_estimate_json;
 
@@ -78,10 +83,10 @@ pub fn save_collection_plan(
   transaction
     .execute(
       "UPDATE collection_task
-       SET status = 'waiting_confirmation', confirmed_at = NULL,
-           cost_estimate_json = ?1, updated_at = ?2
-       WHERE id = ?3",
-      params![cost_estimate.to_string(), now, input.task_id],
+       SET status = ?1, confirmed_at = NULL,
+           cost_estimate_json = ?2, updated_at = ?3
+       WHERE id = ?4",
+      params![task_status, cost_estimate.to_string(), now, input.task_id],
     )
     .map_err(database_error)?;
 
@@ -217,7 +222,9 @@ pub fn confirm_collection_plan(
       .map_err(database_error)?;
     transaction
       .execute(
-        "UPDATE collection_task SET confirmed_at = NULL, updated_at = ?1 WHERE id = ?2",
+        "UPDATE collection_task
+         SET status = 'draft', confirmed_at = NULL, updated_at = ?1
+         WHERE id = ?2",
         params![now, task_id],
       )
       .map_err(database_error)?;
