@@ -54,6 +54,14 @@ describe('Dashboard', () => {
     expect(markup).toContain('overview-fact overview-fact--lead')
   })
 
+  it('运行概览的全部指标进入同一分隔网格', () => {
+    const markup = renderDashboard()
+
+    expect(markup).toMatch(
+      /<dl class="overview-facts"><div class="overview-fact overview-fact--lead"/,
+    )
+  })
+
   it('有真实记录时显示数据表和对应来源检查区', () => {
     const markup = renderDashboard({
       records: [{

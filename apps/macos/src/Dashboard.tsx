@@ -99,12 +99,12 @@ function OverviewSummary({
         <StatusPill tone={toneForHealth(health)} label={health} />
       </header>
       <div className="overview-summary__body">
-        <div className="overview-fact overview-fact--lead" data-tone={primaryMetric.tone}>
-          <span>{primaryMetric.label}</span>
-          <strong data-available={metricIsAvailable(primaryMetric.value)}>{primaryMetric.value}</strong>
-          <p>{primaryMetric.delta}</p>
-        </div>
         <dl className="overview-facts">
+          <div className="overview-fact overview-fact--lead" data-tone={primaryMetric.tone}>
+            <dt>{primaryMetric.label}</dt>
+            <dd data-available={metricIsAvailable(primaryMetric.value)}>{primaryMetric.value}</dd>
+            <span>{primaryMetric.delta}</span>
+          </div>
           {metrics.slice(1).map((metric) => (
             <div className="overview-fact" key={metric.label}>
               <dt>{metric.label}</dt>
