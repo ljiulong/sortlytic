@@ -114,6 +114,10 @@ function TaskQueue({
   const [draftName, setDraftName] = useState('')
   const [exportFormats, setExportFormats] = useState<Record<string, TaskExportInput['format']>>({})
   const numberLocale = i18n.resolvedLanguage ?? i18n.language
+  const runTimeFormatter = new Intl.DateTimeFormat(numberLocale, {
+    dateStyle: 'medium',
+    timeStyle: 'medium',
+  })
 
   const beginEditing = (task: TaskRow) => {
     setActiveMode({ taskId: task.id, type: 'edit' })
@@ -298,6 +302,60 @@ function TaskQueue({
                     </div>
                   </div>
                 </div>
+
+                {task.latestRun ? (
+                  <section
+                    aria-label={t('taskQueue.runDetails')}
+                    className="task-card__run-details"
+                  >
+                    <header className="task-card__run-heading">
+                      <h4>{t('taskQueue.runDetails')}</h4>
+                      <span>{t('taskQueue.attempt', { count: task.latestRun.attemptNumber })}</span>
+                    </header>
+                    <dl className="task-card__run-facts">
+                      <div>
+                        <dt>{t('taskQueue.currentStage')}</dt>
+                        <dd>{task.latestRun.currentStage ?? t('taskQueue.stagePending')}</dd>
+                      </div>
+                      <div>
+                        <dt>{t('taskQueue.startedAt')}</dt>
+                        <dd>
+                          <time dateTime={task.latestRun.startedAt}>
+                            {runTimeFormatter.format(new Date(task.latestRun.startedAt))}
+                          </time>
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>{t('taskQueue.endedAt')}</dt>
+                        <dd>
+                          {task.latestRun.endedAt ? (
+                            <time dateTime={task.latestRun.endedAt}>
+                              {runTimeFormatter.format(new Date(task.latestRun.endedAt))}
+                            </time>
+                          ) : t('taskQueue.inProgress')}
+                        </dd>
+                      </div>
+                      {task.latestRun.errorCode ? (
+                        <div className="task-card__run-fact--error">
+                          <dt>{t('taskQueue.errorCode')}</dt>
+                          <dd>{task.latestRun.errorCode}</dd>
+                        </div>
+                      ) : null}
+                      {task.latestRun.errorMessage ? (
+                        <div className="task-card__run-fact--error">
+                          <dt>{t('taskQueue.errorMessage')}</dt>
+                          <dd>{task.latestRun.errorMessage}</dd>
+                        </div>
+                      ) : null}
+                      <div>
+                        <dt>{t('taskQueue.retryable')}</dt>
+                        <dd>{t(task.latestRun.retryable
+                          ? 'taskQueue.retryableYes'
+                          : 'taskQueue.retryableNo')}</dd>
+                      </div>
+                    </dl>
+                  </section>
+                ) : null}
 
                 <footer className="task-card__footer">
                   <div className="task-card__action-slot">

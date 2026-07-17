@@ -127,6 +127,33 @@ describe('TaskQueue', () => {
     expect(markup).not.toMatch(/<button[^>]*disabled=""[^>]*>[^<]*(?:<[^>]+>)*导出/)
   })
 
+  it('失败任务展示最新运行阶段、安全错误和重试状态', () => {
+    const markup = renderQueue([{
+      ...waitingTask,
+      status: '失败',
+      latestRun: {
+        id: 'run-2',
+        attemptNumber: 2,
+        status: 'failed',
+        currentStage: '持久化采集结果',
+        errorCode: 'TIKHUB_REQUEST_ERROR',
+        errorMessage: 'TikHub 请求超时',
+        retryable: true,
+        startedAt: '2026-07-17T08:00:00Z',
+        endedAt: '2026-07-17T08:00:30Z',
+      },
+    }])
+
+    expect(markup).toContain('task-card__run-details')
+    expect(markup).toContain('最近一次运行')
+    expect(markup).toContain('第 2 次尝试')
+    expect(markup).toContain('持久化采集结果')
+    expect(markup).toContain('TIKHUB_REQUEST_ERROR')
+    expect(markup).toContain('TikHub 请求超时')
+    expect(markup).toContain('<dt>可重试</dt><dd>是</dd>')
+    expect(markup).toContain('dateTime="2026-07-17T08:00:00Z"')
+  })
+
   it('没有真实任务时显示完整空状态', () => {
     const markup = renderQueue([])
 

@@ -224,6 +224,85 @@
   border-radius: inherit;
 }
 
+.task-card__run-details {
+  min-width: 0;
+  overflow: hidden;
+  margin: 0 20px 18px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.task-card__run-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 42px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.task-card__run-heading h4,
+.task-card__run-heading span {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.task-card__run-heading h4 {
+  color: var(--text-strong);
+  font-weight: 700;
+}
+
+.task-card__run-heading span {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.task-card__run-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  min-width: 0;
+  margin: 0;
+  background: var(--border-subtle);
+}
+
+.task-card__run-facts > div {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  padding: 11px 12px;
+  background: var(--surface-raised);
+}
+
+.task-card__run-facts dt,
+.task-card__run-facts dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.task-card__run-facts dt {
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.task-card__run-facts dd {
+  color: var(--text-strong);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.55;
+}
+
+.task-card__run-fact--error dd {
+  color: var(--danger);
+}
+
 .task-card__footer {
   min-height: 74px;
   padding: 12px 14px;
@@ -346,6 +425,10 @@
     gap: 14px;
   }
 
+  .task-card__run-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .task-card__actions {
     grid-template-columns: minmax(0, 1fr) auto;
   }
@@ -397,6 +480,14 @@
   .task-card__summary {
     margin: 0 14px 14px;
     padding: 12px;
+  }
+
+  .task-card__run-details {
+    margin: 0 14px 14px;
+  }
+
+  .task-card__run-facts {
+    grid-template-columns: 1fr;
   }
 
   .task-card__actions {
