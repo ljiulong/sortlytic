@@ -1,11 +1,13 @@
 import { Bot, Check, ChevronLeft, KeyRound, Pencil, Plus, RefreshCw,
   Server, ShieldCheck, Trash2, X } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { useEffect, useReducer, useRef, useState, type FormEvent } from 'react'
 import type {
   AiApiFormat, AiProviderType, ApiProfileKind, ApiProfileStatus,
   ApiProfileView, SaveApiProfileInput,
 } from './api-profiles'
 import { useApiProfiles } from './use-api-profiles'
+import './i18n'
 import './ApiProfilesDialog.css'
 type ApiProfilesDialogProps = {
   isOpen: boolean
@@ -34,28 +36,28 @@ type DialogFeedback = {
   tone: 'success' | 'warning' | 'danger'; text: string
 } | null
 const KIND_COPY = {
-  tikhub: { eyebrow: 'TikHub API', noun: 'TikHub', empty: '尚未保存 TikHub API 配置' },
-  ai: { eyebrow: 'AI API', noun: 'AI', empty: '尚未保存 AI API 配置' },
+  tikhub: { eyebrow: 'kind.tikhub.eyebrow', noun: 'kind.tikhub.noun', empty: 'kind.tikhub.empty' },
+  ai: { eyebrow: 'kind.ai.eyebrow', noun: 'kind.ai.noun', empty: 'kind.ai.empty' },
 } as const
-const STATUS_COPY: Record<ApiProfileStatus, { label: string; tone: string }> = {
-  needs_rebind: { label: '需重新输入', tone: 'warning' },
-  untested: { label: '待测试', tone: 'neutral' },
-  success: { label: '已验证', tone: 'success' },
-  failed: { label: '测试失败', tone: 'danger' },
+const STATUS_COPY: Record<ApiProfileStatus, { labelKey: string; tone: string }> = {
+  needs_rebind: { labelKey: 'profileStatus.needsRebind', tone: 'warning' },
+  untested: { labelKey: 'profileStatus.untested', tone: 'neutral' },
+  success: { labelKey: 'profileStatus.success', tone: 'success' },
+  failed: { labelKey: 'profileStatus.failed', tone: 'danger' },
 }
-type AiProviderPreset = { label: string; apiFormat: AiApiFormat; baseUrl: string }
+type AiProviderPreset = { labelKey: string; apiFormat: AiApiFormat; baseUrl: string }
 const AI_PROVIDER_PRESETS: Record<AiProviderType, AiProviderPreset> = {
-  openai: { label: 'OpenAI', apiFormat: 'openai_compatible', baseUrl: 'https://api.openai.com/v1' },
-  anthropic: { label: 'Anthropic', apiFormat: 'anthropic_messages', baseUrl: 'https://api.anthropic.com' },
-  gemini: { label: 'Google Gemini', apiFormat: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com' },
-  custom_openai_compatible: { label: '自定义 OpenAI-compatible', apiFormat: 'openai_compatible', baseUrl: '' },
-  ollama: { label: 'Ollama', apiFormat: 'ollama', baseUrl: 'http://127.0.0.1:11434' },
+  openai: { labelKey: 'providers.openai', apiFormat: 'openai_compatible', baseUrl: 'https://api.openai.com/v1' },
+  anthropic: { labelKey: 'providers.anthropic', apiFormat: 'anthropic_messages', baseUrl: 'https://api.anthropic.com' },
+  gemini: { labelKey: 'providers.gemini', apiFormat: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com' },
+  custom_openai_compatible: { labelKey: 'providers.customOpenAi', apiFormat: 'openai_compatible', baseUrl: '' },
+  ollama: { labelKey: 'providers.ollama', apiFormat: 'ollama', baseUrl: 'http://127.0.0.1:11434' },
 }
-const API_FORMAT_LABELS: Record<AiApiFormat, string> = {
-  openai_compatible: 'OpenAI-compatible',
-  anthropic_messages: 'Anthropic Messages',
-  gemini: 'Gemini 原生格式',
-  ollama: 'Ollama 本地格式',
+const API_FORMAT_LABEL_KEYS: Record<AiApiFormat, string> = {
+  openai_compatible: 'apiFormats.openAiCompatible',
+  anthropic_messages: 'apiFormats.anthropicMessages',
+  gemini: 'apiFormats.gemini',
+  ollama: 'apiFormats.ollama',
 }
 const initialApiProfilesDialogState: ApiProfilesDialogState = {
   view: 'list', editingProfileId: null, confirmingDeleteId: null,
@@ -128,6 +130,7 @@ function buildSaveProfileInput(
   }
 }
 function ApiProfilesDialog({ isOpen, kind, onClose }: ApiProfilesDialogProps) {
+  const { t } = useTranslation('settings')
   const controller = useApiProfiles()
   const [state, dispatch] = useReducer(
     apiProfilesDialogReducer,
@@ -225,12 +228,12 @@ function ApiProfilesDialog({ isOpen, kind, onClose }: ApiProfilesDialogProps) {
       dispatch({ type: 'showList' })
       setFeedback({
         tone: result.success ? 'success' : 'warning',
-        text: result.message,
+        text: result.success ? t('feedback.saveSuccess') : t('feedback.saveFailed'),
       })
     } catch {
       setFeedback({
         tone: 'danger',
-        text: '保存或验证失败，请检查当前字段后重试。',
+        text: t('feedback.saveError'),
       })
     }
   }
@@ -239,35 +242,35 @@ function ApiProfilesDialog({ isOpen, kind, onClose }: ApiProfilesDialogProps) {
       const result = await controller.retestProfile(kind, profile.id)
       setFeedback({
         tone: result.success ? 'success' : 'warning',
-        text: result.message,
+        text: result.success ? t('feedback.testSuccess') : t('feedback.testFailed'),
       })
     } catch {
-      setFeedback({ tone: 'danger', text: '重新测试失败，请编辑配置后重试。' })
+      setFeedback({ tone: 'danger', text: t('feedback.testError') })
     }
   }
   const activate = async (profile: ApiProfileView) => {
     try {
       await controller.activateProfile(kind, profile.id)
-      setFeedback({ tone: 'success', text: `“${profile.name}”已设为当前配置。` })
+      setFeedback({ tone: 'success', text: t('feedback.activateSuccess', { name: profile.name }) })
     } catch {
-      setFeedback({ tone: 'danger', text: '切换失败，只有已验证配置可以设为当前。' })
+      setFeedback({ tone: 'danger', text: t('feedback.activateError') })
     }
   }
   const remove = async (profile: ApiProfileView) => {
     try {
       await controller.deleteProfile(kind, profile.id)
       dispatch({ type: 'cancelDelete' })
-      setFeedback({ tone: 'success', text: `“${profile.name}”已删除。` })
+      setFeedback({ tone: 'success', text: t('feedback.deleteSuccess', { name: profile.name }) })
     } catch {
       setFeedback({
         tone: 'danger',
-        text: '删除失败，运行中或恢复中的任务可能仍在使用此配置。',
+        text: t('feedback.deleteError'),
       })
     }
   }
   const title = state.view === 'list'
-    ? `管理 ${copy.noun} API 配置`
-    : `${editingProfile ? '编辑' : '新增'} ${copy.noun} API 配置`
+    ? t('dialog.manageTitle', { kind: t(copy.noun) })
+    : t(editingProfile ? 'dialog.editTitle' : 'dialog.addTitle', { kind: t(copy.noun) })
 
   return (
     <div
@@ -293,16 +296,16 @@ function ApiProfilesDialog({ isOpen, kind, onClose }: ApiProfilesDialogProps) {
               {kind === 'tikhub' ? <Server size={17} /> : <Bot size={17} />}
             </span>
             <div>
-              <p className="eyebrow">{copy.eyebrow}</p>
+              <p className="eyebrow">{t(copy.eyebrow)}</p>
               <h2 id="api-profile-dialog-title">{title}</h2>
               <p id="api-profile-dialog-description">
                 {state.view === 'list'
-                  ? '查看保存项，再选择编辑、验证或切换当前配置。'
-                  : '完整密钥只在当前密码输入框的本地状态中短暂存在。'}
+                  ? t('dialog.listDescription')
+                  : t('dialog.formDescription')}
               </p>
             </div>
           </div>
-          <button aria-label={`关闭 ${copy.noun} API 配置弹窗`}
+          <button aria-label={t('dialog.close', { kind: t(copy.noun) })}
             className="api-profile-dialog__icon-button" disabled={controller.isPending}
             type="button" onClick={onClose}>
             <X size={17} aria-hidden="true" />
@@ -323,7 +326,7 @@ function ApiProfilesDialog({ isOpen, kind, onClose }: ApiProfilesDialogProps) {
               activeProfileId={controller.registry?.activeProfileIds[kind] ?? null}
               busy={controller.isPending}
               confirmingDeleteId={state.confirmingDeleteId}
-              emptyCopy={copy.empty}
+              emptyCopy={t(copy.empty)}
               kind={kind}
               loading={controller.registryQuery.isLoading}
               loadError={Boolean(controller.registryQuery.error)}
@@ -358,7 +361,7 @@ function ApiProfilesDialog({ isOpen, kind, onClose }: ApiProfilesDialogProps) {
               <button className="primary-button" data-dialog-initial-focus="true"
                 disabled={controller.isPending} type="button" onClick={showAddForm}>
                 <Plus size={16} aria-hidden="true" />
-                新增 {copy.noun} 配置
+                {t('dialog.addButton', { kind: t(copy.noun) })}
               </button>
             </>
           ) : (
@@ -366,7 +369,7 @@ function ApiProfilesDialog({ isOpen, kind, onClose }: ApiProfilesDialogProps) {
               <button className="ghost-button" disabled={controller.isPending}
                 type="button" onClick={showList}>
                 <ChevronLeft size={16} aria-hidden="true" />
-                返回列表
+                {t('form.backToList')}
               </button>
               <button
                 className="primary-button"
@@ -377,7 +380,7 @@ function ApiProfilesDialog({ isOpen, kind, onClose }: ApiProfilesDialogProps) {
                 }}
               >
                 <KeyRound size={16} aria-hidden="true" />
-                {controller.isSaving ? '正在保存并测试' : '保存并测试'}
+                {controller.isSaving ? t('form.saving') : t('form.save')}
               </button>
             </>
           )}
@@ -401,23 +404,24 @@ function ProfileList({
   profiles, onActivate, onCancelDelete, onConfirmDelete, onEdit, onRefresh,
   onRequestDelete, onRetest,
 }: ProfileListProps) {
+  const { t } = useTranslation('settings')
   if (loading) {
     return (
       <div className="api-profile-dialog__state" role="status">
         <RefreshCw className="api-profile-dialog__loading-icon" size={18} aria-hidden="true" />
-        <strong>正在读取保存的配置</strong>
-        <p>读取完成前不会显示最终空状态。</p>
+        <strong>{t('list.loadingTitle')}</strong>
+        <p>{t('list.loadingDescription')}</p>
       </div>
     )
   }
   if (loadError) {
     return (
       <div className="api-profile-dialog__state" role="alert">
-        <strong>无法读取 API 配置</strong>
-        <p>历史数据仍可访问，请确认私有 JSON 文件完整后重试。</p>
+        <strong>{t('list.loadErrorTitle')}</strong>
+        <p>{t('list.loadErrorDescription')}</p>
         <button className="ghost-button" disabled={busy} type="button" onClick={onRefresh}>
           <RefreshCw size={16} aria-hidden="true" />
-          重新读取
+          {t('list.refresh')}
         </button>
       </div>
     )
@@ -427,7 +431,7 @@ function ProfileList({
       <div className="api-profile-dialog__state api-profile-dialog__state--empty">
         <span aria-hidden="true">{kind === 'tikhub' ? <Server size={20} /> : <Bot size={20} />}</span>
         <strong>{emptyCopy}</strong>
-        <p>先返回列表确认当前为空，再从下方新增第一条命名配置。</p>
+        <p>{t('list.emptyDescription')}</p>
       </div>
     )
   }
@@ -435,12 +439,12 @@ function ProfileList({
     <section aria-labelledby="api-profile-saved-list-title">
       <div className="api-profile-dialog__list-heading">
         <div>
-          <p className="eyebrow">已保存配置</p>
+          <p className="eyebrow">{t('list.savedEyebrow')}</p>
           <h3 id="api-profile-saved-list-title">
-            {profiles.length} 条可管理配置
+            {t('list.profileCount', { count: profiles.length })}
           </h3>
         </div>
-        <span>{activeProfileId ? '已选择当前配置' : '尚未选择当前配置'}</span>
+        <span>{activeProfileId ? t('list.activeSelected') : t('list.activeNotSelected')}</span>
       </div>
       <div className="api-profile-list">
         {profiles.map((profile) => {
@@ -459,68 +463,68 @@ function ProfileList({
                     {isActive ? (
                       <span className="api-profile-list__current">
                         <Check size={12} aria-hidden="true" />
-                        当前
+                        {t('list.current')}
                       </span>
                     ) : null}
                   </div>
-                  <p>{profileDescriptor(profile)}</p>
+                  <p>{profileDescriptor(profile, t)}</p>
                 </div>
                 <span className="api-profile-list__status" data-tone={status.tone}>
-                  {status.label}
+                  {t(status.labelKey)}
                 </span>
               </header>
               <dl className="api-profile-list__facts">
                 <div>
-                  <dt>{profile.kind === 'tikhub' ? 'API 端点' : 'Base URL'}</dt>
+                  <dt>{profile.kind === 'tikhub' ? t('form.apiEndpoint') : t('form.baseUrl')}</dt>
                   <dd>{profile.baseUrl}</dd>
                 </div>
                 {profile.kind === 'ai' ? (
                   <div>
-                    <dt>默认模型</dt>
+                    <dt>{t('form.defaultModel')}</dt>
                     <dd>{profile.defaultModelId}</dd>
                   </div>
                 ) : null}
                 <div>
-                  <dt>密钥</dt>
+                  <dt>{t('form.credential')}</dt>
                   <dd className="api-profile-list__masked-key">
-                    {maskedKeyLabel(profile)}
+                    {maskedKeyLabel(profile, t)}
                   </dd>
                 </div>
               </dl>
               <div className="api-profile-list__actions">
                 <button disabled={busy} type="button" onClick={() => onEdit(profile)}>
                   <Pencil size={15} aria-hidden="true" />
-                  编辑
+                  {t('list.edit')}
                 </button>
                 <button disabled={busy || profile.status === 'needs_rebind'}
                   type="button" onClick={() => onRetest(profile)}>
                   <RefreshCw size={15} aria-hidden="true" />
-                  重新测试
+                  {t('list.retest')}
                 </button>
                 <button disabled={busy || isActive || profile.status !== 'success'}
                   type="button" onClick={() => onActivate(profile)}>
                   <Check size={15} aria-hidden="true" />
-                  {isActive ? '当前使用' : '设为当前'}
+                  {isActive ? t('list.currentlyUsed') : t('list.setActive')}
                 </button>
                 <button className="api-profile-list__delete-button" disabled={busy}
                   type="button" onClick={() => onRequestDelete(profile.id)}>
                   <Trash2 size={15} aria-hidden="true" />
-                  删除
+                  {t('list.delete')}
                 </button>
               </div>
               {isConfirmingDelete ? (
                 <div className="api-profile-list__delete-confirm" role="alert">
                   <div>
-                    <strong>确认删除“{profile.name}”？</strong>
+                    <strong>{t('list.confirmDeleteTitle', { name: profile.name })}</strong>
                     <p>
                       {isActive
-                        ? '删除当前配置后不会自动选择其他配置。'
-                        : '配置与对应凭据会从当前工作区私有 JSON 中移除。'}
+                        ? t('list.confirmActiveDelete')
+                        : t('list.confirmDeleteDescription')}
                     </p>
                   </div>
                   <div>
                     <button disabled={busy} type="button" onClick={onCancelDelete}>
-                      取消
+                      {t('list.cancel')}
                     </button>
                     <button
                       className="api-profile-list__confirm-delete"
@@ -528,7 +532,7 @@ function ProfileList({
                       type="button"
                       onClick={() => onConfirmDelete(profile)}
                     >
-                      确认删除
+                      {t('list.confirmDelete')}
                     </button>
                   </div>
                 </div>
@@ -546,35 +550,36 @@ export function ApiProfileFormFields({
   canKeepSavedKey?: boolean; disabled: boolean; draft: ApiProfileDraft; isEditing: boolean
   onChange: (draft: ApiProfileDraft) => void
 }) {
+  const { t } = useTranslation('settings')
   const keyRequired = requiresApiKey(draft, canKeepSavedKey)
   return (
     <div className="api-profile-form__fields">
       <label className="api-profile-form__field">
-        <span>配置名称</span>
+        <span>{t('form.profileName')}</span>
         <input
           data-dialog-initial-focus="true"
           disabled={disabled}
           maxLength={80}
-          placeholder={draft.kind === 'tikhub' ? '例如：主数据账号' : '例如：内容整理模型'}
+          placeholder={draft.kind === 'tikhub' ? t('form.tikhubNamePlaceholder') : t('form.aiNamePlaceholder')}
           required
           value={draft.name}
           onChange={(event) => onChange({ ...draft, name: event.target.value })}
         />
-        <small>名称在同一配置类型内必须唯一。</small>
+        <small>{t('form.profileNameHint')}</small>
       </label>
       {draft.kind === 'tikhub' ? (
         <label className="api-profile-form__field">
-          <span>API 端点</span>
+          <span>{t('form.apiEndpoint')}</span>
           <select disabled={disabled} value={draft.baseUrl}
             onChange={(event) => onChange({ ...draft, baseUrl: event.target.value })}>
-            <option value="https://api.tikhub.io">国际端点 api.tikhub.io</option>
-            <option value="https://api.tikhub.dev">中国大陆端点 api.tikhub.dev</option>
+            <option value="https://api.tikhub.io">{t('form.internationalEndpoint')}</option>
+            <option value="https://api.tikhub.dev">{t('form.mainlandEndpoint')}</option>
           </select>
         </label>
       ) : (
         <>
           <label className="api-profile-form__field">
-            <span>供应商类型</span>
+            <span>{t('form.providerType')}</span>
             <select
               disabled={disabled}
               value={draft.providerType}
@@ -590,18 +595,18 @@ export function ApiProfileFormFields({
               }}
             >
               {Object.entries(AI_PROVIDER_PRESETS).map(([value, preset]) => (
-                <option key={value} value={value}>{preset.label}</option>
+                <option key={value} value={value}>{t(preset.labelKey)}</option>
               ))}
             </select>
           </label>
           <label className="api-profile-form__field">
-            <span>API 格式</span>
+            <span>{t('form.apiFormat')}</span>
             <select disabled value={draft.apiFormat} aria-describedby="api-format-hint">
-              {Object.entries(API_FORMAT_LABELS).map(([value, label]) => (
-                <option key={value} value={value}>{label}</option>
+              {Object.entries(API_FORMAT_LABEL_KEYS).map(([value, labelKey]) => (
+                <option key={value} value={value}>{t(labelKey)}</option>
               ))}
             </select>
-            <small id="api-format-hint">根据供应商类型自动确定，避免协议不匹配。</small>
+            <small id="api-format-hint">{t('form.apiFormatHint')}</small>
           </label>
           <label className="api-profile-form__field api-profile-form__field--wide">
             <span>Base URL</span>
@@ -615,11 +620,11 @@ export function ApiProfileFormFields({
             />
           </label>
           <label className="api-profile-form__field api-profile-form__field--wide">
-            <span>默认模型 ID</span>
+            <span>{t('form.defaultModel')}</span>
             <input
               disabled={disabled}
               maxLength={160}
-              placeholder="例如：gpt-4.1-mini"
+              placeholder={t('form.modelPlaceholder')}
               required
               value={draft.defaultModelId}
               onChange={(event) => onChange({ ...draft, defaultModelId: event.target.value })}
@@ -628,13 +633,13 @@ export function ApiProfileFormFields({
         </>
       )}
       <label className="api-profile-form__field api-profile-form__field--wide">
-        <span>{draft.kind === 'tikhub' ? 'API Token' : 'API Key'}</span>
+        <span>{draft.kind === 'tikhub' ? t('form.apiToken') : t('form.apiKey')}</span>
         <input
           aria-describedby="api-key-hint"
           autoComplete="new-password"
           disabled={disabled}
           minLength={keyRequired ? 8 : undefined}
-          placeholder={keyPlaceholder(draft, canKeepSavedKey)}
+          placeholder={t(keyPlaceholder(draft, canKeepSavedKey))}
           required={keyRequired}
           type="password"
           value={draft.apiKey}
@@ -642,10 +647,10 @@ export function ApiProfileFormFields({
         />
         <small id="api-key-hint">
           {canKeepSavedKey
-            ? '留空会保留原密钥，完整值不会回显或复制。'
+            ? t('form.keepCredentialHint')
             : draft.kind === 'ai' && draft.providerType === 'ollama'
-              ? 'Ollama 可不填写密钥。'
-              : '至少输入 8 个字符，保存后界面只显示脱敏值。'}
+              ? t('form.ollamaCredentialHint')
+              : t('form.credentialHint')}
         </small>
       </label>
     </div>
@@ -654,12 +659,13 @@ export function ApiProfileFormFields({
 function SecurityNotice({ compact = false, kind }: {
   compact?: boolean; kind: ApiProfileKind
 }) {
+  const { t } = useTranslation('settings')
   return (
     <div className="api-profile-dialog__security" data-compact={compact}>
       <ShieldCheck size={16} aria-hidden="true" />
       <p>
-        密钥以明文写入当前工作区私有 JSON，不进入数据库、日志、导出或 Webhook。
-        {kind === 'ai' ? ' AI 配置只做完整性校验，当前规则引擎不会调用模型。' : ''}
+        {t('security.credentials')}
+        {kind === 'ai' ? ` ${t('security.aiBoundary')}` : ''}
       </p>
     </div>
   )
@@ -688,9 +694,9 @@ function requiresApiKey(draft: ApiProfileDraft, canKeepSavedKey: boolean) {
     : draft.providerType !== 'ollama' && !canKeepSavedKey
 }
 function keyPlaceholder(draft: ApiProfileDraft, canKeepSavedKey: boolean) {
-  if (canKeepSavedKey) return '留空以保留已保存密钥'
-  if (draft.kind === 'ai' && draft.providerType === 'ollama') return 'Ollama 可不填写'
-  return draft.kind === 'tikhub' ? '重新输入 TikHub Token' : '重新输入供应商 API Key'
+  if (canKeepSavedKey) return 'form.keepCredentialPlaceholder'
+  if (draft.kind === 'ai' && draft.providerType === 'ollama') return 'form.ollamaCredentialPlaceholder'
+  return draft.kind === 'tikhub' ? 'form.tikhubCredentialPlaceholder' : 'form.aiCredentialPlaceholder'
 }
 function isSupportedUrl(value: string) {
   try {
@@ -700,16 +706,18 @@ function isSupportedUrl(value: string) {
     return false
   }
 }
-function profileDescriptor(profile: ApiProfileView) {
+function profileDescriptor(profile: ApiProfileView, t: (key: string) => string) {
   if (profile.kind === 'tikhub') {
-    return profile.testSummary?.maskedAccount ?? 'TikHub 数据接口账号'
+    return profile.testSummary?.maskedAccount ?? t('profileDescriptor.tikhub')
   }
-  return `${AI_PROVIDER_PRESETS[profile.providerType].label} · ${API_FORMAT_LABELS[profile.apiFormat]}`
+  return `${t(AI_PROVIDER_PRESETS[profile.providerType].labelKey)} · ${t(API_FORMAT_LABEL_KEYS[profile.apiFormat])}`
 }
-function maskedKeyLabel(profile: ApiProfileView) {
+function maskedKeyLabel(profile: ApiProfileView, t: (key: string) => string) {
   if (profile.maskedKey) return profile.maskedKey
-  if (profile.kind === 'ai' && profile.providerType === 'ollama') return '无需密钥'
-  return profile.status === 'needs_rebind' ? '需重新输入' : '尚未绑定'
+  if (profile.kind === 'ai' && profile.providerType === 'ollama') return t('credentialStatus.notRequired')
+  return profile.status === 'needs_rebind'
+    ? t('credentialStatus.needsRebind')
+    : t('credentialStatus.notBound')
 }
 function getFocusableElements(container: HTMLElement | null) {
   if (!container) return []
