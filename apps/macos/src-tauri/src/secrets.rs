@@ -763,26 +763,5 @@ fn database_error(error: impl ToString) -> AppError {
 }
 
 #[cfg(test)]
-mod tests {
-  #[test]
-  fn runtime_and_manifest_do_not_reference_system_credential_libraries() {
-    let source = include_str!("secrets.rs");
-    let manifest = include_str!("../Cargo.toml");
-    let forbidden = [
-      ["key", "ring::"].concat(),
-      ["apple_native_", "keyring_store"].concat(),
-      ["keyring_", "core"].concat(),
-      ["KEYCHAIN_", "SERVICE"].concat(),
-    ];
-    for value in forbidden {
-      assert!(
-        !source.contains(&value),
-        "found forbidden runtime dependency"
-      );
-      assert!(
-        !manifest.contains(&value),
-        "found forbidden manifest dependency"
-      );
-    }
-  }
-}
+#[path = "secrets_tests.rs"]
+mod tests;
