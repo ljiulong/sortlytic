@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import TaskQueue, {
   capabilitiesForStatus,
   confirmationForTaskAction,
+  taskExportFormatOptions,
 } from './TaskQueue'
 import type { WorkbenchRuntimeData } from './use-workbench-backend'
 import type { TaskStatus } from './workbench-data'
@@ -103,8 +104,12 @@ describe('TaskQueue', () => {
   it('每条任务可选择 Excel 或 PDF，未完成任务不允许提前导出', () => {
     const markup = renderQueue([waitingTask])
 
-    expect(markup).toContain('Excel 工作簿')
-    expect(markup).toContain('PDF 报告')
+    expect(taskExportFormatOptions).toEqual([
+      { value: 'xlsx', label: 'Excel 工作簿' },
+      { value: 'pdf', label: 'PDF 报告' },
+    ])
+    expect(markup).toMatch(/<button[^>]*id="task-export-format-task-waiting"[^>]*aria-haspopup="listbox"/)
+    expect(markup).not.toContain('<select')
     expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>[^<]*(?:<[^>]+>)*导出/)
   })
 

@@ -72,7 +72,7 @@
 
 .task-card {
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
   background: var(--surface);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
@@ -115,7 +115,7 @@
 }
 
 .task-card__edit-form > label,
-.task-card__export label > span {
+.task-card__export-field > label {
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 650;
@@ -127,8 +127,7 @@
   gap: 8px;
 }
 
-.task-card__edit-row input,
-.task-card__export select {
+.task-card__edit-row input {
   min-width: 0;
   min-height: 40px;
   padding: 0 10px;
@@ -230,6 +229,7 @@
   padding: 12px 14px;
   background: color-mix(in oklch, var(--surface-raised) 72%, var(--surface));
   border-top: 1px solid var(--border-subtle);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
 }
 
 .task-card__action-slot {
@@ -267,15 +267,20 @@
 
 .task-card__export {
   align-items: end;
+  position: relative;
+  z-index: 2;
 }
 
-.task-card__export label {
+.task-card__export-field {
   display: grid;
   gap: 5px;
+  width: 172px;
 }
 
-.task-card__export select {
-  width: 148px;
+.task-card__export .app-select__popover {
+  right: 0;
+  left: auto;
+  transform-origin: top right;
 }
 
 .task-card__confirmation {
@@ -330,7 +335,6 @@
 }
 
 .task-card__edit-row input:focus-visible,
-.task-card__export select:focus-visible,
 .task-card__confirm-danger:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
@@ -401,7 +405,7 @@
 
   .task-card__secondary-actions {
     display: grid;
-    grid-template-columns: repeat(2, auto);
+    grid-template-columns: repeat(3, auto);
   }
 
   .task-card__export {
@@ -409,8 +413,8 @@
     grid-template-columns: minmax(0, 1fr) auto;
   }
 
-  .task-card__export label,
-  .task-card__export select {
+  .task-card__export-field,
+  .task-card__export .app-select {
     width: 100%;
     min-width: 0;
   }

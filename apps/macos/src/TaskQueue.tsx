@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Ban, Download, ListTodo, Pencil, Play, Save, Trash2, X } from 'lucide-react'
+import AppSelect from './AppSelect'
 import { StatusPill } from './CollectionBuilder'
 import type { TaskExportInput, WorkbenchRuntimeData } from './use-workbench-backend'
 import type { TaskStatus } from './workbench-data'
@@ -22,6 +23,12 @@ type TaskQueueProps = {
   onDeleteTask: (taskId: string) => Promise<unknown>
   onExportTask: (input: TaskExportInput) => Promise<unknown>
 }
+
+// oxlint-disable-next-line react/only-export-components
+export const taskExportFormatOptions = [
+  { value: 'xlsx', label: 'Excel 工作簿' },
+  { value: 'pdf', label: 'PDF 报告' },
+] satisfies Array<{ value: TaskExportInput['format']; label: string }>
 
 // oxlint-disable-next-line react/only-export-components
 export function capabilitiesForStatus(status: TaskStatus) {
@@ -292,21 +299,20 @@ function TaskQueue({
                         ) : null}
                       </div>
                       <div className="task-card__export">
-                        <label>
-                          <span>导出格式</span>
-                          <select
-                            aria-label={`${task.name} 导出格式`}
+                        <div className="task-card__export-field">
+                          <label htmlFor={`task-export-format-${task.id}`}>导出格式</label>
+                          <AppSelect
+                            id={`task-export-format-${task.id}`}
                             disabled={isBusy || isEditing || isConfirming}
-                            value={exportFormats[task.id] ?? 'xlsx'}
-                            onChange={(event) => setExportFormats((formats) => ({
+                            onChange={(format) => setExportFormats((formats) => ({
                               ...formats,
-                              [task.id]: event.target.value as TaskExportInput['format'],
+                              [task.id]: format as TaskExportInput['format'],
                             }))}
-                          >
-                            <option value="xlsx">Excel 工作簿</option>
-                            <option value="pdf">PDF 报告</option>
-                          </select>
-                        </label>
+                            options={taskExportFormatOptions}
+                            placeholder="选择导出格式"
+                            value={exportFormats[task.id] ?? 'xlsx'}
+                          />
+                        </div>
                         <button
                           className="ghost-button"
                           disabled={isBusy || isEditing || isConfirming || !capabilities.canExport}
