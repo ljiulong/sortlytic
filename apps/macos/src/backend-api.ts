@@ -109,6 +109,25 @@ export type PromptTemplateView = {
   updated_at: string
 }
 
+export type PromptVersionView = {
+  id: string
+  template_id: string
+  version: number
+  content: string
+  change_note: string
+  status: string
+  created_at: string
+  activated_at?: string | null
+  rollback_from_version?: number | null
+  content_hash: string
+}
+
+export type CreatePromptVersionInput = {
+  template_id: string
+  content: string
+  change_note: string
+}
+
 export type ExportJobView = {
   id: string
   report_id: string
@@ -260,6 +279,27 @@ export function enqueueTask(taskId: string) {
 
 export function listPromptTemplates() {
   return invoke<PromptTemplateView[]>('list_prompt_templates', { rootPath: null })
+}
+
+export function listPromptVersions(templateId: string) {
+  return invoke<PromptVersionView[]>('list_prompt_versions', {
+    templateId,
+    rootPath: null,
+  })
+}
+
+export function createPromptVersion(input: CreatePromptVersionInput) {
+  return invoke<PromptVersionView>('create_prompt_version', {
+    input,
+    rootPath: null,
+  })
+}
+
+export function activatePromptVersion(promptVersionId: string) {
+  return invoke<PromptVersionView>('activate_prompt_version', {
+    promptVersionId,
+    rootPath: null,
+  })
 }
 
 export function buildReportModel(taskId: string, reportType = 'summary') {

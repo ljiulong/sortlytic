@@ -1,14 +1,26 @@
+// @vitest-environment happy-dom
+
 // @ts-expect-error Vitest 在 Node 中运行，应用构建有意不加载 Node 类型。
 import { readFileSync } from 'node:fs'
-import { createElement } from 'react'
+// @ts-expect-error Vitest 在 Node 中运行，应用构建有意不加载 Node 类型。
+import { resolve } from 'node:path'
+import { act, createElement } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ApiProfileRegistryView } from './api-profiles'
+import { i18n } from './i18n'
 import SettingsPage from './SettingsPage'
 
 const { settingsApiDialogReducer } = SettingsPage.testUtils
 
 const useApiProfilesMock = vi.hoisted(() => vi.fn())
+const promptApiMocks = vi.hoisted(() => ({
+  activatePromptVersion: vi.fn(),
+  createPromptVersion: vi.fn(),
+  listPromptTemplates: vi.fn(),
+  listPromptVersions: vi.fn(),
+}))
 
 vi.mock('./use-api-profiles', () => ({
   useApiProfiles: useApiProfilesMock,
@@ -23,6 +35,8 @@ vi.mock('./ApiProfilesDialog', () => ({
 vi.mock('./UpdateSettingsPanel', () => ({
   default: () => <section>客户端版本</section>,
 }))
+
+vi.mock('./backend-api', () => promptApiMocks)
 
 const secret = 'full-secret-must-never-render'
 const registry: ApiProfileRegistryView = {
@@ -79,7 +93,73 @@ const backend = {
   },
 }
 
-beforeEach(() => {
+const promptTemplate = {
+  id: 'prompt-template-collection',
+  template_key: 'collection_plan_from_text',
+  name: '自然语言采集计划生成',
+  task_type: 'collection_plan',
+  description: '把自然语言需求转为结构化采集计划',
+  output_schema_id: 'collection_plan_v3',
+  is_builtin: true,
+  created_at: '2026-07-17T08:00:00Z',
+  updated_at: '2026-07-17T08:00:00Z',
+}
+
+const activePromptVersion = {
+  id: 'prompt-version-3',
+  template_id: promptTemplate.id,
+  version: 3,
+  content: '只输出符合 collection_plan_v3 的 JSON，不得猜测缺失字段。',
+  change_note: '约束结构化采集计划',
+  status: 'active',
+  created_at: '2026-07-17T08:00:00Z',
+  activated_at: '2026-07-17T08:05:00Z',
+  rollback_from_version: null,
+  content_hash: 'safe-content-hash',
+}
+
+type MountedSettings = {
+  container: HTMLDivElement
+  root: Root
+}
+
+const mountedSettings = new Set<MountedSettings>()
+
+function mountSettingsPage() {
+  const container = document.createElement('div')
+  const root = createRoot(container)
+  const mounted = { container, root }
+  document.body.append(container)
+  mountedSettings.add(mounted)
+  act(() => root.render(createElement(SettingsPage, { backend: backend as never })))
+  return mounted
+}
+
+async function flushPromptSettings() {
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
+function changeControlValue(
+  control: HTMLInputElement | HTMLTextAreaElement,
+  value: string,
+) {
+  const prototype = control instanceof HTMLTextAreaElement
+    ? HTMLTextAreaElement.prototype
+    : HTMLInputElement.prototype
+  const nativeSetter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set
+  act(() => {
+    nativeSetter?.call(control, value)
+    control.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+
+beforeEach(async () => {
+  await i18n.changeLanguage('zh-CN')
+  ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
+    .IS_REACT_ACT_ENVIRONMENT = true
   useApiProfilesMock.mockReset()
   useApiProfilesMock.mockReturnValue({
     registry,
@@ -88,6 +168,21 @@ beforeEach(() => {
       isLoading: false,
     },
   })
+  promptApiMocks.listPromptTemplates.mockReset()
+  promptApiMocks.listPromptTemplates.mockResolvedValue([promptTemplate])
+  promptApiMocks.listPromptVersions.mockReset()
+  promptApiMocks.listPromptVersions.mockResolvedValue([activePromptVersion])
+  promptApiMocks.createPromptVersion.mockReset()
+  promptApiMocks.activatePromptVersion.mockReset()
+})
+
+afterEach(() => {
+  for (const mounted of mountedSettings) {
+    act(() => mounted.root.unmount())
+    mounted.container.remove()
+  }
+  mountedSettings.clear()
+  document.body.replaceChildren()
 })
 
 describe('SettingsPage API 配置入口', () => {
@@ -122,7 +217,7 @@ describe('SettingsPage API 配置入口', () => {
   })
 
   it('按钮在窄窗改为单列，并保留明确焦点样式与双主题令牌', () => {
-    const css = readFileSync(new URL('./SettingsPage.css', import.meta.url), 'utf8')
+    const css = readFileSync(resolve('src/SettingsPage.css'), 'utf8')
 
     expect(css).toContain('.settings-page__api-actions')
     expect(css).toContain('.settings-page__api-button:focus-visible')
@@ -133,9 +228,85 @@ describe('SettingsPage API 配置入口', () => {
   })
 
   it('语言选择器打开时允许选项弹层超出设置卡片', () => {
-    const css = readFileSync(new URL('./SettingsPage.css', import.meta.url), 'utf8')
+    const css = readFileSync(resolve('src/SettingsPage.css'), 'utf8')
 
     expect(css).toContain('.workspace-settings:has(.app-select[data-open=\'true\'])')
     expect(css).toContain('overflow: visible')
+  })
+})
+
+describe('SettingsPage AI 提示词卡片', () => {
+  it('读取并展示当前自然语言采集提示词、状态和真实受控调用链路', async () => {
+    const mounted = mountSettingsPage()
+    await flushPromptSettings()
+
+    expect(promptApiMocks.listPromptTemplates).toHaveBeenCalledTimes(1)
+    expect(promptApiMocks.listPromptVersions)
+      .toHaveBeenCalledWith(promptTemplate.id)
+    expect(mounted.container.textContent).toContain('AI 提示词')
+    expect(mounted.container.textContent).toContain('当前启用 v3')
+    expect(mounted.container.textContent).toContain(
+      '提示词 → AI 结构化计划 → Schema / 能力校验 → 用户确认 → TikHub 真实 API',
+    )
+    expect(mounted.container.textContent).toContain(
+      '提示词不保存 API Key，也不能绕过预算校验和用户确认',
+    )
+
+    const editor = mounted.container.querySelector<HTMLTextAreaElement>(
+      '[data-prompt-content]',
+    )
+    expect(editor?.value).toBe(activePromptVersion.content)
+  })
+
+  it('把修改保存为新版本，并在用户明确操作后激活该版本', async () => {
+    const draftVersion = {
+      ...activePromptVersion,
+      id: 'prompt-version-4',
+      version: 4,
+      content: '只输出严格 JSON，并保留可验证证据。',
+      change_note: '补充证据约束',
+      status: 'draft',
+      activated_at: null,
+    }
+    promptApiMocks.createPromptVersion.mockResolvedValue(draftVersion)
+    promptApiMocks.activatePromptVersion.mockResolvedValue({
+      ...draftVersion,
+      status: 'active',
+      activated_at: '2026-07-17T09:00:00Z',
+    })
+
+    const mounted = mountSettingsPage()
+    await flushPromptSettings()
+    const editor = mounted.container.querySelector<HTMLTextAreaElement>(
+      '[data-prompt-content]',
+    )
+    const note = mounted.container.querySelector<HTMLInputElement>(
+      '[data-prompt-change-note]',
+    )
+    expect(editor).not.toBeNull()
+    expect(note).not.toBeNull()
+
+    if (editor) changeControlValue(editor, draftVersion.content)
+    if (note) changeControlValue(note, draftVersion.change_note)
+    const saveButton = Array.from(mounted.container.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('保存为新版本'))
+    expect(saveButton).toBeDefined()
+    await act(async () => saveButton?.click())
+
+    expect(promptApiMocks.createPromptVersion).toHaveBeenCalledWith({
+      template_id: promptTemplate.id,
+      content: draftVersion.content,
+      change_note: draftVersion.change_note,
+    })
+    expect(mounted.container.textContent).toContain('草稿 v4')
+
+    const activateButton = Array.from(mounted.container.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('激活当前草稿'))
+    expect(activateButton).toBeDefined()
+    await act(async () => activateButton?.click())
+
+    expect(promptApiMocks.activatePromptVersion)
+      .toHaveBeenCalledWith(draftVersion.id)
+    expect(mounted.container.textContent).toContain('当前启用 v4')
   })
 })
