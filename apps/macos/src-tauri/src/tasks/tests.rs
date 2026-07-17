@@ -446,6 +446,204 @@ fn saving_a_new_plan_revokes_confirmation_and_rejects_stale_plan() {
   std::fs::remove_dir_all(root_path).ok();
 }
 
+#[test]
+fn delete_task_removes_draft_and_keeps_only_a_safe_audit_summary() {
+  let root_path = unique_temp_workspace("delete-draft-task");
+  create_workspace("任务删除测试", &root_path).expect("workspace should be created");
+  let task = create_collection_task(&root_path, create_task_input()).expect("task created");
+
+  delete_task(&root_path, &task.id).expect("draft task should delete");
+
+  let connection = open_workspace_connection(&root_path).expect("database should reopen");
+  let remaining = count_rows_for(&connection, "collection_task", "id", &task.id);
+  let audit = connection
+    .query_row(
+      "SELECT action, safe_details_json FROM audit_log
+       WHERE entity_type = 'collection_task' AND entity_id = ?1 AND action = 'delete_task'",
+      params![task.id],
+      |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    )
+    .expect("delete audit should remain");
+
+  assert_eq!(remaining, 0);
+  assert_eq!(audit.0, "delete_task");
+  assert!(audit.1.contains("draft"));
+  assert!(!audit.1.contains(&task.name));
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn delete_task_accepts_every_terminal_status() {
+  for status in ["success", "partial_success", "failed", "cancelled"] {
+    let root_path = unique_temp_workspace(&format!("delete-{status}-task"));
+    create_workspace("终态任务删除测试", &root_path).expect("workspace should be created");
+    let task = create_collection_task(&root_path, create_task_input()).expect("task created");
+    let connection = open_workspace_connection(&root_path).expect("database should open");
+    connection
+      .execute(
+        "UPDATE collection_task SET status = ?1 WHERE id = ?2",
+        params![status, task.id],
+      )
+      .expect("test should set terminal status");
+    drop(connection);
+
+    delete_task(&root_path, &task.id).expect("terminal task should delete");
+    let connection = open_workspace_connection(&root_path).expect("database should reopen");
+    assert_eq!(
+      count_rows_for(&connection, "collection_task", "id", &task.id),
+      0
+    );
+    std::fs::remove_dir_all(root_path).ok();
+  }
+}
+
+#[test]
+fn delete_task_removes_plan_run_snapshot_and_child_rows_without_orphans() {
+  let root_path = unique_temp_workspace("delete-task-graph");
+  create_workspace("任务图删除测试", &root_path).expect("workspace should be created");
+  let task = create_collection_task(&root_path, create_task_input()).expect("task created");
+  let plan = save_collection_plan(&root_path, plan_input(&task.id)).expect("plan saved");
+  confirm_collection_plan(&root_path, &task.id, &plan.id).expect("plan confirmed");
+  insert_ready_tikhub_connector(&root_path);
+  let run = enqueue_task(&root_path, &task.id).expect("task enqueued");
+  cancel_task(&root_path, &task.id).expect("queued task should cancel before deletion");
+
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  assert_eq!(
+    count_rows_for(
+      &connection,
+      "collection_runtime_snapshot",
+      "task_run_id",
+      &run.id,
+    ),
+    1,
+  );
+  drop(connection);
+
+  delete_task(&root_path, &task.id).expect("cancelled task graph should delete");
+
+  let connection = open_workspace_connection(&root_path).expect("database should reopen");
+  for (table, column, value) in [
+    ("collection_task", "id", task.id.as_str()),
+    ("collection_plan", "task_id", task.id.as_str()),
+    ("task_run", "task_id", task.id.as_str()),
+    ("api_call_step", "plan_id", plan.id.as_str()),
+    ("task_run_step", "task_run_id", run.id.as_str()),
+    ("task_log", "task_run_id", run.id.as_str()),
+    (
+      "collection_runtime_snapshot",
+      "task_run_id",
+      run.id.as_str(),
+    ),
+  ] {
+    assert_eq!(
+      count_rows_for(&connection, table, column, value),
+      0,
+      "{table} should not retain deleted task data",
+    );
+  }
+  let foreign_key_violations = connection
+    .prepare("PRAGMA foreign_key_check")
+    .expect("foreign key check should prepare")
+    .query_map([], |_| Ok(()))
+    .expect("foreign key check should run")
+    .count();
+  assert_eq!(foreign_key_violations, 0);
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn delete_task_rejects_queued_and_running_tasks_until_they_are_cancelled() {
+  for status in ["queued", "running"] {
+    let root_path = unique_temp_workspace(&format!("reject-delete-{status}"));
+    create_workspace("活动任务删除测试", &root_path).expect("workspace should be created");
+    let task = create_collection_task(&root_path, create_task_input()).expect("task created");
+    let plan = save_collection_plan(&root_path, plan_input(&task.id)).expect("plan saved");
+    confirm_collection_plan(&root_path, &task.id, &plan.id).expect("plan confirmed");
+    let run = enqueue_task(&root_path, &task.id).expect("task enqueued");
+    if status == "running" {
+      let connection = open_workspace_connection(&root_path).expect("database should open");
+      connection
+        .execute(
+          "UPDATE task_run SET status = 'running' WHERE id = ?1",
+          params![run.id],
+        )
+        .expect("test run should enter running state");
+      connection
+        .execute(
+          "UPDATE collection_task SET status = 'running' WHERE id = ?1",
+          params![task.id],
+        )
+        .expect("test task should enter running state");
+    }
+
+    let error = delete_task(&root_path, &task.id)
+      .expect_err("queued and running tasks must be cancelled before deletion");
+    assert_eq!(error.code, AppErrorCode::ValidationError);
+    assert!(error.message.contains("先取消"));
+    assert_eq!(
+      get_task(&root_path, &task.id)
+        .expect("task should remain")
+        .status,
+      status
+    );
+
+    cancel_task(&root_path, &task.id).expect("active task should cancel");
+    delete_task(&root_path, &task.id).expect("cancelled task should delete");
+    std::fs::remove_dir_all(root_path).ok();
+  }
+}
+
+#[test]
+fn delete_task_reports_a_missing_task() {
+  let root_path = unique_temp_workspace("delete-missing-task");
+  create_workspace("缺失任务删除测试", &root_path).expect("workspace should be created");
+
+  let error = delete_task(&root_path, "missing-task").expect_err("missing task should fail");
+
+  assert_eq!(error.code, AppErrorCode::ValidationError);
+  assert!(error.message.contains("任务不存在"));
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+fn count_rows_for(connection: &Connection, table: &str, column: &str, value: &str) -> i64 {
+  connection
+    .query_row(
+      &format!("SELECT COUNT(*) FROM {table} WHERE {column} = ?1"),
+      params![value],
+      |row| row.get(0),
+    )
+    .expect("row count should query")
+}
+
+fn insert_ready_tikhub_connector(root_path: &Path) {
+  let connection = open_workspace_connection(root_path).expect("database should open");
+  let now = Utc::now().to_rfc3339();
+  connection
+    .execute(
+      "INSERT INTO secret_ref (
+         id, provider_type, provider_id, secret_store_key, masked_hint, created_at, updated_at
+       ) VALUES ('delete-test-secret', 'tikhub', 'default', 'test-store-key', '[REDACTED]', ?1, ?1)",
+      params![now],
+    )
+    .expect("test secret metadata should insert");
+  let workspace_id = connection
+    .query_row("SELECT id FROM workspace LIMIT 1", [], |row| {
+      row.get::<_, String>(0)
+    })
+    .expect("workspace id should load");
+  connection
+    .execute(
+      "INSERT INTO tikhub_connector (
+         id, workspace_id, secret_ref_id, base_url, enabled, config_version,
+         last_tested_at, last_test_status, created_at, updated_at
+       ) VALUES ('default', ?1, 'delete-test-secret', 'https://api.tikhub.dev', 1, 1,
+                 ?2, 'success', ?2, ?2)",
+      params![workspace_id, now],
+    )
+    .expect("ready test connector should insert");
+}
+
 fn create_task_input() -> CreateCollectionTaskInput {
   CreateCollectionTaskInput {
     name: "采集 TikTok 关键词结果".to_string(),

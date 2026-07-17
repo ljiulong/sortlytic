@@ -445,6 +445,16 @@ fn cancel_task(
 }
 
 #[tauri::command]
+fn delete_task(
+  task_id: String,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<()> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  tasks::delete_task(root_path, &task_id)
+}
+
+#[tauri::command]
 fn retry_task(
   task_id: String,
   stage: Option<String>,
@@ -750,6 +760,7 @@ pub fn run() {
       enqueue_task,
       execute_next_task,
       cancel_task,
+      delete_task,
       retry_task,
       copy_task,
       get_task,

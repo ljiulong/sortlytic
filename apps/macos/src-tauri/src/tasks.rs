@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use chrono::Utc;
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -209,6 +209,72 @@ pub fn update_collection_task(
   }
 
   get_task_by_id(&connection, task_id)
+}
+
+pub fn delete_task(root_path: impl AsRef<Path>, task_id: &str) -> AppResult<()> {
+  let mut connection = open_workspace_connection(root_path)?;
+  let transaction = connection
+    .transaction_with_behavior(TransactionBehavior::Immediate)
+    .map_err(database_error)?;
+  let task = get_task_by_id(&transaction, task_id)?;
+  let active_run_count = transaction
+    .query_row(
+      "SELECT COUNT(*) FROM task_run
+       WHERE task_id = ?1 AND status IN ('queued', 'running')",
+      params![task_id],
+      |row| row.get::<_, i64>(0),
+    )
+    .map_err(database_error)?;
+
+  if matches!(task.status.as_str(), "queued" | "running") || active_run_count > 0 {
+    return Err(task_error("排队或运行中的任务请先取消，再执行删除"));
+  }
+
+  let plan_count = transaction
+    .query_row(
+      "SELECT COUNT(*) FROM collection_plan WHERE task_id = ?1",
+      params![task_id],
+      |row| row.get::<_, i64>(0),
+    )
+    .map_err(database_error)?;
+  let run_count = transaction
+    .query_row(
+      "SELECT COUNT(*) FROM task_run WHERE task_id = ?1",
+      params![task_id],
+      |row| row.get::<_, i64>(0),
+    )
+    .map_err(database_error)?;
+
+  transaction
+    .execute("DELETE FROM task_run WHERE task_id = ?1", params![task_id])
+    .map_err(database_error)?;
+  transaction
+    .execute(
+      "DELETE FROM collection_plan WHERE task_id = ?1",
+      params![task_id],
+    )
+    .map_err(database_error)?;
+  let deleted = transaction
+    .execute(
+      "DELETE FROM collection_task WHERE id = ?1",
+      params![task_id],
+    )
+    .map_err(database_error)?;
+  if deleted != 1 {
+    return Err(task_error("任务状态已变化，无法删除"));
+  }
+
+  write_task_audit_log(
+    &transaction,
+    "delete_task",
+    Some(task_id),
+    serde_json::json!({
+      "status": task.status,
+      "plan_count": plan_count,
+      "run_count": run_count,
+    }),
+  )?;
+  transaction.commit().map_err(database_error)
 }
 
 pub fn copy_task(root_path: impl AsRef<Path>, task_id: &str) -> AppResult<CollectionTaskView> {
