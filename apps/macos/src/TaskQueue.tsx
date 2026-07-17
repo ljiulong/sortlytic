@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { Ban, Download, ListTodo, Pencil, Play, Save, Trash2, X } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import AppSelect from './AppSelect'
 import { StatusPill } from './CollectionBuilder'
+import { i18n as appI18n } from './i18n'
 import type { TaskExportInput, WorkbenchRuntimeData } from './use-workbench-backend'
 import type { TaskStatus } from './workbench-data'
 import './TaskQueue.css'
@@ -24,11 +26,29 @@ type TaskQueueProps = {
   onExportTask: (input: TaskExportInput) => Promise<unknown>
 }
 
+const taskStatusTranslationKeys: Record<TaskStatus, string> = {
+  已排队: 'taskStatus.queued',
+  运行中: 'taskStatus.running',
+  等待确认: 'taskStatus.waitingConfirmation',
+  部分成功: 'taskStatus.partialSuccess',
+  成功: 'taskStatus.success',
+  待人工确认: 'taskStatus.manualConfirmation',
+  失败: 'taskStatus.failed',
+  已取消: 'taskStatus.cancelled',
+}
+
+const taskExportFormatOptionKeys = [
+  { value: 'xlsx', key: 'export.formats.xlsx' },
+  { value: 'pdf', key: 'export.formats.pdf' },
+] as const
+
 // oxlint-disable-next-line react/only-export-components
-export const taskExportFormatOptions = [
-  { value: 'xlsx', label: 'Excel 工作簿' },
-  { value: 'pdf', label: 'PDF 报告' },
-] satisfies Array<{ value: TaskExportInput['format']; label: string }>
+export const taskExportFormatOptions = taskExportFormatOptionKeys.map(({ value, key }) => ({
+  value,
+  get label() {
+    return appI18n.t(key, { ns: 'tasks' })
+  },
+})) satisfies Array<{ value: TaskExportInput['format']; label: string }>
 
 // oxlint-disable-next-line react/only-export-components
 export function capabilitiesForStatus(status: TaskStatus) {
@@ -45,24 +65,24 @@ export function capabilitiesForStatus(status: TaskStatus) {
 export function confirmationForTaskAction(type: ConfirmationMode['type']) {
   if (type === 'confirm-run') {
     return {
-      ariaLabel: '确认运行任务',
-      buttonLabel: '确认运行',
-      message: '确认后任务将进入执行队列并可能产生费用。',
+      ariaLabel: appI18n.t('confirmation.confirmRun.ariaLabel', { ns: 'tasks' }),
+      buttonLabel: appI18n.t('confirmation.confirmRun.button', { ns: 'tasks' }),
+      message: appI18n.t('confirmation.confirmRun.message', { ns: 'tasks' }),
       tone: 'primary' as const,
     }
   }
   if (type === 'confirm-cancel') {
     return {
-      ariaLabel: '确认取消任务',
-      buttonLabel: '确认取消',
-      message: '取消会停止任务，但保留任务与运行记录。',
+      ariaLabel: appI18n.t('confirmation.confirmCancel.ariaLabel', { ns: 'tasks' }),
+      buttonLabel: appI18n.t('confirmation.confirmCancel.button', { ns: 'tasks' }),
+      message: appI18n.t('confirmation.confirmCancel.message', { ns: 'tasks' }),
       tone: 'danger' as const,
     }
   }
   return {
-    ariaLabel: '确认删除任务',
-    buttonLabel: '确认删除',
-    message: '删除会移除任务及关联本地数据，且无法恢复。',
+    ariaLabel: appI18n.t('confirmation.confirmDelete.ariaLabel', { ns: 'tasks' }),
+    buttonLabel: appI18n.t('confirmation.confirmDelete.button', { ns: 'tasks' }),
+    message: appI18n.t('confirmation.confirmDelete.message', { ns: 'tasks' }),
     tone: 'danger' as const,
   }
 }
@@ -76,9 +96,11 @@ function TaskQueue({
   onDeleteTask,
   onExportTask,
 }: TaskQueueProps) {
+  const { t, i18n } = useTranslation('tasks')
   const [activeMode, setActiveMode] = useState<ActiveTaskMode>()
   const [draftName, setDraftName] = useState('')
   const [exportFormats, setExportFormats] = useState<Record<string, TaskExportInput['format']>>({})
+  const numberLocale = i18n.resolvedLanguage ?? i18n.language
 
   const beginEditing = (task: TaskRow) => {
     setActiveMode({ taskId: task.id, type: 'edit' })
@@ -126,19 +148,24 @@ function TaskQueue({
     <section className="task-queue" aria-labelledby="task-queue-heading">
       <header className="task-queue__heading">
         <div>
-          <p className="eyebrow">任务队列</p>
-          <h2 id="task-queue-heading">逐条确认、运行与导出</h2>
-          <p className="task-queue__intro">每条任务独立管理，完成后可按需要导出 Excel 工作簿或 PDF 报告。</p>
+          <p className="eyebrow">{t('taskQueue.eyebrow')}</p>
+          <h2 id="task-queue-heading">{t('taskQueue.title')}</h2>
+          <p className="task-queue__intro">{t('taskQueue.intro')}</p>
         </div>
-        <span className="task-queue__count">{tasks.length} 条任务</span>
+        <span className="task-queue__count">
+          {t('taskQueue.taskCount', {
+            count: tasks.length,
+            formattedCount: tasks.length.toLocaleString(numberLocale),
+          })}
+        </span>
       </header>
 
       {tasks.length === 0 ? (
         <div className="task-queue__empty" role="status">
           <ListTodo size={24} strokeWidth={1.7} aria-hidden="true" />
           <div>
-            <h3>还没有可运行的任务</h3>
-            <p>前往“新建任务”定义采集条件并生成计划，确认后会显示在这里。</p>
+            <h3>{t('taskQueue.emptyTitle')}</h3>
+            <p>{t('taskQueue.emptyDescription')}</p>
           </div>
         </div>
       ) : (
@@ -155,14 +182,15 @@ function TaskQueue({
             const confirmationContent = confirmation
               ? confirmationForTaskAction(confirmation.type)
               : {
-                  ariaLabel: '任务操作确认',
-                  buttonLabel: '确认操作',
-                  message: '请确认当前任务操作。',
+                  ariaLabel: t('taskQueue.confirmationFallbackAriaLabel'),
+                  buttonLabel: t('taskQueue.confirmationFallbackButton'),
+                  message: t('taskQueue.confirmationFallbackMessage'),
                   tone: 'danger' as const,
                 }
             const capabilities = capabilitiesForStatus(task.status)
             const progress = Math.min(100, Math.max(0, task.progress))
             const titleId = `task-title-${task.id}`
+            const formattedRecords = task.records.toLocaleString(numberLocale)
 
             return (
               <article
@@ -176,12 +204,12 @@ function TaskQueue({
                 <header className="task-card__header">
                   <div className="task-card__identity">
                     {isEditing ? (
-                      <div className="task-card__edit-form" role="group" aria-label="编辑任务名称">
-                        <label id={titleId} htmlFor={`task-name-${task.id}`}>任务名称</label>
+                      <div className="task-card__edit-form" role="group" aria-label={t('taskQueue.editFormAriaLabel')}>
+                        <label id={titleId} htmlFor={`task-name-${task.id}`}>{t('taskQueue.taskNameLabel')}</label>
                         <div className="task-card__edit-row">
                           <input
                             id={`task-name-${task.id}`}
-                            aria-label={`${task.name} 新名称`}
+                            aria-label={t('taskQueue.newNameAriaLabel', { taskName: task.name })}
                             autoFocus
                             maxLength={80}
                             value={draftName}
@@ -194,16 +222,17 @@ function TaskQueue({
                             onClick={() => void saveTaskName(task.id)}
                           >
                             <Save size={15} aria-hidden="true" />
-                            保存
+                            {t('taskQueue.save')}
                           </button>
                           <button
                             className="ghost-button"
                             disabled={isBusy}
                             type="button"
+                            aria-label={t('taskQueue.discard')}
                             onClick={stopEditing}
                           >
                             <X size={15} aria-hidden="true" />
-                            放弃
+                            {t('taskQueue.discard')}
                           </button>
                         </div>
                       </div>
@@ -214,27 +243,27 @@ function TaskQueue({
                       </div>
                     )}
                   </div>
-                  <StatusPill tone={toneForStatus(task.status)} label={task.status} />
+                  <StatusPill tone={toneForStatus(task.status)} label={t(taskStatusTranslationKeys[task.status])} />
                 </header>
 
                 <div className="task-card__summary">
                   <dl className="task-card__stats">
                     <div>
-                      <dt>结果记录</dt>
-                      <dd>{task.records.toLocaleString()} 条</dd>
+                      <dt>{t('taskQueue.resultRecords')}</dt>
+                      <dd>{t('taskQueue.recordCount', { count: task.records, formattedCount: formattedRecords })}</dd>
                     </div>
                     <div>
-                      <dt>请求 / 费用</dt>
+                      <dt>{t('taskQueue.requestCost')}</dt>
                       <dd>{task.cost}</dd>
                     </div>
                   </dl>
                   <div className="task-card__progress">
                     <div className="task-card__progress-label">
-                      <span>执行进度</span>
+                      <span>{t('taskQueue.executionProgress')}</span>
                       <strong>{progress}%</strong>
                     </div>
                     <div
-                      aria-label={`${task.name} 进度`}
+                      aria-label={t('taskQueue.progressAriaLabel', { taskName: task.name })}
                       aria-valuemax={100}
                       aria-valuemin={0}
                       aria-valuenow={progress}
@@ -257,32 +286,35 @@ function TaskQueue({
                         <button
                           className="ghost-button"
                           disabled={isBusy || isEditing || !capabilities.canEdit || isConfirming}
-                          title={capabilities.canEdit ? '编辑任务名称' : '只有待确认任务可以编辑'}
+                          aria-label={t('taskQueue.edit')}
+                          title={capabilities.canEdit ? t('taskQueue.editTitle') : t('taskQueue.editDisabledTitle')}
                           type="button"
                           onClick={() => beginEditing(task)}
                         >
                           <Pencil size={15} aria-hidden="true" />
-                          编辑
+                          {t('taskQueue.edit')}
                         </button>
                         <button
                           className="ghost-button"
                           disabled={isBusy || isEditing || !capabilities.canCancel || isConfirming}
-                          title={capabilities.canCancel ? '取消任务' : '终态任务不能取消'}
+                          aria-label={t('taskQueue.cancel')}
+                          title={capabilities.canCancel ? t('taskQueue.cancelTitle') : t('taskQueue.cancelDisabledTitle')}
                           type="button"
                           onClick={() => setActiveMode({ taskId: task.id, type: 'confirm-cancel' })}
                         >
                           <Ban size={15} aria-hidden="true" />
-                          取消
+                          {t('taskQueue.cancel')}
                         </button>
                         <button
                           className="ghost-button task-card__danger-button"
                           disabled={isBusy || isEditing || !capabilities.canDelete || isConfirming}
-                          title={capabilities.canDelete ? '删除任务' : '请先取消任务再删除'}
+                          aria-label={t('taskQueue.delete')}
+                          title={capabilities.canDelete ? t('taskQueue.deleteTitle') : t('taskQueue.deleteDisabledTitle')}
                           type="button"
                           onClick={() => setActiveMode({ taskId: task.id, type: 'confirm-delete' })}
                         >
                           <Trash2 size={15} aria-hidden="true" />
-                          删除
+                          {t('taskQueue.delete')}
                         </button>
                       </div>
                       <div className="task-card__run-action">
@@ -290,17 +322,18 @@ function TaskQueue({
                           <button
                             className="primary-button"
                             disabled={isBusy || isEditing || isConfirming}
+                            aria-label={t('taskQueue.confirmRun')}
                             type="button"
                             onClick={() => setActiveMode({ taskId: task.id, type: 'confirm-run' })}
                           >
                             <Play size={15} aria-hidden="true" />
-                            确认运行
+                            {t('taskQueue.confirmRun')}
                           </button>
                         ) : null}
                       </div>
                       <div className="task-card__export">
                         <div className="task-card__export-field">
-                          <label htmlFor={`task-export-format-${task.id}`}>导出格式</label>
+                          <label htmlFor={`task-export-format-${task.id}`}>{t('taskQueue.exportFormat')}</label>
                           <AppSelect
                             id={`task-export-format-${task.id}`}
                             disabled={isBusy || isEditing || isConfirming}
@@ -309,19 +342,20 @@ function TaskQueue({
                               [task.id]: format as TaskExportInput['format'],
                             }))}
                             options={taskExportFormatOptions}
-                            placeholder="选择导出格式"
+                            placeholder={t('taskQueue.exportFormatPlaceholder')}
                             value={exportFormats[task.id] ?? 'xlsx'}
                           />
                         </div>
                         <button
                           className="ghost-button"
                           disabled={isBusy || isEditing || isConfirming || !capabilities.canExport}
-                          title={capabilities.canExport ? '导出当前任务' : '任务完成或部分成功后可以导出'}
+                          aria-label={t('taskQueue.export')}
+                          title={capabilities.canExport ? t('taskQueue.exportTitle') : t('taskQueue.exportDisabledTitle')}
                           type="button"
                           onClick={() => void exportTask(task.id)}
                         >
                           <Download size={15} aria-hidden="true" />
-                          导出
+                          {t('taskQueue.export')}
                         </button>
                       </div>
                     </div>
@@ -343,6 +377,7 @@ function TaskQueue({
                           disabled={isBusy || !confirmation}
                           tabIndex={confirmation ? 0 : -1}
                           type="button"
+                          aria-label={confirmationContent.buttonLabel}
                           onClick={() => confirmation && void confirmAction(confirmation)}
                         >
                           {confirmationContent.buttonLabel}
@@ -352,9 +387,10 @@ function TaskQueue({
                           disabled={isBusy || !confirmation}
                           tabIndex={confirmation ? 0 : -1}
                           type="button"
+                          aria-label={t('taskQueue.back')}
                           onClick={() => setActiveMode(undefined)}
                         >
-                          返回
+                          {t('taskQueue.back')}
                         </button>
                       </div>
                     </div>

@@ -5,6 +5,7 @@ import {
   ShieldCheck,
   type LucideIcon,
 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 type ExportPanelProps = {
   isBusy: boolean
@@ -13,17 +14,18 @@ type ExportPanelProps = {
 }
 
 function ExportPanel({ isBusy, latestExports, onExport }: ExportPanelProps) {
+  const { t } = useTranslation('tasks')
   const xlsxExport = latestExports.find((item) => item.export_type === 'xlsx')
   const pdfExport = latestExports.find((item) => item.export_type === 'pdf')
   const hasPassedExportGate = xlsxExport?.status === 'success' && pdfExport?.status === 'success'
-  const statusLabel = hasPassedExportGate ? '已通过' : '待检查'
+  const statusLabel = hasPassedExportGate ? t('exportPanel.passed') : t('exportPanel.pending')
 
   return (
-    <section className="glass-panel compact-panel">
+    <section className="glass-panel compact-panel" aria-labelledby="export-panel-heading">
       <div className="section-heading">
         <div>
-          <p className="eyebrow">导出中心</p>
-          <h2>Excel 与 PDF 门禁</h2>
+          <p className="eyebrow">{t('exportPanel.eyebrow')}</p>
+          <h2 id="export-panel-heading">{t('exportPanel.title')}</h2>
         </div>
         <span className="status-pill" data-tone={hasPassedExportGate ? 'success' : 'info'}>
           {statusLabel}
@@ -32,28 +34,34 @@ function ExportPanel({ isBusy, latestExports, onExport }: ExportPanelProps) {
       <div className="export-grid">
         <ExportItem
           icon={FileSpreadsheet}
-          label="Excel 工作簿"
-          meta={xlsxExport?.file_path ?? '等待生成'}
+          label={t('export.formats.xlsx')}
+          meta={xlsxExport?.file_path ?? t('exportPanel.waiting')}
           tone={xlsxExport?.status === 'success' ? 'success' : 'info'}
         />
         <ExportItem
           icon={FileText}
-          label="PDF 报告"
-          meta={pdfExport?.file_path ?? '等待生成'}
+          label={t('export.formats.pdf')}
+          meta={pdfExport?.file_path ?? t('exportPanel.waiting')}
           tone={pdfExport?.status === 'success' ? 'success' : 'warning'}
         />
-        <ExportItem icon={Network} label="Webhook 摘要" meta="不发送密钥与完整 Header" tone="info" />
+        <ExportItem
+          icon={Network}
+          label={t('exportPanel.webhookLabel')}
+          meta={t('exportPanel.webhookMeta')}
+          tone="info"
+        />
       </div>
       <button
         className="primary-button wide-button"
         disabled={isBusy}
+        aria-label={t('exportPanel.runCheck')}
         type="button"
         onClick={() => {
           void onExport()
         }}
       >
         <ShieldCheck size={16} aria-hidden="true" />
-        执行导出检查
+        {t('exportPanel.runCheck')}
       </button>
     </section>
   )
