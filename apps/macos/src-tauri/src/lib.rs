@@ -238,13 +238,24 @@ fn list_prompt_regression_runs(
 }
 
 #[tauri::command]
-fn generate_collection_plan_from_text(
+async fn generate_collection_plan_from_text(
   input: GenerateCollectionPlanFromTextInput,
   root_path: Option<String>,
   state: tauri::State<'_, AppState>,
 ) -> AppResult<GeneratedCollectionPlanView> {
   let root_path = resolve_workspace_root(root_path, &state)?;
-  ai::generate_collection_plan_from_text(root_path, input)
+  tauri::async_runtime::spawn_blocking(move || {
+    ai::generate_collection_plan_from_text(root_path, input)
+  })
+  .await
+  .map_err(|error| {
+    AppError::new(
+      domain::AppErrorCode::ModelProtocolError,
+      format!("AI 后台任务异常结束：{error}"),
+      AppErrorStage::Ai,
+      true,
+    )
+  })?
 }
 
 #[tauri::command]
