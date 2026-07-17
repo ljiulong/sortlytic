@@ -156,11 +156,18 @@ fn legacy_tikhub_snapshot_alias_requires_an_exact_active_database_binding() {
   .expect_err("旧别名快照的 secret_revision 不一致时必须拒绝");
   assert_eq!(wrong_revision.code, AppErrorCode::PermissionError);
 
+  let legacy_uuid = Uuid::new_v4().to_string();
+  insert_runtime_snapshot(&root, "active-uuid", &legacy_uuid, &saved.id, 1, "queued");
+  assert_eq!(
+    read_secret_for_snapshot(&root, &saved.id, "tikhub", &legacy_uuid, 1)
+      .expect("活动旧快照中格式为 UUID 的 provider_id 也应按完整绑定兼容"),
+    secret
+  );
+
   let forged_uuid = Uuid::new_v4().to_string();
-  insert_runtime_snapshot(&root, "active-uuid", &forged_uuid, &saved.id, 1, "queued");
-  let strict_identity = read_secret_for_snapshot(&root, &saved.id, "tikhub", &forged_uuid, 1)
-    .expect_err("新 UUID 配置身份即使出现在快照中也必须严格匹配 JSON profile");
-  assert_eq!(strict_identity.code, AppErrorCode::PermissionError);
+  let forged_uuid_error = read_secret_for_snapshot(&root, &saved.id, "tikhub", &forged_uuid, 1)
+    .expect_err("没有匹配数据库快照的 UUID provider_id 必须拒绝");
+  assert_eq!(forged_uuid_error.code, AppErrorCode::PermissionError);
 
   insert_runtime_snapshot(
     &root,
@@ -178,7 +185,7 @@ fn legacy_tikhub_snapshot_alias_requires_an_exact_active_database_binding() {
     forged_alias,
     wrong_ref,
     wrong_revision,
-    strict_identity,
+    forged_uuid_error,
     inactive,
   ] {
     assert!(!error.message.contains(secret));

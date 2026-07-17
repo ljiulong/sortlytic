@@ -1,7 +1,6 @@
 use std::path::Path;
 
 use rusqlite::{params, Connection};
-use uuid::Uuid;
 
 use crate::domain::AppResult;
 
@@ -42,28 +41,28 @@ pub(crate) fn read_secret_for_snapshot(
   }
 
   let exact_profile_identity = actual_profile_id == expected_profile_id;
-  let bound_legacy_alias = !exact_profile_identity
-    && allows_bound_legacy_tikhub_alias(
+  let bound_legacy_identity = !exact_profile_identity
+    && allows_bound_legacy_tikhub_identity(
       &connection,
       actual_provider_type,
       secret_ref_id,
       expected_profile_id,
       expected_revision,
     )?;
-  if !exact_profile_identity && !bound_legacy_alias {
+  if !exact_profile_identity && !bound_legacy_identity {
     return Err(permission_error("运行快照的 API 配置身份与当前凭据不匹配"));
   }
   Ok(credential.secret.clone())
 }
 
-fn allows_bound_legacy_tikhub_alias(
+fn allows_bound_legacy_tikhub_identity(
   connection: &Connection,
   actual_provider_type: &str,
   secret_ref_id: &str,
   expected_profile_id: &str,
   expected_revision: u64,
 ) -> AppResult<bool> {
-  if actual_provider_type != "tikhub" || Uuid::parse_str(expected_profile_id).is_ok() {
+  if actual_provider_type != "tikhub" {
     return Ok(false);
   }
   let expected_revision = i64::try_from(expected_revision)
