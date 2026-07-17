@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 
+mod mirror;
 mod storage;
 
 pub const API_PROFILE_SCHEMA_VERSION: u32 = 1;
@@ -177,6 +178,29 @@ where
   })
 }
 
+pub fn initialize_api_profile_registry(
+  root_path: impl AsRef<Path>,
+) -> AppResult<ApiProfileRegistry> {
+  let root_path = root_path.as_ref();
+  let registry = match load_existing_api_profile_registry(root_path)? {
+    Some(registry) => registry,
+    None => {
+      let registry = mirror::import_legacy_registry(root_path)?;
+      save_api_profile_registry(root_path, &registry)?;
+      registry
+    }
+  };
+  mirror::mirror_registry(root_path, &registry)?;
+  Ok(registry)
+}
+
+pub fn sync_api_profile_mirror(root_path: impl AsRef<Path>) -> AppResult<()> {
+  let root_path = root_path.as_ref();
+  let registry = load_existing_api_profile_registry(root_path)?
+    .ok_or_else(|| registry_error("API 配置文件不存在，已拒绝重建 SQLite 镜像"))?;
+  mirror::mirror_registry(root_path, &registry)
+}
+
 fn with_registry_lock<T>(operation: impl FnOnce() -> AppResult<T>) -> AppResult<T> {
   let _guard = REGISTRY_LOCK
     .lock()
@@ -329,12 +353,15 @@ fn validate_ai_profile(profile: &AiApiProfile) -> AppResult<()> {
   if profile.api_format != expected_format {
     return Err(registry_error("AI 供应商类型与 API 格式不匹配"));
   }
-  if profile.default_model_id.trim().is_empty()
+  if (profile.default_model_id.trim().is_empty() && profile.status != ApiProfileStatus::NeedsRebind)
     || profile.default_model_id.trim() != profile.default_model_id
   {
     return Err(registry_error("AI 默认模型 ID 不能为空或包含首尾空格"));
   }
-  if (!profile.base_url.starts_with("https://") && !profile.base_url.starts_with("http://"))
+  if (profile.base_url.is_empty() && profile.status != ApiProfileStatus::NeedsRebind)
+    || (!profile.base_url.is_empty()
+      && !profile.base_url.starts_with("https://")
+      && !profile.base_url.starts_with("http://"))
     || profile.base_url.chars().any(char::is_whitespace)
   {
     return Err(registry_error("AI Base URL 必须是有效的 HTTP(S) 地址"));

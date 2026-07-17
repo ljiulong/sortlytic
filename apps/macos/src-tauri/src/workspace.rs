@@ -43,6 +43,7 @@ pub const CURRENT_SCHEMA_VERSION: i64 = 7;
 pub const DATABASE_FILE_NAME: &str = "app.sqlite";
 
 const WORKSPACE_DIRS: &[&str] = &[
+  "secrets",
   "raw/tikhub",
   "exports/excel",
   "exports/pdf",
@@ -129,6 +130,8 @@ pub fn create_workspace(name: &str, root_path: impl AsRef<Path>) -> AppResult<Wo
 
   let summary = get_workspace_summary(&connection, &root_path, &database_path)?;
   validate_private_workspace_permissions(&root_path, &database_path)?;
+  drop(connection);
+  crate::api_profiles::initialize_api_profile_registry(&root_path)?;
   Ok(summary)
 }
 
