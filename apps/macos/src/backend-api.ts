@@ -70,6 +70,19 @@ export type CollectionPlanDraftView = {
   cost_estimate_json: Record<string, unknown>
 }
 
+export type CollectionDataTypeCapabilityView = {
+  platform: string
+  data_type: string
+  required_params: string[]
+  optional_params: string[]
+  pagination_mode: string
+  region_filter: string
+  time_range_filter: string
+  provider_time_ranges: string[]
+  max_page_size: number
+  max_request_count: number
+}
+
 export type CollectionPlanView = {
   id: string
   task_id: string
@@ -239,6 +252,10 @@ export function deleteTask(taskId: string) {
 
 export function generateFormCollectionPlan(request: GenerateFormPlanInput) {
   return invoke<CollectionPlanDraftView>('generate_form_collection_plan', { request })
+}
+
+export function listPlatformDataTypes(platform: string) {
+  return invoke<CollectionDataTypeCapabilityView[]>('list_platform_data_types', { platform })
 }
 
 export function saveCollectionPlan(input: SavePlanInput) {
