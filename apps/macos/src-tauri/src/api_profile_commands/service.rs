@@ -11,9 +11,10 @@ use super::validation::{
 };
 use super::{ApiProfileKind, SaveApiProfileInput};
 use crate::api_profiles::{
-  load_existing_api_profile_registry, sync_api_profile_mirror, update_api_profile_registry,
-  AiApiFormat, AiApiProfile, AiProviderType, ApiCredential, ApiProfileRegistry, ApiProfileStatus,
-  CredentialProviderType, TikhubApiProfile, TikhubSafeTestSummary,
+  load_existing_api_profile_registry, rebuild_api_profile_mirror, save_api_profile_registry,
+  update_api_profile_registry, with_api_profile_mirror_lock, AiApiFormat, AiApiProfile,
+  AiProviderType, ApiCredential, ApiProfileRegistry, ApiProfileStatus, CredentialProviderType,
+  TikhubApiProfile, TikhubSafeTestSummary,
 };
 use crate::domain::{redact_sensitive_text, AppError, AppErrorCode, AppErrorStage, AppResult};
 use crate::tikhub::{self, TikhubConnectionTestResult};
@@ -529,15 +530,34 @@ fn mutate_registry<T>(
   root: &Path,
   update: impl FnOnce(&Transaction<'_>, &mut ApiProfileRegistry) -> AppResult<T>,
 ) -> AppResult<T> {
-  let mut connection = open_workspace_database(root.join(DATABASE_FILE_NAME))?;
-  let transaction = connection
-    .transaction_with_behavior(TransactionBehavior::Immediate)
-    .map_err(database_error)?;
-  get_registry(root)?;
-  let result = update_api_profile_registry(root, |registry| update(&transaction, registry))?;
-  transaction.commit().map_err(database_error)?;
-  sync_api_profile_mirror(root)?;
-  Ok(result)
+  with_api_profile_mirror_lock(|| {
+    let previous_registry = get_registry(root)?;
+    let mut connection = open_workspace_database(root.join(DATABASE_FILE_NAME))?;
+    let transaction = connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)
+      .map_err(database_error)?;
+    let (result, updated_registry) = update_api_profile_registry(root, |registry| {
+      let result = update(&transaction, registry)?;
+      Ok((result, registry.clone()))
+    })?;
+    let database_result = rebuild_api_profile_mirror(&transaction, &updated_registry)
+      .and_then(|_| transaction.commit().map_err(database_error));
+    if let Err(operation_error) = database_result {
+      if let Err(restore_error) = save_api_profile_registry(root, &previous_registry) {
+        return Err(AppError::new(
+          AppErrorCode::SecretStoreError,
+          format!(
+            "API 配置提交失败且旧 JSON 恢复失败：{}；恢复错误：{}",
+            operation_error.message, restore_error.message
+          ),
+          AppErrorStage::SecretStore,
+          false,
+        ));
+      }
+      return Err(operation_error);
+    }
+    Ok(result)
+  })
 }
 
 fn ensure_mutable(

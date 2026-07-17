@@ -19,6 +19,7 @@ struct MirrorSnapshot {
   model_providers: Vec<String>,
   model_profiles: Vec<String>,
   secret_refs: Vec<String>,
+  api_profile_audits: Vec<String>,
 }
 
 fn workspace(label: &str) -> PathBuf {
@@ -77,6 +78,20 @@ fn install_failing_audit_trigger(root: &Path) {
     .unwrap();
 }
 
+fn install_failing_mirror_trigger(root: &Path) {
+  open_workspace_database(root.join(DATABASE_FILE_NAME))
+    .unwrap()
+    .execute_batch(
+      "CREATE TRIGGER fail_api_profile_mirror_audit_insert
+       BEFORE INSERT ON audit_log
+       WHEN NEW.entity_type = 'api_profile_registry'
+       BEGIN
+         SELECT RAISE(FAIL, 'API profile mirror insert blocked');
+       END;",
+    )
+    .unwrap();
+}
+
 fn registry_bytes(root: &Path) -> Vec<u8> {
   fs::read(root.join("secrets/api-config.json")).unwrap()
 }
@@ -118,9 +133,29 @@ fn mirror_snapshot(root: &Path) -> MirrorSnapshot {
               masked_hint || '|' || last_test_status || '|' || credential_revision
        FROM secret_ref
        WHERE provider_type IN ('tikhub', 'model_provider')
-       ORDER BY id",
+      ORDER BY id",
+    ),
+    api_profile_audits: rows(
+      &connection,
+      "SELECT entity_type || '|' || entity_id || '|' || action || '|' || safe_details_json
+       FROM audit_log
+       WHERE entity_type IN ('api_profile', 'api_profile_registry')
+       ORDER BY created_at, id",
     ),
   }
+}
+
+#[test]
+fn save_restores_json_and_sqlite_when_mirror_rebuild_fails() {
+  let root = workspace("mirror-rebuild");
+  service::save_profile(&root, ai_input("OpenAI 现有配置", EXISTING_SECRET)).unwrap();
+  install_failing_mirror_trigger(&root);
+
+  assert_failed_operation_is_atomic(&root, || {
+    service::save_profile(&root, ai_input("OpenAI 新配置", NEW_SECRET)).map(|_| ())
+  });
+
+  fs::remove_dir_all(root).ok();
 }
 
 fn assert_failed_operation_is_atomic(
