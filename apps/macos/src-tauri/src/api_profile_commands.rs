@@ -11,6 +11,7 @@ use super::{resolve_workspace_root, AppState};
 #[cfg(test)]
 mod mutation_race_tests;
 mod service;
+mod validation;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

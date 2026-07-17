@@ -5,6 +5,10 @@ use rusqlite::{params, Transaction, TransactionBehavior};
 use serde_json::Value;
 use uuid::Uuid;
 
+use super::validation::{
+  ai_url, completeness_status, credential_type, error, key_status, next_revision, optional_id,
+  required, secret, tikhub_url, validate_ai_format, validate_ai_url,
+};
 use super::{ApiProfileKind, SaveApiProfileInput};
 use crate::api_profiles::{
   load_existing_api_profile_registry, sync_api_profile_mirror, update_api_profile_registry,
@@ -615,125 +619,6 @@ fn put_credential(
   );
   Ok(())
 }
-fn validate_ai_format(provider: AiProviderType, format: AiApiFormat) -> AppResult<()> {
-  let expected = match provider {
-    AiProviderType::Openai | AiProviderType::CustomOpenaiCompatible => {
-      AiApiFormat::OpenaiCompatible
-    }
-    AiProviderType::Anthropic => AiApiFormat::AnthropicMessages,
-    AiProviderType::Gemini => AiApiFormat::Gemini,
-    AiProviderType::Ollama => AiApiFormat::Ollama,
-  };
-  if format == expected {
-    Ok(())
-  } else {
-    Err(error("AI 供应商类型与 API 格式不匹配"))
-  }
-}
-fn credential_type(provider: AiProviderType) -> CredentialProviderType {
-  match provider {
-    AiProviderType::Openai => CredentialProviderType::Openai,
-    AiProviderType::Anthropic => CredentialProviderType::Anthropic,
-    AiProviderType::Gemini => CredentialProviderType::Gemini,
-    AiProviderType::CustomOpenaiCompatible => CredentialProviderType::CustomOpenaiCompatible,
-    AiProviderType::Ollama => CredentialProviderType::Ollama,
-  }
-}
-fn completeness_status(
-  provider: AiProviderType,
-  base_url: &str,
-  model: &str,
-  has_key: bool,
-) -> ApiProfileStatus {
-  if !base_url.is_empty() && !model.is_empty() && (provider == AiProviderType::Ollama || has_key) {
-    ApiProfileStatus::Untested
-  } else {
-    ApiProfileStatus::NeedsRebind
-  }
-}
-fn key_status(has_key: bool) -> ApiProfileStatus {
-  if has_key {
-    ApiProfileStatus::Untested
-  } else {
-    ApiProfileStatus::NeedsRebind
-  }
-}
-fn tikhub_url(value: &str) -> AppResult<String> {
-  let value = value.trim().trim_end_matches('/');
-  match value {
-    "https://api.tikhub.io" | "https://api.tikhub.dev" => Ok(value.to_string()),
-    _ => Err(error(
-      "TikHub Base URL 只允许 https://api.tikhub.io 或 https://api.tikhub.dev",
-    )),
-  }
-}
-fn ai_url(provider: AiProviderType, value: &str) -> AppResult<String> {
-  let value = value.trim().trim_end_matches('/');
-  let value = if !value.is_empty() {
-    value.to_string()
-  } else {
-    match provider {
-      AiProviderType::Openai => "https://api.openai.com/v1".to_string(),
-      AiProviderType::Anthropic => "https://api.anthropic.com".to_string(),
-      AiProviderType::Gemini => "https://generativelanguage.googleapis.com".to_string(),
-      AiProviderType::Ollama => "http://localhost:11434".to_string(),
-      AiProviderType::CustomOpenaiCompatible => String::new(),
-    }
-  };
-  if value.is_empty() {
-    return Ok(value);
-  }
-  validate_ai_url(&value)?;
-  Ok(value)
-}
-fn validate_ai_url(value: &str) -> AppResult<()> {
-  let url = reqwest::Url::parse(value).map_err(|_| error("AI Base URL 不是完整的 HTTP(S) 地址"))?;
-  if matches!(url.scheme(), "http" | "https")
-    && url.host_str().is_some()
-    && url.username().is_empty()
-    && url.password().is_none()
-    && url.query().is_none()
-    && url.fragment().is_none()
-  {
-    Ok(())
-  } else {
-    Err(error(
-      "AI Base URL 必须包含主机且不能携带凭据、查询串或片段",
-    ))
-  }
-}
-
-fn required(value: &str, label: &str) -> AppResult<String> {
-  let value = value.trim();
-  if value.is_empty() {
-    Err(error(format!("{label}不能为空")))
-  } else {
-    Ok(value.to_string())
-  }
-}
-
-fn optional_id(value: Option<String>) -> AppResult<Option<String>> {
-  let value = value
-    .map(|value| value.trim().to_string())
-    .filter(|value| !value.is_empty());
-  if let Some(value) = value.as_deref() {
-    Uuid::parse_str(value).map_err(|_| error("API 配置 ID 必须是 UUID"))?;
-  }
-  Ok(value)
-}
-
-fn secret(value: Option<String>) -> Option<String> {
-  value
-    .map(|value| value.trim().to_string())
-    .filter(|value| !value.is_empty())
-}
-
-fn next_revision(value: u64) -> AppResult<u64> {
-  value
-    .checked_add(1)
-    .ok_or_else(|| error("API 配置修订号已达到上限"))
-}
-
 fn today_usage(value: &Value) -> Option<f64> {
   [
     "/total_requests",
@@ -779,15 +664,6 @@ fn kind_name(kind: ApiProfileKind) -> &'static str {
     ApiProfileKind::Tikhub => "tikhub",
     ApiProfileKind::Ai => "ai",
   }
-}
-
-fn error(message: impl Into<String>) -> AppError {
-  AppError::new(
-    AppErrorCode::ValidationError,
-    message,
-    AppErrorStage::SecretStore,
-    false,
-  )
 }
 
 fn database_error(value: impl ToString) -> AppError {
