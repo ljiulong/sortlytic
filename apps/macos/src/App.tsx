@@ -67,6 +67,7 @@ function Workbench() {
   const data = backend.data
   const [activeNav, setActiveNav] = useState<NavKey>('overview')
   const [selectedRecordId, setSelectedRecordId] = useState('')
+  const pageLayoutClassName = `page-layout page-layout--${pageMeta[activeNav].layout}`
   return (
     <div className="app-shell" lang="zh-CN">
       <a className="skip-link" href="#main-content">跳至主要内容</a>
@@ -113,9 +114,11 @@ function Workbench() {
           workspace={data.workspace}
         />
         {activeNav === 'guide' ? (
-          <GuidePage onOpenSettings={() => setActiveNav('settings')} />
+          <div className={pageLayoutClassName}>
+            <GuidePage onOpenSettings={() => setActiveNav('settings')} />
+          </div>
         ) : activeNav === 'settings' ? (
-          <section className="main-grid" aria-label="连接与本地设置">
+          <section className={pageLayoutClassName} aria-label="连接与本地设置">
             <div className="main-column">
               <LocalWorkspacePanel
                 health={data.workspace.health}
@@ -145,7 +148,7 @@ function Workbench() {
             </div>
           </section>
         ) : activeNav === 'new-task' ? (
-          <section className="main-grid" aria-label="新建任务">
+          <section className={pageLayoutClassName} aria-label="新建任务">
             <div className="main-column">
               <CollectionBuilder
                 actionMessage={backend.actionMessage}
@@ -158,7 +161,7 @@ function Workbench() {
             </div>
           </section>
         ) : activeNav === 'tasks' ? (
-          <section className="main-grid" aria-label="任务">
+          <section className={pageLayoutClassName} aria-label="任务">
             <div className="main-column">
               <TaskQueue
                 isBusy={backend.isBusy}
@@ -177,7 +180,7 @@ function Workbench() {
                 <MetricCard key={metric.label} {...metric} />
               ))}
             </section>
-            <section className="main-grid">
+            <section className={pageLayoutClassName}>
               <div className="main-column">
                 <ConnectionStrip
                   connections={data.connections}
