@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn legacy_api_profile_reads_are_not_exposed_as_tauri_commands() {
+  let source = include_str!("lib.rs");
+  let handler = source
+    .split(".invoke_handler(tauri::generate_handler![")
+    .nth(1)
+    .expect("Tauri invoke handler should exist");
+
+  for command in [
+    "list_secret_refs",
+    "get_tikhub_connector",
+    "list_model_providers",
+    "list_model_profiles",
+  ] {
+    assert!(
+      !handler.contains(&format!("\n      {command},")),
+      "legacy command {command} must not remain externally invokable"
+    );
+  }
+}
+
+#[test]
 fn default_workspace_initialization_preserves_an_explicit_workspace() {
   let active_root = std::env::temp_dir().join(format!("active-workspace-{}", uuid::Uuid::new_v4()));
   let default_root =

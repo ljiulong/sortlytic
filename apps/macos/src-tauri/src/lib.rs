@@ -33,10 +33,7 @@ use collection::{
   CollectionParamValidationResult, CollectionPlanDraftView, DataTypeCapabilityView,
   FormCollectionPlanRequest, PlatformCapabilityView,
 };
-use config_commands::{
-  get_tikhub_connector, list_model_profiles, list_model_providers, list_secret_refs,
-  quote_tikhub_connector_price,
-};
+use config_commands::quote_tikhub_connector_price;
 use domain::{AppError, AppErrorStage, AppResult};
 use exports::{ExportIntegrityResult, ExportJobView, ReportView};
 use prompts::{
@@ -373,11 +370,7 @@ pub fn run() {
       test_api_profile,
       activate_api_profile,
       delete_api_profile,
-      list_secret_refs,
-      get_tikhub_connector,
       quote_tikhub_connector_price,
-      list_model_providers,
-      list_model_profiles,
       create_collection_task,
       update_collection_task,
       save_collection_plan,
