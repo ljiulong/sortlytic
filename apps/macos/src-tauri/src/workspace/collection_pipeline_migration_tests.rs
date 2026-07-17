@@ -11,8 +11,7 @@ fn fresh_workspace_creates_v7_pipeline_account_and_pricing_contracts() {
   let summary = create_workspace("v7 采集流水线", &root).expect("工作区应创建");
   let connection = open_workspace_database(root.join(DATABASE_FILE_NAME)).expect("数据库应打开");
 
-  assert_eq!(summary.schema_version, 7);
-  assert_eq!(CURRENT_SCHEMA_VERSION, 7);
+  assert_eq!(summary.schema_version, CURRENT_SCHEMA_VERSION);
   assert_eq!(
     migration_marker(&connection, 7).0,
     "collection_pipeline_accounts"

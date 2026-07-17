@@ -17,7 +17,6 @@ fn fresh_workspace_creates_v6_collection_runtime_snapshot_contract() {
     .expect("workspace database should open");
 
   assert_eq!(summary.schema_version, CURRENT_SCHEMA_VERSION);
-  assert_eq!(CURRENT_SCHEMA_VERSION, 7);
   assert_eq!(
     migration_marker(&connection, 6).0,
     "collection_runtime_snapshot"
