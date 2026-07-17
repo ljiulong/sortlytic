@@ -13,3 +13,9 @@ export const newCollectionFormDefaults = {
   genderFilterEnabled: false,
   genders: [],
 } satisfies Partial<CollectionFormInput>
+
+export const naturalIntentDefault = ''
+
+export function normalizeNaturalIntent(intentText: string) {
+  return intentText.trim()
+}

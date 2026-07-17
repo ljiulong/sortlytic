@@ -24,7 +24,11 @@ import {
   supportsRegionSelection,
   type CollectionDataType,
 } from './collection-options'
-import { newCollectionFormDefaults } from './collection-form-defaults'
+import {
+  naturalIntentDefault,
+  newCollectionFormDefaults,
+  normalizeNaturalIntent,
+} from './collection-form-defaults'
 import type { RuntimeCollectionPlan } from './use-workbench-backend'
 import { type DataType, platformOptions } from './workbench-data'
 
@@ -54,16 +58,7 @@ export function CollectionBuilder({
   onGenerateFormPlan: (values: CollectionFormValues) => Promise<RuntimeCollectionPlan>
   onGenerateNaturalPlan: (intentText: string) => Promise<RuntimeCollectionPlan>
 }) {
-  const [plan, setPlan] = useState<RuntimeCollectionPlan | undefined>(activePlan)
-  const [naturalText, setNaturalText] = useState(
-    '分析中国小红书近 30 天新能源汽车女性车主评论，重点看安全感、补能和售后体验，成本控制在 35 美元以内。',
-  )
-
-  useEffect(() => {
-    if (activePlan) {
-      setPlan(activePlan)
-    }
-  }, [activePlan])
+  const [naturalText, setNaturalText] = useState(naturalIntentDefault)
 
   const {
     register,
@@ -93,13 +88,13 @@ export function CollectionBuilder({
   }, [regionEnabled, setValue])
 
   const submitForm = async (values: CollectionFormValues) => {
-    const nextPlan = await onGenerateFormPlan(values)
-    setPlan(nextPlan)
+    await onGenerateFormPlan(values)
   }
 
   const submitNaturalText = async () => {
-    const nextPlan = await onGenerateNaturalPlan(naturalText)
-    setPlan(nextPlan)
+    const intentText = normalizeNaturalIntent(naturalText)
+    if (!intentText) return
+    await onGenerateNaturalPlan(intentText)
   }
 
   return (
@@ -238,28 +233,32 @@ export function CollectionBuilder({
             <textarea
               id="intent"
               value={naturalText}
+              placeholder="描述平台、采集对象、范围和成本限制"
               onChange={(event) => setNaturalText(event.target.value)}
             />
             <div className="action-row">
-              <button className="primary-button" disabled={isBusy} type="button" onClick={submitNaturalText}>
-                <Sparkles size={16} aria-hidden="true" />
-                解析为计划
-              </button>
-              <button className="ghost-button" disabled={isBusy} type="button" onClick={submitNaturalText}>
-                <RefreshCcw size={16} aria-hidden="true" />
-                重新生成
+              <button
+                className="primary-button"
+                disabled={isBusy || !normalizeNaturalIntent(naturalText)}
+                type="button"
+                onClick={submitNaturalText}
+              >
+                {activePlan
+                  ? <RefreshCcw size={16} aria-hidden="true" />
+                  : <Sparkles size={16} aria-hidden="true" />}
+                {activePlan ? '重新解析' : '解析为计划'}
               </button>
             </div>
           </div>
         </Tabs.Content>
       </Tabs.Root>
 
-      {plan ? (
+      {activePlan ? (
         <CollectionPlanPreview
           actionMessage={actionMessage}
           isBusy={isBusy}
           onConfirmPlan={onConfirmPlan}
-          plan={plan}
+          plan={activePlan}
         />
       ) : (
         <div className="plan-preview">

@@ -4,7 +4,11 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   CollectionPlanPreview,
 } from './CollectionBuilder'
-import { newCollectionFormDefaults } from './collection-form-defaults'
+import {
+  naturalIntentDefault,
+  newCollectionFormDefaults,
+  normalizeNaturalIntent,
+} from './collection-form-defaults'
 import { collectionFormSchema, supportsRegionSelection } from './collection-options'
 import type { RuntimeCollectionPlan } from './use-workbench-backend'
 
@@ -142,6 +146,12 @@ describe('collection form controls', () => {
       maxRecords: undefined,
       budget: undefined,
     })
+  })
+
+  it('自然语言入口不预填具体任务，并在提交前去除首尾空白', () => {
+    expect(naturalIntentDefault).toBe('')
+    expect(normalizeNaturalIntent('  采集公开账号  ')).toBe('采集公开账号')
+    expect(normalizeNaturalIntent('   ')).toBe('')
   })
 
   it('数据类型至少选择一项，且年龄范围使用闭区间校验', () => {
