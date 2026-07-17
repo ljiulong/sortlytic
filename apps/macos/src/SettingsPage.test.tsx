@@ -20,14 +20,6 @@ vi.mock('./ApiProfilesDialog', () => ({
   ),
 }))
 
-vi.mock('./TikhubSettingsPanel', () => ({
-  default: () => <div>旧 TikHub 内联面板</div>,
-}))
-
-vi.mock('./ModelSettingsPanel', () => ({
-  default: () => <div>旧 AI 内联面板</div>,
-}))
-
 vi.mock('./UpdateSettingsPanel', () => ({
   default: () => <section>客户端版本</section>,
 }))
