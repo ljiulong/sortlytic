@@ -34,12 +34,18 @@ type CapturedMutationOptions = {
   onError?: (error: unknown) => unknown
 }
 
+type CapturedQueryOptions = {
+  refetchInterval?: (query: { state: { data?: unknown } }) => number | false
+  refetchIntervalInBackground?: boolean
+}
+
 const invokeMock = vi.hoisted(() => vi.fn())
 const updaterCheckMock = vi.hoisted(() => vi.fn())
 const updaterInstallMock = vi.hoisted(() => vi.fn())
 const relaunchMock = vi.hoisted(() => vi.fn())
 const invalidateQueriesMock = vi.hoisted(() => vi.fn())
 const mutationOptionsMock = vi.hoisted(() => ({ current: [] as CapturedMutationOptions[] }))
+const queryOptionsMock = vi.hoisted(() => ({ current: null as CapturedQueryOptions | null }))
 const stateSettersMock = vi.hoisted(() => ({ current: [] as ReturnType<typeof vi.fn>[] }))
 const queryMock = vi.hoisted(() => ({
   current: {
@@ -77,7 +83,10 @@ vi.mock('@tanstack/react-query', () => ({
       mutateAsync: vi.fn(),
     }
   },
-  useQuery: () => queryMock.current,
+  useQuery: (options: CapturedQueryOptions) => {
+    queryOptionsMock.current = options
+    return queryMock.current
+  },
   useQueryClient: () => ({
     invalidateQueries: invalidateQueriesMock,
   }),
@@ -176,6 +185,7 @@ beforeEach(() => {
   invalidateQueriesMock.mockReset()
   invalidateQueriesMock.mockResolvedValue(undefined)
   mutationOptionsMock.current = []
+  queryOptionsMock.current = null
   stateSettersMock.current = []
   queryMock.current = {
     data: undefined,
@@ -794,6 +804,38 @@ describe('v3 form plan request', () => {
 })
 
 describe('useWorkbenchBackend 数据边界', () => {
+  it('仅在存在排队或运行中的任务时前台轮询真实状态', () => {
+    renderWorkbenchHook()
+    const options = queryOptionsMock.current
+    const refetchInterval = options?.refetchInterval
+
+    expect(refetchInterval).toBeTypeOf('function')
+    expect(refetchInterval?.({
+      state: { data: mapBackendData(workspace, [task], tikhubRegistryFixture(), 1_000) },
+    })).toBe(2_000)
+    expect(refetchInterval?.({
+      state: {
+        data: mapBackendData(
+          workspace,
+          [{ ...task, status: 'running' }],
+          tikhubRegistryFixture(),
+          1_000,
+        ),
+      },
+    })).toBe(2_000)
+    expect(refetchInterval?.({
+      state: {
+        data: mapBackendData(
+          workspace,
+          [{ ...task, status: 'success' }],
+          tikhubRegistryFixture(),
+          1_000,
+        ),
+      },
+    })).toBe(false)
+    expect(options?.refetchIntervalInBackground).toBe(false)
+  })
+
   it('即使 API 配置 JSON 损坏也保留历史任务浏览', async () => {
     vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
     invokeMock.mockImplementation((command: string) => {

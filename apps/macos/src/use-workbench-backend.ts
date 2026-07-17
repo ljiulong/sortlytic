@@ -52,6 +52,7 @@ import {
 } from './workbench-data'
 
 const queryKey = ['workbench-backend']
+const activeTaskRefetchIntervalMs = 2_000
 
 export type CollectionFormPayload = {
   platform: Platform
@@ -226,6 +227,13 @@ export function useWorkbenchBackend() {
     queryKey,
     queryFn: loadBackendWorkbench,
     retry: 1,
+    refetchInterval: (query) => {
+      const current = query.state.data as BackendWorkbenchData | undefined
+      return current?.tasks.some((task) => ['已排队', '运行中'].includes(task.status))
+        ? activeTaskRefetchIntervalMs
+        : false
+    },
+    refetchIntervalInBackground: false,
   })
 
   const generateFormPlanMutation = useMutation({
