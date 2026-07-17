@@ -36,7 +36,22 @@ function readGitHubEvent() {
 function readPushCommitTitles(event) {
   const before = event.before
   const after = event.after || process.env.GITHUB_SHA || 'HEAD'
-  const range = before && !/^0+$/.test(before) ? `${before}..${after}` : after
+  const cutover = execFileSync(
+    'git',
+    ['log', '--diff-filter=A', '--format=%H', '--reverse', '--', ':(top)scripts/validate-english-release.mjs'],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+  ).trim().split(/\r?\n/u)[0]
+  const isAncestor = (ancestor, descendant) => {
+    try {
+      execFileSync('git', ['merge-base', '--is-ancestor', ancestor, descendant], {
+        stdio: ['ignore', 'ignore', 'ignore'],
+      })
+      return true
+    } catch {
+      return false
+    }
+  }
+  const range = selectPushRange({ after, before, cutover, isAncestor })
 
   try {
     const output = execFileSync('git', ['log', '--format=%s', '--no-decorate', range], {
@@ -49,6 +64,18 @@ function readPushCommitTitles(event) {
       `Unable to inspect pushed commits for range ${range}: ${error instanceof Error ? error.message : String(error)}`,
     )
   }
+}
+
+export function selectPushRange({ after, before, cutover, isAncestor }) {
+  if (!cutover) return before && !/^0+$/u.test(before) ? `${before}..${after}` : after
+
+  const cutoverReached = isAncestor(cutover, after)
+  const remoteIncludesCutover = before
+    && !/^0+$/u.test(before)
+    && isAncestor(cutover, before)
+  if (cutoverReached && !remoteIncludesCutover) return `${cutover}^..${after}`
+
+  return before && !/^0+$/u.test(before) ? `${before}..${after}` : after
 }
 
 export function collectReleaseTitles({ eventName = process.env.GITHUB_EVENT_NAME, event = readGitHubEvent() } = {}) {

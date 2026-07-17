@@ -4,7 +4,10 @@ import { dirname } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
-import { validateReleaseTitles } from '../../scripts/validate-english-release.mjs'
+import {
+  selectPushRange,
+  validateReleaseTitles,
+} from '../../scripts/validate-english-release.mjs'
 
 import releaseConfig from '../release.config.mjs'
 
@@ -150,5 +153,27 @@ describe('semantic-release configuration', () => {
   it('blocks non-ASCII release metadata and accepts English titles', () => {
     expect(() => validateReleaseTitles(['feat: add an English feature'])).not.toThrow()
     expect(() => validateReleaseTitles(['feat: 新功能'])).toThrow('Release blocked')
+  })
+
+  it('excludes commits that predate the English metadata policy from the first validated push', () => {
+    const ancestors = new Set(['cutover:after'])
+    const isAncestor = (ancestor: string, descendant: string) => (
+      ancestors.has(`${ancestor}:${descendant}`)
+    )
+
+    expect(selectPushRange({
+      after: 'after',
+      before: 'legacy-remote',
+      cutover: 'cutover',
+      isAncestor,
+    })).toBe('cutover^..after')
+
+    ancestors.add('cutover:current-remote')
+    expect(selectPushRange({
+      after: 'next',
+      before: 'current-remote',
+      cutover: 'cutover',
+      isAncestor,
+    })).toBe('current-remote..next')
   })
 })
