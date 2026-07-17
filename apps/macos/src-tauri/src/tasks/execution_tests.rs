@@ -68,6 +68,35 @@ fn failed_run_can_create_a_new_retry_run() {
 }
 
 #[test]
+fn latest_task_runs_returns_only_the_newest_attempt_per_task() {
+  let (root_path, task, _) = prepared_task_workspace("latest-task-runs");
+  let first = enqueue_task(&root_path, &task.id).expect("task should enqueue");
+  let running = claim_next_task(&root_path)
+    .expect("claim should succeed")
+    .expect("queued task should be claimed");
+  fail_task_run(
+    &root_path,
+    &running.id,
+    "TIKHUB_REQUEST_ERROR",
+    "网络超时",
+    true,
+  )
+  .expect("first attempt should fail");
+  let retry = retry_task(&root_path, &task.id, None).expect("retry should enqueue");
+
+  let latest = list_latest_task_runs(&root_path).expect("latest runs should list");
+
+  assert_ne!(first.id, retry.id);
+  assert_eq!(latest.len(), 1);
+  assert_eq!(latest[0].id, retry.id);
+  assert_eq!(latest[0].task_id, task.id);
+  assert_eq!(latest[0].attempt_number, 2);
+  assert_eq!(latest[0].status, "queued");
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn enqueue_and_retry_materialize_complete_run_step_snapshots() {
   let (root_path, task, plan) = prepared_multi_step_task_workspace("execution-step-snapshot");
 

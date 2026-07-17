@@ -362,6 +362,28 @@ pub fn list_task_logs(
   collect_rows(rows)
 }
 
+pub fn list_latest_task_runs(root_path: impl AsRef<Path>) -> AppResult<Vec<TaskRunView>> {
+  let connection = open_workspace_connection(root_path)?;
+  let mut statement = connection
+    .prepare(
+      "SELECT run.id, run.task_id, run.status, run.started_at, run.ended_at,
+              run.current_stage, run.error_code, run.error_message, run.retryable,
+              run.cost_actual_json, run.plan_id, run.attempt_number, run.claimed_at
+       FROM task_run run
+       WHERE run.attempt_number = (
+         SELECT MAX(candidate.attempt_number)
+         FROM task_run candidate
+         WHERE candidate.task_id = run.task_id
+       )
+       ORDER BY run.started_at DESC, run.id DESC",
+    )
+    .map_err(database_error)?;
+  let rows = statement
+    .query_map([], map_task_run)
+    .map_err(database_error)?;
+  collect_rows(rows)
+}
+
 fn open_workspace_connection(root_path: impl AsRef<Path>) -> AppResult<Connection> {
   open_workspace_database(root_path.as_ref().join(DATABASE_FILE_NAME))
 }
