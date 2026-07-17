@@ -1,8 +1,9 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import TaskQueue from './TaskQueue'
+import TaskQueue, { capabilitiesForStatus } from './TaskQueue'
 import type { WorkbenchRuntimeData } from './use-workbench-backend'
+import type { TaskStatus } from './workbench-data'
 
 const waitingTask: WorkbenchRuntimeData['tasks'][number] = {
   id: 'task-waiting',
@@ -29,6 +30,40 @@ function renderQueue(tasks: WorkbenchRuntimeData['tasks']) {
 }
 
 describe('TaskQueue', () => {
+  it.each<[TaskStatus, boolean, boolean, boolean, boolean]>([
+    ['等待确认', true, true, true, false],
+    ['待人工确认', true, true, false, false],
+    ['已排队', false, true, false, false],
+    ['运行中', false, true, false, false],
+    ['成功', false, false, false, true],
+    ['部分成功', false, false, false, true],
+    ['失败', false, false, false, false],
+  ])('%s 状态使用正确的任务操作权限', (status, canEdit, canCancel, canConfirm, canExport) => {
+    expect(capabilitiesForStatus(status)).toEqual({
+      canEdit,
+      canCancel,
+      canConfirm,
+      canExport,
+    })
+  })
+
+  it('任务卡使用内容区、统计区与底部操作区，不再使用窄列按钮塔', () => {
+    const markup = renderQueue([waitingTask])
+
+    const headerIndex = markup.indexOf('task-card__header')
+    const statsIndex = markup.indexOf('task-card__stats')
+    const footerIndex = markup.indexOf('task-card__footer')
+
+    expect(headerIndex).toBeGreaterThan(-1)
+    expect(statsIndex).toBeGreaterThan(headerIndex)
+    expect(footerIndex).toBeGreaterThan(statsIndex)
+    expect(markup).toContain('task-card__actions')
+    expect(markup).toContain('task-card__export')
+    expect(markup).not.toContain('progress-cell')
+    expect(markup).toContain('role="progressbar"')
+    expect(markup).toContain('aria-valuenow="0"')
+  })
+
   it('等待确认任务提供编辑、取消与确认运行入口', () => {
     const markup = renderQueue([waitingTask])
 
@@ -51,5 +86,13 @@ describe('TaskQueue', () => {
     expect(markup).not.toContain('确认运行')
     expect(markup).toContain('导出')
     expect(markup).not.toMatch(/<button[^>]*disabled=""[^>]*>[^<]*(?:<[^>]+>)*导出/)
+  })
+
+  it('没有真实任务时显示完整空状态', () => {
+    const markup = renderQueue([])
+
+    expect(markup).toContain('task-queue__empty')
+    expect(markup).toContain('还没有可运行的任务')
+    expect(markup).toContain('前往“新建任务”')
   })
 })
