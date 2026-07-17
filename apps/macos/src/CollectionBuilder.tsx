@@ -12,8 +12,9 @@ import {
   Sparkles,
   Wrench,
 } from 'lucide-react'
-import { useForm } from 'react-hook-form'
+import { Controller, useForm } from 'react-hook-form'
 import type { z } from 'zod'
+import AppSelect from './AppSelect'
 import './CollectionBuilder.css'
 import {
   AGE_RANGE_LIMITS,
@@ -43,6 +44,21 @@ const dataTypeLabels: Record<CollectionDataType, DataType> = {
   comments: '评论用户',
 }
 
+const platformSelectOptions = platformOptions.map((platform) => ({
+  value: platform,
+  label: platform,
+}))
+
+const countryRegionSelectOptions = countryRegionOptions.map(({ code, label }) => {
+  const codeSuffix = `（${code}）`
+  return {
+    value: code,
+    label: label.endsWith(codeSuffix) ? label.slice(0, -codeSuffix.length) : label,
+    meta: code,
+    keywords: label,
+  }
+})
+
 export function CollectionBuilder({
   actionMessage,
   activePlan,
@@ -60,6 +76,7 @@ export function CollectionBuilder({
 }) {
   const [naturalText, setNaturalText] = useState(naturalIntentDefault)
   const {
+    control,
     register,
     handleSubmit,
     setValue,
@@ -136,17 +153,21 @@ export function CollectionBuilder({
                   htmlFor="platform"
                   label="平台"
                 >
-                  <select
-                    id="platform"
-                    aria-describedby={errors.platform ? 'platform-error' : undefined}
-                    aria-invalid={Boolean(errors.platform)}
-                    {...register('platform')}
-                  >
-                    <option value="">请选择平台</option>
-                    {platformOptions.map((item) => (
-                      <option key={item} value={item}>{item}</option>
-                    ))}
-                  </select>
+                  <Controller
+                    control={control}
+                    name="platform"
+                    render={({ field }) => (
+                      <AppSelect
+                        id="platform"
+                        ariaDescribedBy={errors.platform ? 'platform-error' : undefined}
+                        invalid={Boolean(errors.platform)}
+                        onChange={field.onChange}
+                        options={platformSelectOptions}
+                        placeholder="请选择平台"
+                        value={field.value ?? ''}
+                      />
+                    )}
+                  />
                 </FormField>
 
                 <fieldset className="collection-builder__choice-fieldset">
@@ -199,18 +220,25 @@ export function CollectionBuilder({
                   label="国家/地区"
                   hint={regionEnabled ? '显示名称，提交标准两位代码。' : '所选平台或数据类型暂不支持地区筛选。'}
                 >
-                  <select
-                    id="region-code"
-                    aria-describedby={errors.regionCode ? 'region-code-error' : undefined}
-                    aria-invalid={Boolean(errors.regionCode)}
-                    disabled={!regionEnabled}
-                    {...register('regionCode')}
-                  >
-                    <option value="">{regionEnabled ? '请选择国家/地区' : '当前不可用'}</option>
-                    {countryRegionOptions.map((item) => (
-                      <option key={item.code} value={item.code}>{item.label}</option>
-                    ))}
-                  </select>
+                  <Controller
+                    control={control}
+                    name="regionCode"
+                    render={({ field }) => (
+                      <AppSelect
+                        id="region-code"
+                        ariaDescribedBy={errors.regionCode ? 'region-code-error' : undefined}
+                        disabled={!regionEnabled}
+                        emptyLabel="没有匹配的国家或地区"
+                        invalid={Boolean(errors.regionCode)}
+                        onChange={field.onChange}
+                        options={countryRegionSelectOptions}
+                        placeholder={regionEnabled ? '请选择国家/地区' : '当前不可用'}
+                        searchable
+                        searchPlaceholder="搜索国家、地区或两位代码"
+                        value={field.value ?? ''}
+                      />
+                    )}
+                  />
                 </FormField>
                 <FormField
                   error={errors.range?.message}

@@ -10,7 +10,11 @@ import {
   newCollectionFormDefaults,
   normalizeNaturalIntent,
 } from './collection-form-defaults'
-import { collectionFormSchema, supportsRegionSelection } from './collection-options'
+import {
+  collectionFormSchema,
+  countryRegionOptions,
+  supportsRegionSelection,
+} from './collection-options'
 import type { RuntimeCollectionPlan } from './use-workbench-backend'
 
 const draftPlan: RuntimeCollectionPlan = {
@@ -191,14 +195,17 @@ describe('collection form controls', () => {
     expect(markup).toContain('尚未生成计划')
   })
 
-  it('国家地区使用可完整浏览的标准代码选择器', () => {
+  it('平台与国家地区使用应用内下拉，且地区代码仍完整', () => {
     const markup = renderBuilder()
+    const regionCodes = countryRegionOptions.map(({ code }) => code)
 
-    expect(markup).toMatch(/<select[^>]*id="region-code"/)
-    expect(markup).toContain('value="CN"')
-    expect(markup).toContain('value="US"')
-    expect(markup).toContain('value="JP"')
+    expect(markup).toMatch(/<button[^>]*id="platform"[^>]*aria-haspopup="listbox"/)
+    expect(markup).toMatch(/<button[^>]*id="region-code"[^>]*aria-haspopup="listbox"/)
+    expect(markup).not.toContain('<select')
     expect(markup).not.toContain('<datalist')
+    expect(regionCodes).toContain('CN')
+    expect(regionCodes).toContain('US')
+    expect(regionCodes).toContain('JP')
   })
 
   it('自然语言入口不预填具体任务，并在提交前去除首尾空白', () => {
