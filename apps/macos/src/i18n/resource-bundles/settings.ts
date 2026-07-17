@@ -238,6 +238,7 @@ const settings: TranslationBundle = {
     'list.savedEyebrow': 'Saved configurations',
     'list.profileCount_one': '{{count}} manageable configuration',
     'list.profileCount_other': '{{count}} manageable configurations',
+    'list.profileCount': '{{count}} manageable configurations',
     'list.activeSelected': 'Active configuration selected',
     'list.activeNotSelected': 'No active configuration selected',
     'list.current': 'Current',
