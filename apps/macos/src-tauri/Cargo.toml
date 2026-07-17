@@ -19,7 +19,6 @@ tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 chrono = { version = "0.4.45", features = ["serde"] }
-keyring = "4.1.5"
 log = "0.4"
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "json", "rustls"] }
 rusqlite = { version = "0.39.0", features = ["bundled", "chrono", "serde_json"] }
@@ -31,10 +30,6 @@ tauri = { version = "2.11.3", features = ["protocol-asset"] }
 tauri-plugin-fs = "2.5.1"
 tauri-plugin-log = "2"
 uuid = { version = "1.23.4", features = ["v4", "serde"] }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-apple-native-keyring-store = { version = "1.0.0", features = ["keychain"] }
-keyring-core = "1.0.0"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-process = "2.3.1"
