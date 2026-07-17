@@ -312,9 +312,13 @@ describe('ApiProfilesDialog 列表优先界面', () => {
     expect(markup).toContain('gpt-4.1-mini')
     expect(markup).toContain('https://api.openai.com/v1')
     expect(markup).toContain('sk-p••••••C7x9')
-    expect(markup).toContain('完整性校验通过')
+    expect(markup).toContain('真实连通性已验证')
     expect(markup).toContain('重新校验')
+    expect(markup).toContain('AI 配置测试会发送最小模型请求验证真实连通性')
+    expect(markup).toContain('自然语言计划与提示词回归会调用当前配置')
     expect(markup).not.toContain('配置测试成功')
+    expect(markup).not.toContain('只做完整性校验')
+    expect(markup).not.toContain('规则引擎不会调用模型')
   })
 
   it('加载中与错误态不会错误显示最终空状态', () => {
