@@ -24,6 +24,7 @@ import { CollectionBuilder, StatusPill } from './CollectionBuilder'
 import AppLogo from './AppLogo'
 import GuidePage from './GuidePage'
 import ModelSettingsPanel from './ModelSettingsPanel'
+import TaskQueue from './TaskQueue'
 import ThemeToggle from './ThemeToggle'
 import TikhubSettingsPanel from './TikhubSettingsPanel'
 import UpdateSettingsPanel from './UpdateSettingsPanel'
@@ -34,7 +35,6 @@ import {
 } from './navigation'
 import {
   type SocialRecord,
-  type TaskStatus,
 } from './workbench-data'
 const queryClient = new QueryClient()
 const navigationIcons: Record<PrimaryNavKey, typeof House> = {
@@ -158,7 +158,14 @@ function Workbench() {
         ) : activeNav === 'tasks' ? (
           <section className="main-grid" aria-label="任务">
             <div className="main-column">
-              <TaskQueue tasks={data.tasks} />
+              <TaskQueue
+                isBusy={backend.isBusy}
+                tasks={data.tasks}
+                onCancelTask={backend.cancelTask}
+                onConfirmTask={backend.confirmTask}
+                onExportTask={backend.exportTask}
+                onUpdateTask={backend.updateTask}
+              />
             </div>
           </section>
         ) : (
@@ -332,43 +339,6 @@ function ConnectionStrip({
             </article>
           )
         })}
-      </div>
-    </section>
-  )
-}
-
-function TaskQueue({
-  tasks,
-}: {
-  tasks: WorkbenchRuntimeData['tasks']
-}) {
-  return (
-    <section className="glass-panel">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">任务队列</p>
-          <h2>运行、失败与待确认边界</h2>
-        </div>
-      </div>
-      <div className="task-list">
-        {tasks.length === 0 ? <p className="muted-text">暂无任务，生成采集计划后会出现在这里。</p> : null}
-        {tasks.map((task) => (
-          <article className="task-row" key={task.id}>
-            <div>
-              <h3>{task.name}</h3>
-              <p>
-                {task.platform} · {task.source} · {task.records.toLocaleString()} 条
-              </p>
-            </div>
-            <StatusPill tone={toneForStatus(task.status)} label={task.status} />
-            <div className="progress-cell">
-              <div className="progress-bar" aria-label={`${task.name} 进度 ${task.progress}%`}>
-                <span style={{ width: `${task.progress}%` }} />
-              </div>
-              <strong>{task.cost}</strong>
-            </div>
-          </article>
-        ))}
       </div>
     </section>
   )
@@ -561,12 +531,6 @@ function PromptRegressionPanel({
   )
 }
 
-function toneForStatus(status: TaskStatus) {
-  if (status === '成功') return 'success'
-  if (status === '失败') return 'danger'
-  if (status === '待人工确认' || status === '等待确认') return 'warning'
-  return 'info'
-}
 function toneForRecord(status: SocialRecord['status']) {
   if (status === '已校验') return 'success'
   if (status === '证据不足') return 'danger'
