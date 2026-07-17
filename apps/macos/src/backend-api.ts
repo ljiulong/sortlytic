@@ -39,26 +39,6 @@ export type SecretRefView = {
   last_test_status?: string | null
 }
 
-export type SecretConnectionTestResult = {
-  secret_ref_id: string
-  success: boolean
-  message: string
-  tested_at: string
-}
-
-export type TikhubConnectionTestResult = {
-  success: boolean
-  base_url: string
-  masked_email?: string | null
-  balance?: number | null
-  free_credit?: number | null
-  available_credit?: number | null
-  email_verified?: boolean | null
-  api_key_status?: number | null
-  daily_usage_json: Record<string, unknown>
-  message: string
-}
-
 export type TikhubPriceQuote = {
   endpoint: string
   request_per_day: number
@@ -66,12 +46,6 @@ export type TikhubPriceQuote = {
   total_price: number
   currency: string
   quote_json: Record<string, unknown>
-}
-
-export type TikhubConnectorInput = {
-  secret_ref_id?: string | null
-  base_url: string
-  enabled: boolean
 }
 
 export type TikhubConnectorView = {
@@ -103,55 +77,6 @@ export type ModelProviderView = {
   health_check_json: Record<string, unknown>
   created_at: string
   updated_at: string
-}
-
-export type ModelProviderInput = {
-  provider_id: string
-  display_name: string
-  enabled?: boolean
-  auth_type: 'api_key' | 'none'
-  secret_ref_id?: string | null
-  base_url?: string | null
-  api_format: 'openai_compatible' | 'anthropic_messages' | 'gemini' | 'ollama'
-  region?: string | null
-  cost_policy_json?: Record<string, unknown> | null
-  rate_limit_policy_json?: Record<string, unknown> | null
-  health_check_json?: Record<string, unknown> | null
-}
-
-export type ModelProfileInput = {
-  provider_id: string
-  model_id: string
-  display_name: string
-  capabilities_json?: Record<string, unknown> | null
-  context_window?: number | null
-  supports_structured_output?: boolean
-  supports_streaming?: boolean
-  supports_tools?: boolean
-  supports_vision?: boolean
-  enabled?: boolean
-}
-
-export type ModelProfileView = {
-  id: string
-  provider_id: string
-  model_id: string
-  display_name: string
-  capabilities_json: Record<string, unknown>
-  context_window?: number | null
-  supports_structured_output: boolean
-  supports_streaming: boolean
-  supports_tools: boolean
-  supports_vision: boolean
-  enabled: boolean
-  created_at: string
-  updated_at: string
-}
-
-export type ProviderTestResult = {
-  provider_id: string
-  success: boolean
-  message: string
 }
 
 export type CollectionTaskView = {
@@ -284,59 +209,8 @@ export function listSecretRefs(providerType?: string) {
   })
 }
 
-export function saveSecret(input: {
-  provider_type: string
-  provider_id: string
-  secret: string
-  alias?: string | null
-}) {
-  return invoke<SecretRefView>('save_secret', {
-    providerType: input.provider_type,
-    providerId: input.provider_id,
-    secret: input.secret,
-    alias: input.alias ?? null,
-    rootPath: null,
-  })
-}
-
-export function updateSecret(secretRefId: string, secret: string) {
-  return invoke<SecretRefView>('update_secret', {
-    secretRefId,
-    secret,
-    rootPath: null,
-  })
-}
-
-export function testSecretConnection(secretRefId: string) {
-  return invoke<SecretConnectionTestResult>('test_secret_connection', {
-    secretRefId,
-    rootPath: null,
-  })
-}
-
-export function testTikhubConnection(secretRefId: string, baseUrl: string) {
-  return invoke<TikhubConnectionTestResult>('test_tikhub_connection', {
-    secretRefId,
-    baseUrl,
-    rootPath: null,
-  })
-}
-
 export function getTikhubConnector() {
   return invoke<TikhubConnectorView | null>('get_tikhub_connector', {
-    rootPath: null,
-  })
-}
-
-export function saveTikhubConnector(input: TikhubConnectorInput) {
-  return invoke<TikhubConnectorView>('save_tikhub_connector', {
-    input,
-    rootPath: null,
-  })
-}
-
-export function testTikhubConnector() {
-  return invoke<TikhubConnectionTestResult>('test_tikhub_connector', {
     rootPath: null,
   })
 }
@@ -352,51 +226,6 @@ export function quoteTikhubConnectorPrice(endpoint: string, requestPerDay: numbe
 export function listModelProviders(enabled?: boolean) {
   return invoke<ModelProviderView[]>('list_model_providers', {
     enabled: enabled ?? null,
-    rootPath: null,
-  })
-}
-
-export function createModelProvider(input: ModelProviderInput) {
-  return invoke<ModelProviderView>('create_model_provider', {
-    input,
-    rootPath: null,
-  })
-}
-
-export function updateModelProvider(providerId: string, input: ModelProviderInput) {
-  return invoke<ModelProviderView>('update_model_provider', {
-    providerId,
-    input,
-    rootPath: null,
-  })
-}
-
-export function upsertModelProfile(input: ModelProfileInput) {
-  return invoke<ModelProfileView>('upsert_model_profile', {
-    input,
-    rootPath: null,
-  })
-}
-
-export function setDefaultModel(providerId: string, modelId: string) {
-  return invoke<boolean>('set_default_model', {
-    providerId,
-    modelId,
-    rootPath: null,
-  })
-}
-
-export function setActiveModelProvider(providerId: string) {
-  return invoke<boolean>('set_active_model_provider', {
-    providerId,
-    rootPath: null,
-  })
-}
-
-export function testModelProvider(providerId: string, modelId?: string) {
-  return invoke<ProviderTestResult>('test_model_provider', {
-    providerId,
-    modelId: modelId ?? null,
     rootPath: null,
   })
 }
