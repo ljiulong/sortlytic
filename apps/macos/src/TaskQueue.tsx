@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import AppSelect from './AppSelect'
 import { StatusPill } from './CollectionBuilder'
 import { i18n as appI18n } from './i18n'
+import TaskRunLogPanel from './TaskRunLogPanel'
 import type { TaskExportInput, WorkbenchRuntimeData } from './use-workbench-backend'
 import type { TaskStatus } from './workbench-data'
 import './TaskQueue.css'
@@ -354,6 +355,7 @@ function TaskQueue({
                           : 'taskQueue.retryableNo')}</dd>
                       </div>
                     </dl>
+                    <TaskRunLogPanel key={task.latestRun.id} runId={task.latestRun.id} />
                   </section>
                 ) : null}
 

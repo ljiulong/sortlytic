@@ -152,6 +152,8 @@ describe('TaskQueue', () => {
     expect(markup).toContain('TikHub 请求超时')
     expect(markup).toContain('<dt>可重试</dt><dd>是</dd>')
     expect(markup).toContain('dateTime="2026-07-17T08:00:00Z"')
+    expect(markup).toContain('查看运行日志')
+    expect(markup).toContain('aria-controls=')
   })
 
   it('没有真实任务时显示完整空状态', () => {
