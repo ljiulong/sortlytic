@@ -121,6 +121,64 @@
   min-width: 0;
 }
 
+.settings-page__api-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.settings-page__api-button {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  min-height: 54px;
+  padding: 10px 12px;
+  color: var(--text-strong);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-panel);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 140ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.settings-page__api-button > svg {
+  color: var(--text-faint);
+}
+
+.settings-page__api-button-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.settings-page__api-button:active {
+  transform: scale(0.98);
+}
+
+.settings-page__api-button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@media (hover: hover) {
+  .settings-page__api-button:hover {
+    background: var(--surface-hover);
+    border-color: var(--border);
+  }
+}
+
 .settings-page__group-body > .glass-panel {
   padding: 0;
   background: transparent;
@@ -200,7 +258,8 @@
 }
 
 @media (max-width: 680px) {
-  .settings-page__status dl {
+  .settings-page__status dl,
+  .settings-page__api-actions {
     grid-template-columns: 1fr;
   }
 

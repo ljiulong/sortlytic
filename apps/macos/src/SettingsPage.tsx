@@ -1,17 +1,48 @@
-import { HardDrive, KeyRound, Sparkles } from 'lucide-react'
+import { Bot, ChevronRight, HardDrive, KeyRound, Server } from 'lucide-react'
+import { useReducer } from 'react'
+import ApiProfilesDialog from './ApiProfilesDialog'
 import { StatusPill } from './CollectionBuilder'
-import ModelSettingsPanel from './ModelSettingsPanel'
-import TikhubSettingsPanel from './TikhubSettingsPanel'
 import UpdateSettingsPanel from './UpdateSettingsPanel'
+import type {
+  ApiProfileKind,
+  ApiProfileRegistryView,
+  ApiProfileView,
+} from './api-profiles'
+import { useApiProfiles } from './use-api-profiles'
 import type { useWorkbenchBackend } from './use-workbench-backend'
 import './SettingsPage.css'
 
 type SettingsBackend = ReturnType<typeof useWorkbenchBackend>
+type SettingsApiDialogAction =
+  | { type: 'open'; kind: ApiProfileKind }
+  | { type: 'close' }
+
+function settingsApiDialogReducer(
+  _state: ApiProfileKind | null,
+  action: SettingsApiDialogAction,
+): ApiProfileKind | null {
+  return action.type === 'open' ? action.kind : null
+}
 
 function SettingsPage({ backend }: { backend: SettingsBackend }) {
   const data = backend.data
-  const hasTikhub = Boolean(data.tikhubConnector?.secret_ref_id)
-  const activeModel = data.modelProviders.find((provider) => provider.enabled)
+  const apiProfiles = useApiProfiles()
+  const [apiDialogKind, dispatchApiDialog] = useReducer(
+    settingsApiDialogReducer,
+    null,
+  )
+  const tikhubStatus = apiProfileStatus(
+    'tikhub',
+    apiProfiles.registry,
+    apiProfiles.registryQuery.isLoading,
+    Boolean(apiProfiles.registryQuery.error),
+  )
+  const aiStatus = apiProfileStatus(
+    'ai',
+    apiProfiles.registry,
+    apiProfiles.registryQuery.isLoading,
+    Boolean(apiProfiles.registryQuery.error),
+  )
 
   return (
     <div className="settings-page">
@@ -23,13 +54,13 @@ function SettingsPage({ backend }: { backend: SettingsBackend }) {
         <dl>
           <SettingsStatus
             label="数据来源"
-            value={hasTikhub ? 'TikHub 已保存' : 'TikHub 待配置'}
-            tone={hasTikhub ? 'success' : 'warning'}
+            value={tikhubStatus.value}
+            tone={tikhubStatus.tone}
           />
           <SettingsStatus
-            label="AI 处理"
-            value={activeModel ? `${activeModel.display_name} 当前使用` : '模型 API 待配置'}
-            tone={activeModel ? 'success' : 'warning'}
+            label="AI API"
+            value={aiStatus.value}
+            tone={aiStatus.tone}
           />
           <SettingsStatus
             label="本地后端"
@@ -41,30 +72,38 @@ function SettingsPage({ backend }: { backend: SettingsBackend }) {
 
       <SettingsGroup
         icon={KeyRound}
-        eyebrow="数据来源"
-        title="TikHub"
-        description="管理数据 API、账号状态和可用额度。"
+        eyebrow="API 配置"
+        title="数据来源与 AI"
+        description="在独立列表中查看、验证和切换当前配置。"
       >
-        <TikhubSettingsPanel
-          connector={data.tikhubConnector}
-          isBusy={backend.isBusy}
-          result={backend.tikhubTestResult}
-          onSaveAndTest={backend.saveAndTestTikhubToken}
-        />
-      </SettingsGroup>
-
-      <SettingsGroup
-        icon={Sparkles}
-        eyebrow="AI 处理"
-        title="模型供应商"
-        description="配置结构化输出使用的模型、地址和安全密钥。"
-      >
-        <ModelSettingsPanel
-          {...backend}
-          isPending={backend.isModelSettingsPending}
-          providers={data.modelProviders}
-          result={backend.modelValidationResult}
-        />
+        <div className="settings-page__api-actions">
+          <button
+            aria-haspopup="dialog"
+            className="settings-page__api-button"
+            data-api-profile-kind="tikhub"
+            type="button"
+            onClick={() => dispatchApiDialog({ type: 'open', kind: 'tikhub' })}
+          >
+            <span className="settings-page__api-button-icon" aria-hidden="true">
+              <Server size={17} />
+            </span>
+            <span>配置 TikHub API</span>
+            <ChevronRight size={16} aria-hidden="true" />
+          </button>
+          <button
+            aria-haspopup="dialog"
+            className="settings-page__api-button"
+            data-api-profile-kind="ai"
+            type="button"
+            onClick={() => dispatchApiDialog({ type: 'open', kind: 'ai' })}
+          >
+            <span className="settings-page__api-button-icon" aria-hidden="true">
+              <Bot size={17} />
+            </span>
+            <span>配置 AI API</span>
+            <ChevronRight size={16} aria-hidden="true" />
+          </button>
+        </div>
       </SettingsGroup>
 
       <SettingsGroup
@@ -83,8 +122,43 @@ function SettingsPage({ backend }: { backend: SettingsBackend }) {
           isTauriApp={data.runtimeMode === 'backend'}
         />
       </SettingsGroup>
+
+      {apiDialogKind ? (
+        <ApiProfilesDialog
+          isOpen
+          kind={apiDialogKind}
+          onClose={() => dispatchApiDialog({ type: 'close' })}
+        />
+      ) : null}
     </div>
   )
+}
+
+function apiProfileStatus(
+  kind: ApiProfileKind,
+  registry: ApiProfileRegistryView | undefined,
+  isLoading: boolean,
+  hasError: boolean,
+) {
+  const noun = kind === 'tikhub' ? 'TikHub' : 'AI API'
+  if (isLoading) return { value: `${noun} 正在读取`, tone: 'warning' }
+  if (hasError || !registry) return { value: `${noun} 配置读取失败`, tone: 'danger' }
+
+  const profiles: ApiProfileView[] = kind === 'tikhub'
+    ? registry.tikhubProfiles
+    : registry.aiProfiles
+  const activeProfileId = registry.activeProfileIds[kind]
+  const activeProfile = profiles.find((profile) => profile.id === activeProfileId)
+  if (activeProfile?.status === 'success') {
+    return { value: `${activeProfile.name} 当前配置`, tone: 'success' }
+  }
+  if (profiles.length === 0) {
+    return { value: `${noun} 待配置`, tone: 'warning' }
+  }
+  if (profiles.some((profile) => profile.status === 'needs_rebind')) {
+    return { value: `${noun} 需重新输入`, tone: 'warning' }
+  }
+  return { value: `${noun} 待验证或选择`, tone: 'warning' }
 }
 
 function SettingsStatus({
@@ -179,4 +253,8 @@ function toneForHealth(health: string) {
   return 'success'
 }
 
-export default SettingsPage
+const SettingsPageWithTestUtils = Object.assign(SettingsPage, {
+  testUtils: { settingsApiDialogReducer },
+})
+
+export default SettingsPageWithTestUtils
