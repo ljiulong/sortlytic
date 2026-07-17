@@ -143,7 +143,9 @@ where
   let request = request.with_idempotency_key(idempotency_key)?;
   let requested_at = Utc::now().to_rfc3339();
   mark_checkpoint_requesting(connection, &checkpoint_id, &requested_at)?;
-  let page = match fetch_page(&request) {
+  let page_result = fetch_page(&request);
+  super::ensure_run_accepts_response(root_path, run_id)?;
+  let page = match page_result {
     Ok(page) => page,
     Err(error) if is_isolated_target_failure(&error) => {
       persist_target_failure(

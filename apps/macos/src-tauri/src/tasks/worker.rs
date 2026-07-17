@@ -15,8 +15,8 @@ use crate::tikhub::{
 };
 
 use super::{
-  claim_next_task, complete_task_run, database_error, fail_task_run, open_workspace_connection,
-  task_error, TaskRunView,
+  claim_next_task, complete_task_run, database_error, fail_task_run, get_task_run,
+  open_workspace_connection, task_error, TaskRunView,
 };
 
 mod pipeline;
@@ -55,6 +55,10 @@ pub fn execute_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRu
   let result = execute_claimed_run(root_path, &run);
   match result {
     Ok(()) => complete_task_run(root_path, &run.id, Value::Null).map(Some),
+    Err(error) if error.code == AppErrorCode::Cancelled => {
+      let connection = open_workspace_connection(root_path)?;
+      get_task_run(&connection, &run.id).map(Some)
+    }
     Err(error) => {
       let error_code = error
         .safe_details
@@ -314,7 +318,9 @@ where
     let requested_at = Utc::now().to_rfc3339();
     mark_checkpoint_requesting(&connection, &checkpoint_id, &requested_at)?;
 
-    let page = match fetch_page(&request) {
+    let page_result = fetch_page(&request);
+    ensure_run_accepts_response(root_path, &run_id)?;
+    let page = match page_result {
       Ok(page) => page,
       Err(error) => {
         mark_checkpoint_uncertain(&connection, &checkpoint_id, &error.message)?;
@@ -418,6 +424,23 @@ where
     cursor = page.next_cursor;
     page_index += 1;
   }
+}
+
+pub(super) fn ensure_run_accepts_response(root_path: &Path, run_id: &str) -> AppResult<()> {
+  let connection = open_workspace_connection(root_path)?;
+  let current = get_task_run(&connection, run_id)?;
+  if current.status == "running" {
+    return Ok(());
+  }
+  if current.status == "cancelled" {
+    return Err(AppError::new(
+      AppErrorCode::Cancelled,
+      "任务已取消；已发出的远端请求可能仍已完成并产生费用，返回数据不会写入本地",
+      AppErrorStage::Collection,
+      false,
+    ));
+  }
+  Err(task_error("任务状态已变化，远端响应不会写入本地"))
 }
 
 pub(super) fn persist_step_accounts(

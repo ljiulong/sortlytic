@@ -654,6 +654,38 @@ fn worker_rejects_cost_before_recording_an_outbound_request() {
 }
 
 #[test]
+fn worker_treats_cancellation_during_an_inflight_request_as_cancelled() {
+  let root = std::env::temp_dir().join(format!("worker-inflight-cancel-{}", Uuid::new_v4()));
+  create_workspace("执行中取消测试", &root).expect("workspace should be created");
+  install_successful_tikhub_profile(&root).expect("TikHub profile should install");
+  let (task, _) = create_confirmed_item_detail_task(&root);
+  enqueue_task(&root, &task.id).expect("task should be queued");
+  let run = claim_next_task(&root)
+    .expect("worker should claim the task")
+    .expect("queued task should exist");
+
+  let error = execute_claimed_run_with_fetcher(&root, &run, |_request| {
+    cancel_task(&root, &task.id).expect("in-flight task should cancel");
+    Ok(CollectionPage {
+      records: vec![json!({"aweme_id": "video-1", "desc": "late response"})],
+      next_cursor: None,
+      has_more: false,
+      raw_response: json!({"code": 200, "data": {"aweme_id": "video-1"}}),
+    })
+  })
+  .expect_err("a cancelled run must not persist or complete the late response");
+
+  assert_eq!(error.code, AppErrorCode::Cancelled);
+  let connection = super::open_workspace_connection(&root).expect("database should open");
+  assert_eq!(
+    get_task_run(&connection, &run.id).unwrap().status,
+    "cancelled"
+  );
+  assert_eq!(get_task(&root, &task.id).unwrap().status, "cancelled");
+  std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn worker_marks_checkpoint_uncertain_when_record_persistence_fails() {
   let root = std::env::temp_dir().join(format!("worker-persist-failure-{}", Uuid::new_v4()));
   create_workspace("执行器落库失败测试", &root).expect("workspace should be created");
