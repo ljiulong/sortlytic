@@ -10,7 +10,9 @@ import {
   deleteTask,
   getLatestCollectionPlan,
   installAppUpdate,
+  listLatestTaskRuns,
   quoteTikhubConnectorPrice,
+  type TaskRunView,
   updateCollectionTask,
   type WorkspaceSummary,
 } from './backend-api'
@@ -199,6 +201,16 @@ beforeEach(() => {
 })
 
 describe('任务页动作', () => {
+  it('通过单个批量命令读取每条任务的最新运行状态', async () => {
+    invokeMock.mockResolvedValue([])
+
+    await listLatestTaskRuns()
+
+    expect(invokeMock).toHaveBeenCalledWith('list_latest_task_runs', {
+      rootPath: null,
+    })
+  })
+
   it('使用稳定的 Tauri 命令读取、更新、取消并删除指定任务', async () => {
     invokeMock.mockResolvedValue({})
 
@@ -559,6 +571,43 @@ describe('backendErrorMessage', () => {
 })
 
 describe('mapBackendData', () => {
+  it('把最新运行阶段、安全错误和重试状态关联到对应任务', () => {
+    const run: TaskRunView = {
+      id: 'run-2',
+      task_id: task.id,
+      plan_id: 'plan-1',
+      attempt_number: 2,
+      claimed_at: '2026-07-12T00:01:00Z',
+      status: 'failed',
+      started_at: '2026-07-12T00:01:00Z',
+      ended_at: '2026-07-12T00:02:00Z',
+      current_stage: '持久化采集结果',
+      error_code: 'TIKHUB_REQUEST_ERROR',
+      error_message: 'TikHub 请求超时',
+      retryable: true,
+      cost_actual_json: {},
+    }
+    const result = mapBackendData(
+      workspace,
+      [{ ...task, status: 'failed' }],
+      tikhubRegistryFixture(),
+      1_000,
+      [run],
+    )
+
+    expect(result.tasks[0]?.latestRun).toEqual({
+      id: 'run-2',
+      attemptNumber: 2,
+      currentStage: '持久化采集结果',
+      errorCode: 'TIKHUB_REQUEST_ERROR',
+      errorMessage: 'TikHub 请求超时',
+      retryable: true,
+      startedAt: '2026-07-12T00:01:00Z',
+      endedAt: '2026-07-12T00:02:00Z',
+      status: 'failed',
+    })
+  })
+
   it('不会把浏览器演示数据伪装成真实工作区结果', () => {
     const result = mapBackendData(
       workspace,

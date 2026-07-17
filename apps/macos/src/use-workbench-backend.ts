@@ -15,11 +15,13 @@ import {
   getLatestCollectionPlan,
   type GenerateFormPlanInput,
   getBackendStatus,
+  listLatestTaskRuns,
   listTasks,
   saveCollectionPlan,
   type CollectionPlanView,
   type CollectionTaskView,
   type ExportJobView,
+  type TaskRunView,
   type WorkspaceSummary,
   updateCollectionTask,
 } from './backend-api'
@@ -120,6 +122,17 @@ export type WorkbenchRuntimeData = {
     cost: string
     requestCount?: number
     dataTypeCode?: string
+    latestRun?: {
+      id: string
+      attemptNumber: number
+      status: string
+      currentStage?: string | null
+      errorCode?: string | null
+      errorMessage?: string | null
+      retryable: boolean
+      startedAt: string
+      endedAt?: string | null
+    }
   }>
   records: SocialRecord[]
   promptRuns: Array<{ name: string; status: '通过' | '失败'; provider: string; diff: string }>
@@ -385,13 +398,14 @@ export async function loadBackendWorkbench(): Promise<BackendWorkbenchData> {
   }
 
   const workspace = await ensureDefaultWorkspace()
-  const [status, tasks, registry] = await Promise.all([
+  const [status, tasks, latestRuns, registry] = await Promise.all([
     getBackendStatus(),
     listTasks(),
+    listLatestTaskRuns().catch(() => []),
     getApiProfileRegistry().catch(() => null),
   ])
 
-  return mapBackendData(workspace, tasks, registry, status.uptime_ms)
+  return mapBackendData(workspace, tasks, registry, status.uptime_ms, latestRuns)
 }
 
 async function createFormPlan(values: CollectionFormPayload): Promise<RuntimeCollectionPlan> {
@@ -472,11 +486,14 @@ export function mapBackendData(
   tasks: CollectionTaskView[],
   registry: ApiProfileRegistryView | null,
   uptimeMs: number,
+  latestRuns: TaskRunView[] = [],
 ): BackendWorkbenchData {
   const latestTaskId = tasks[0]?.id
   const pendingCount = tasks.filter((task) => task.status === 'waiting_confirmation').length
   const queuedCount = tasks.filter((task) => task.status === 'queued').length
   const requestCount = tasks.reduce((total, task) => total + numberFromJson(task.cost_estimate_json), 0)
+
+  const latestRunByTask = new Map(latestRuns.map((run) => [run.task_id, run]))
 
   return {
     workspace: {
@@ -492,7 +509,26 @@ export function mapBackendData(
       { label: '预计请求', value: String(requestCount), delta: `${queuedCount} 个已入队`, tone: 'warning' },
       { label: '证据覆盖', value: '未计算', delta: '暂无真实记录', tone: 'info' },
     ],
-    tasks: tasks.map(mapTaskRow),
+    tasks: tasks.map((task) => {
+      const row = mapTaskRow(task)
+      const run = latestRunByTask.get(task.id)
+      return {
+        ...row,
+        latestRun: run
+          ? {
+              id: run.id,
+              attemptNumber: run.attempt_number,
+              status: run.status,
+              currentStage: run.current_stage,
+              errorCode: run.error_code,
+              errorMessage: run.error_message,
+              retryable: run.retryable,
+              startedAt: run.started_at,
+              endedAt: run.ended_at,
+            }
+          : undefined,
+      }
+    }),
     records: [],
     promptRuns: [],
     latestTaskId,
@@ -524,7 +560,7 @@ function buildConnections(registry: ApiProfileRegistryView | null) {
     (profile) => profile.status === 'needs_rebind',
   )
     ? '需重新绑定'
-    : registry.aiProfiles.length > 0 ? '待选择' : '本地规则'
+    : registry.aiProfiles.length > 0 ? '待选择' : '未配置'
 
   return [
     {
@@ -545,7 +581,7 @@ function buildConnections(registry: ApiProfileRegistryView | null) {
       icon: 'bot',
       meta: activeAi
         ? `${activeAi.name} · ${activeAi.defaultModelId}`
-        : '当前自然语言计划仍使用本地规则',
+        : '请在设置中配置并测试真实 AI 模型',
     },
     webhookConnection(),
   ] satisfies WorkbenchRuntimeData['connections']

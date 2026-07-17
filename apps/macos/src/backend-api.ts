@@ -100,6 +100,9 @@ export type CollectionPlanView = {
 export type TaskRunView = {
   id: string
   task_id: string
+  plan_id?: string | null
+  attempt_number: number
+  claimed_at?: string | null
   status: string
   started_at: string
   ended_at?: string | null
@@ -207,6 +210,10 @@ export function listTasks(status?: string) {
     status: status ?? null,
     rootPath: null,
   })
+}
+
+export function listLatestTaskRuns() {
+  return invoke<TaskRunView[]>('list_latest_task_runs', { rootPath: null })
 }
 
 export function createCollectionTask(input: {
