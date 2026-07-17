@@ -595,6 +595,11 @@ function translateMetricDelta(t: DashboardT, delta: string) {
     return t('metric.delta.queued', { count: numericInterpolationValue(queuedMatch[1]) })
   }
 
+  const recordsMatch = delta.match(/^records_available:(\d[\d,.]*)$/)
+  if (recordsMatch) {
+    return t('metric.delta.recordsAvailable', { count: numericInterpolationValue(recordsMatch[1]) })
+  }
+
   const validatedMatch =
     delta.match(/^(\d+(?:\.\d+)?)% 已校验$/) ?? delta.match(/^validated:(\d+(?:\.\d+)?)$/)
   if (validatedMatch) {

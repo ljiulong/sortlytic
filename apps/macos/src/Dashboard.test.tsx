@@ -2,6 +2,7 @@ import { createElement, type ComponentProps } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import Dashboard from './Dashboard'
+import { i18n } from './i18n'
 
 const baseProps: ComponentProps<typeof Dashboard> = {
   workspace: {
@@ -45,6 +46,22 @@ describe('Dashboard', () => {
 
     expect(markup).toContain('data-available="false"')
     expect(markup).toContain('正在读取真实数据')
+  })
+
+  it('真实入库记录指标按当前语言显示覆盖任务数', async () => {
+    const metrics = [{
+      label: '入库记录',
+      value: '42',
+      delta: 'records_available:2',
+      tone: 'success' as const,
+    }]
+
+    await i18n.changeLanguage('zh-CN')
+    expect(renderDashboard({ metrics })).toContain('来自 2 个任务')
+
+    await i18n.changeLanguage('en-US')
+    expect(renderDashboard({ metrics })).toContain('Across 2 tasks')
+    await i18n.changeLanguage('zh-CN')
   })
 
   it('运行概览的主指标不使用反相黑底', () => {
