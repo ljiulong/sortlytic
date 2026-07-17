@@ -96,6 +96,8 @@ const settings: TranslationBundle = {
     'list.emptyDescription': '先返回列表确认当前为空，再从下方新增第一条命名配置。',
     'list.savedEyebrow': '已保存配置',
     'list.profileCount': '{{count}} 条可管理配置',
+    'list.profileCount_one': '{{count}} 条可管理配置',
+    'list.profileCount_other': '{{count}} 条可管理配置',
     'list.activeSelected': '已选择当前配置',
     'list.activeNotSelected': '尚未选择当前配置',
     'list.current': '当前',
