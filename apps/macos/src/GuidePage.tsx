@@ -6,6 +6,7 @@ import {
   MonitorCheck,
   ShieldCheck,
 } from 'lucide-react'
+import './GuidePage.css'
 
 type GuidePageProps = {
   onOpenSettings: () => void
@@ -22,169 +23,152 @@ const setupSteps = [
   },
   {
     title: '添加到本地应用',
-    detail: '回到本应用的 TikHub 设置，选择 API 域名，粘贴 Token，然后点击保存并测试。',
+    detail: '在 Sortlytic 设置中选择适合当前网络的 API 域名，粘贴 Token，然后保存并测试真实账号与额度。',
   },
   {
     title: '先小样本验证',
-    detail: '用 10 到 50 条记录做首次采集，确认平台、关键词、国家地区和成本上限都正确后再扩大任务。',
+    detail: '首次使用 10 到 50 条记录，确认平台、国家地区、筛选条件和成本上限正确后再扩大任务。',
   },
 ]
 
 const safetyChecks = [
   'Token 只保存在本机系统安全存储中，界面不明文回显。',
-  '请求头格式为 Authorization: Bearer YOUR_API_KEY。',
   '中国大陆网络优先尝试 api.tikhub.dev，国际网络优先尝试 api.tikhub.io。',
-  '不同端点价格不同，正式采集前先看 API Marketplace 和价格说明。',
+  '不同端点价格不同，正式采集前先确认 API Marketplace 与实时计价。',
+  '首次任务使用小样本，并在任务页确认运行后再产生正式采集费用。',
+]
+
+const officialResources = [
+  { href: 'https://user.tikhub.io/register', label: '创建 TikHub 账号' },
+  { href: 'https://user.tikhub.io/login', label: '登录用户中心' },
+  { href: 'https://docs.tikhub.io/', label: '查看 API 文档' },
+  { href: 'https://tikhub.io/getting-started', label: '首次调用指南' },
+  { href: 'https://tikhub.io/pricing', label: '价格与免费额度' },
 ]
 
 function GuidePage({ onOpenSettings }: GuidePageProps) {
   return (
-    <section className="main-grid" aria-label="使用指南">
-      <div className="main-column">
-        <section className="glass-panel">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">使用指南</p>
-              <h2>从 API 注册到本地添加</h2>
-            </div>
-            <span className="status-pill" data-tone="info">
-              <MonitorCheck size={13} aria-hidden="true" />
-              适用于 macOS 本地工作区
-            </span>
+    <section className="guide-page" aria-label="使用指南">
+      <main className="guide-page__main">
+        <header className="guide-intro">
+          <div>
+            <p className="eyebrow">开始使用 TikHub</p>
+            <h2>从账号注册到运行第一条任务</h2>
+            <p>按顺序完成四步，所有密钥、任务和结果都保留在当前 macOS 工作区。</p>
           </div>
-          <div className="connection-grid">
-            {setupSteps.map((step, index) => (
-              <article className="connection-card" key={step.title}>
-                <div className="connection-icon" data-tone="info">
-                  <span className="mono">{index + 1}</span>
-                </div>
-                <div>
-                  <p className="connection-name">{step.title}</p>
-                  <p className="muted-text">{step.detail}</p>
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
+          <span className="status-pill" data-tone="info">
+            <MonitorCheck size={13} aria-hidden="true" />
+            适用于本地工作区
+          </span>
+        </header>
 
-        <section className="glass-panel">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">添加流程</p>
-              <h2>在应用内保存并测试 Token</h2>
-            </div>
-            <button className="ghost-button" type="button" onClick={onOpenSettings}>
-              <KeyRound size={16} aria-hidden="true" />
-              <span>打开设置</span>
-            </button>
-          </div>
-          <div className="plan-grid">
-            <InfoBlock label="1. API 域名" value="国际网络选 api.tikhub.io，中国大陆网络选 api.tikhub.dev。" />
-            <InfoBlock label="2. API Token" value="粘贴从用户中心复制的 Token，保存后输入框会清空。" />
-            <InfoBlock label="3. 连通测试" value="测试成功后会显示账号、免费额度和邮箱验证状态。" />
-          </div>
-          <div className="plan-preview">
-            <p className="muted-text">
-              如果测试失败，优先检查 Token 是否完整、邮箱是否完成验证、域名是否适合当前网络，再确认账户余额是否足够覆盖目标端点。
-            </p>
-          </div>
-        </section>
+        <ol className="guide-flow">
+          {setupSteps.map((step, index) => (
+            <li className="guide-step" key={step.title}>
+              <div className="guide-step__rail" aria-hidden="true">
+                <span>{String(index + 1).padStart(2, '0')}</span>
+              </div>
+              <div className="guide-step__content">
+                <h3>{step.title}</h3>
+                <p>{step.detail}</p>
+                {index === 2 ? (
+                  <>
+                    <dl className="guide-step__facts">
+                      <div>
+                        <dt>API 域名</dt>
+                        <dd>国际网络使用 api.tikhub.io，中国大陆网络使用 api.tikhub.dev。</dd>
+                      </div>
+                      <div>
+                        <dt>API Token</dt>
+                        <dd>保存后输入框会清空，数据库只记录系统安全存储引用。</dd>
+                      </div>
+                      <div>
+                        <dt>连通测试</dt>
+                        <dd>成功后显示真实账号、充值余额、免费额度和今日用量。</dd>
+                      </div>
+                    </dl>
+                    <button className="ghost-button" type="button" onClick={onOpenSettings}>
+                      <KeyRound size={16} aria-hidden="true" />
+                      打开设置
+                    </button>
+                  </>
+                ) : null}
+              </div>
+            </li>
+          ))}
+        </ol>
 
-        <section className="glass-panel">
-          <div className="section-heading">
+        <section className="guide-checklist" aria-labelledby="guide-checklist-heading">
+          <header>
             <div>
-              <p className="eyebrow">安全与成本</p>
-              <h2>上线前的最低检查清单</h2>
+              <p className="eyebrow">运行前确认</p>
+              <h2 id="guide-checklist-heading">安全与成本边界</h2>
             </div>
-            <span className="status-pill" data-tone="success">
-              <ShieldCheck size={13} aria-hidden="true" />
-              建议逐项确认
-            </span>
-          </div>
-          <div className="task-list">
+            <ShieldCheck size={19} aria-hidden="true" />
+          </header>
+          <ul>
             {safetyChecks.map((item) => (
-              <article className="task-row" key={item}>
-                <div>
-                  <h3>{item}</h3>
-                  <p>配置、测试和采集都在本地工作区完成。</p>
-                </div>
-                <span className="status-pill" data-tone="success">
-                  <CheckCircle2 size={13} aria-hidden="true" />
-                  已纳入
-                </span>
-              </article>
+              <li key={item}>
+                <CheckCircle2 size={16} aria-hidden="true" />
+                <span>{item}</span>
+              </li>
             ))}
-          </div>
+          </ul>
+          <p className="guide-checklist__note">
+            测试失败时，依次检查 Token 完整性、邮箱验证、当前网络对应域名和可用额度。
+          </p>
         </section>
-      </div>
+      </main>
 
-      <aside className="inspector" aria-label="外部文档与排错">
-        <section className="glass-panel compact-panel">
-          <div className="section-heading">
+      <aside className="guide-page__sidebar" aria-label="官方资源与请求格式">
+        <section className="guide-resources" aria-labelledby="guide-resources-heading">
+          <header>
             <div>
-              <p className="eyebrow">官方入口</p>
-              <h2>注册与文档</h2>
+              <p className="eyebrow">官方资源</p>
+              <h2 id="guide-resources-heading">注册与文档</h2>
             </div>
             <BadgeCheck size={18} aria-hidden="true" />
-          </div>
-          <div className="export-grid">
-            <GuideLink href="https://user.tikhub.io/register" label="创建 TikHub 账号" />
-            <GuideLink href="https://user.tikhub.io/login" label="登录用户中心" />
-            <GuideLink href="https://docs.tikhub.io/" label="查看 API 文档" />
-            <GuideLink href="https://tikhub.io/getting-started" label="首次调用指南" />
-            <GuideLink href="https://tikhub.io/pricing" label="价格与免费额度" />
-          </div>
+          </header>
+          <nav aria-label="TikHub 官方资源">
+            {officialResources.map((resource) => (
+              <GuideLink {...resource} key={resource.href} />
+            ))}
+          </nav>
         </section>
 
-        <section className="glass-panel compact-panel">
-          <div className="section-heading">
+        <section className="guide-token-block" aria-labelledby="guide-token-heading">
+          <header>
             <div>
               <p className="eyebrow">请求格式</p>
-              <h2>Token 用法</h2>
+              <h2 id="guide-token-heading">Token 用法</h2>
             </div>
             <KeyRound size={18} aria-hidden="true" />
-          </div>
-          <div className="evidence-body">
-            <dl>
-              <div>
-                <dt>请求头</dt>
-                <dd className="mono">Authorization</dd>
-              </div>
-              <div>
-                <dt>格式</dt>
-                <dd className="mono">Bearer YOUR_API_KEY</dd>
-              </div>
-              <div>
-                <dt>本应用保存方式</dt>
-                <dd>只保存安全存储引用，不把明文 Token 写入导出报告。</dd>
-              </div>
-            </dl>
-          </div>
+          </header>
+          <dl>
+            <div>
+              <dt>请求头</dt>
+              <dd>Authorization</dd>
+            </div>
+            <div>
+              <dt>格式</dt>
+              <dd>Bearer YOUR_API_KEY</dd>
+            </div>
+            <div>
+              <dt>本应用保存方式</dt>
+              <dd>只保存系统安全存储引用，不把明文 Token 写入任务或导出文件。</dd>
+            </div>
+          </dl>
         </section>
       </aside>
     </section>
   )
 }
 
-function InfoBlock({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="info-line">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  )
-}
-
 function GuideLink({ href, label }: { href: string; label: string }) {
   return (
-    <a className="export-item" href={href} rel="noreferrer" target="_blank">
-      <div className="connection-icon" data-tone="info">
-        <ExternalLink size={15} aria-hidden="true" />
-      </div>
-      <div>
-        <span>外部链接</span>
-        <strong>{label}</strong>
-      </div>
+    <a className="guide-resource-link" href={href} rel="noreferrer" target="_blank">
+      <span>{label}</span>
+      <ExternalLink size={15} aria-hidden="true" />
     </a>
   )
 }
