@@ -11,6 +11,8 @@ use super::{resolve_workspace_root, AppState};
 #[cfg(test)]
 mod activation_tests;
 #[cfg(test)]
+mod audit_atomicity_tests;
+#[cfg(test)]
 mod mutation_race_tests;
 mod service;
 mod validation;

@@ -38,13 +38,13 @@ pub(super) fn save_profile(
     SaveApiProfileInput::Tikhub { id, .. } => (ApiProfileKind::Tikhub, id.clone()),
     SaveApiProfileInput::Ai { id, .. } => (ApiProfileKind::Ai, id.clone()),
   };
-  let (profile_id, created) = mutate_registry(root, |transaction, registry| {
+  mutate_registry(root, |transaction, registry| {
     if let Some(id) = editing_id.as_deref() {
       ensure_mutable(transaction, registry, kind, id)?;
       #[cfg(test)]
       super::tests::run_after_mutability_check_hook();
     }
-    match input {
+    let (profile_id, created) = match input {
       SaveApiProfileInput::Tikhub {
         id,
         name,
@@ -69,14 +69,15 @@ pub(super) fn save_profile(
         default_model_id,
         api_key,
       ),
-    }
+    }?;
+    audit(
+      transaction,
+      "save_api_profile",
+      &profile_id,
+      serde_json::json!({"kind": kind_name(kind), "created": created}),
+    )?;
+    Ok(())
   })?;
-  audit(
-    root,
-    "save_api_profile",
-    &profile_id,
-    serde_json::json!({"kind": kind_name(kind), "created": created}),
-  )?;
   get_registry(root)
 }
 
@@ -298,11 +299,6 @@ where
       ApiProfileStatus::NeedsRebind,
       None,
       false,
-    )?;
-    audit(
-      root,
-      "test_api_profile",
-      id,
       serde_json::json!({"kind":"tikhub", "success":false, "error_code":"NEEDS_REBIND"}),
     )?;
     return result(root, false, "TikHub Token 需要重新输入后才能测试");
@@ -334,25 +330,13 @@ where
       Some(format!("{:?}", failure.code)),
     ),
   };
-  let auto_activate = status == ApiProfileStatus::Success
-    && auto_activation_allowed(
-      root,
-      ApiProfileKind::Tikhub,
-      id,
-      registry.tikhub_profiles.len(),
-    )?;
   persist_tikhub(
     root,
     &profile,
     Some(credential.revision),
     status,
     summary,
-    auto_activate,
-  )?;
-  audit(
-    root,
-    "test_api_profile",
-    id,
+    status == ApiProfileStatus::Success,
     serde_json::json!({"kind":"tikhub", "success":success, "error_code":error_code}),
   )?;
   result(root, success, &message)
@@ -364,14 +348,22 @@ fn persist_tikhub(
   credential_revision: Option<u64>,
   status: ApiProfileStatus,
   summary: Option<TikhubSafeTestSummary>,
-  auto_activate: bool,
+  may_auto_activate: bool,
+  audit_details: Value,
 ) -> AppResult<()> {
   let now = Utc::now().to_rfc3339();
-  update_api_profile_registry(root, |registry| {
+  mutate_registry(root, |transaction, registry| {
     let revision = registry
       .credentials
       .get(&expected.credential_ref_id)
       .map(|credential| credential.revision);
+    let auto_activate = may_auto_activate
+      && auto_activation_allowed(
+        transaction,
+        ApiProfileKind::Tikhub,
+        &expected.id,
+        registry.tikhub_profiles.len(),
+      )?;
     let profile = registry
       .tikhub_profiles
       .get_mut(&expected.id)
@@ -393,9 +385,9 @@ fn persist_tikhub(
     {
       registry.active_profile_ids.tikhub = None;
     }
+    audit(transaction, "test_api_profile", &expected.id, audit_details)?;
     Ok(())
-  })?;
-  sync_api_profile_mirror(root)
+  })
 }
 
 fn test_ai(root: &Path, id: &str) -> AppResult<ServiceTestResult> {
@@ -416,11 +408,16 @@ fn test_ai(root: &Path, id: &str) -> AppResult<ServiceTestResult> {
   } else {
     ApiProfileStatus::NeedsRebind
   };
-  let auto_activate =
-    success && auto_activation_allowed(root, ApiProfileKind::Ai, id, registry.ai_profiles.len())?;
   let now = Utc::now().to_rfc3339();
-  update_api_profile_registry(root, |registry| {
+  mutate_registry(root, |transaction, registry| {
     let current_revision = credential_revision(registry, &profile);
+    let auto_activate = success
+      && auto_activation_allowed(
+        transaction,
+        ApiProfileKind::Ai,
+        id,
+        registry.ai_profiles.len(),
+      )?;
     let current = registry
       .ai_profiles
       .get_mut(id)
@@ -439,15 +436,14 @@ fn test_ai(root: &Path, id: &str) -> AppResult<ServiceTestResult> {
     } else if !success && registry.active_profile_ids.ai.as_deref() == Some(id) {
       registry.active_profile_ids.ai = None;
     }
+    audit(
+      transaction,
+      "test_api_profile",
+      id,
+      serde_json::json!({"kind":"ai", "success":success}),
+    )?;
     Ok(())
   })?;
-  sync_api_profile_mirror(root)?;
-  audit(
-    root,
-    "test_api_profile",
-    id,
-    serde_json::json!({"kind":"ai", "success":success}),
-  )?;
   result(root, success, &message)
 }
 
@@ -456,8 +452,7 @@ pub(super) fn activate_profile(
   kind: ApiProfileKind,
   id: &str,
 ) -> AppResult<ApiProfileRegistry> {
-  get_registry(root)?;
-  update_api_profile_registry(root, |registry| {
+  mutate_registry(root, |transaction, registry| {
     let status = match kind {
       ApiProfileKind::Tikhub => registry.tikhub_profiles.get(id).map(|value| value.status),
       ApiProfileKind::Ai => registry.ai_profiles.get(id).map(|value| value.status),
@@ -470,15 +465,14 @@ pub(super) fn activate_profile(
       ApiProfileKind::Tikhub => registry.active_profile_ids.tikhub = Some(id.to_string()),
       ApiProfileKind::Ai => registry.active_profile_ids.ai = Some(id.to_string()),
     }
+    audit(
+      transaction,
+      "activate_api_profile",
+      id,
+      serde_json::json!({"kind":kind_name(kind)}),
+    )?;
     Ok(())
   })?;
-  sync_api_profile_mirror(root)?;
-  audit(
-    root,
-    "activate_api_profile",
-    id,
-    serde_json::json!({"kind":kind_name(kind)}),
-  )?;
   get_registry(root)
 }
 
@@ -487,7 +481,7 @@ pub(super) fn delete_profile(
   kind: ApiProfileKind,
   id: &str,
 ) -> AppResult<ApiProfileRegistry> {
-  let was_active = mutate_registry(root, |transaction, registry| {
+  mutate_registry(root, |transaction, registry| {
     ensure_mutable(transaction, registry, kind, id)?;
     #[cfg(test)]
     super::tests::run_after_mutability_check_hook();
@@ -515,14 +509,14 @@ pub(super) fn delete_profile(
     if registry.active_profile_ids.ai.as_deref() == Some(id) {
       registry.active_profile_ids.ai = None;
     }
-    Ok(was_active)
+    audit(
+      transaction,
+      "delete_api_profile",
+      id,
+      serde_json::json!({"kind":kind_name(kind), "was_active":was_active}),
+    )?;
+    Ok(())
   })?;
-  audit(
-    root,
-    "delete_api_profile",
-    id,
-    serde_json::json!({"kind":kind_name(kind), "was_active":was_active}),
-  )?;
   get_registry(root)
 }
 
@@ -661,13 +655,12 @@ fn safe_message(message: &str, secret: &str) -> String {
 }
 
 fn auto_activation_allowed(
-  root: &Path,
+  transaction: &Transaction<'_>,
   kind: ApiProfileKind,
   profile_id: &str,
   profile_count: usize,
 ) -> AppResult<bool> {
-  let connection = open_workspace_database(root.join(DATABASE_FILE_NAME))?;
-  let mut statement = connection
+  let mut statement = transaction
     .prepare(
       "SELECT entity_id,action,safe_details_json FROM audit_log
        WHERE entity_type = 'api_profile'
@@ -719,8 +712,8 @@ fn auto_activation_allowed(
   Ok(!any_delete && profile_count == 1)
 }
 
-fn audit(root: &Path, action: &str, id: &str, details: Value) -> AppResult<()> {
-  open_workspace_database(root.join(DATABASE_FILE_NAME))?
+fn audit(transaction: &Transaction<'_>, action: &str, id: &str, details: Value) -> AppResult<()> {
+  transaction
     .execute(
       "INSERT INTO audit_log (id,entity_type,entity_id,action,safe_details_json,created_at)
        VALUES (?1,'api_profile',?2,?3,?4,?5)",
