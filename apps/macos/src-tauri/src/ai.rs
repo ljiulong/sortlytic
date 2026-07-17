@@ -18,6 +18,7 @@ use crate::tasks::{
 };
 use crate::workspace::{open_workspace_database, DATABASE_FILE_NAME};
 
+mod collection_plan_schema;
 pub(crate) mod provider_client;
 
 use provider_client::{call_model, collection_plan_request, ProviderConfig};

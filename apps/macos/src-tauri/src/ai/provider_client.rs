@@ -8,6 +8,8 @@ use serde_json::{json, Value};
 use crate::api_profiles::{AiApiFormat, AiProviderType};
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 
+use super::collection_plan_schema::collection_plan_schema;
+
 const MAX_MODEL_RESPONSE_BYTES: u64 = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
@@ -79,114 +81,6 @@ TikTok 关键词搜索的时间范围只能是 1、7、30、180；抖音和小�
 年龄只允许来自公开接口的明确年龄并按闭区间过滤；性别只允许来自公开接口的明确规范值，禁止根据头像、姓名或简介推断。
 用户给出的预算必须精确换算为 USD 微美元写入 budget_limit.amount_micros，不得使用固定默认预算覆盖用户输入。
 任何缺失或不确定字段必须写入 missing_fields，不得猜测；requires_user_confirmation 必须为 true。"#
-}
-
-fn collection_plan_schema() -> Value {
-  json!({
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {
-      "schema_version": { "type": "integer", "const": 3 },
-      "platforms": {
-        "type": "array",
-        "items": { "type": "string", "enum": ["tiktok", "douyin", "xiaohongshu"] }
-      },
-      "data_types": { "type": "array", "items": { "$ref": "#/$defs/data_type" } },
-      "internal_data_types": { "type": "array", "items": { "$ref": "#/$defs/data_type" } },
-      "region": {
-        "anyOf": [
-          { "type": "string" },
-          { "type": "null" },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "value": { "type": "string" },
-              "validation_status": { "type": "string", "enum": ["verified", "unverified"] }
-            },
-            "required": ["value", "validation_status"]
-          }
-        ]
-      },
-      "keywords": { "type": "array", "items": { "type": "string" } },
-      "accounts": { "type": "array", "items": { "type": "string" } },
-      "time_range": { "type": ["string", "null"] },
-      "age_range": {
-        "anyOf": [
-          { "type": "null" },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "min": { "type": "integer", "minimum": 0, "maximum": 130 },
-              "max": { "type": "integer", "minimum": 0, "maximum": 130 }
-            },
-            "required": ["min", "max"]
-          }
-        ]
-      },
-      "gender_filter": {
-        "anyOf": [
-          { "type": "null" },
-          {
-            "type": "array",
-            "items": { "type": "string", "enum": ["male", "female", "other"] }
-          }
-        ]
-      },
-      "steps": {
-        "type": "array",
-        "minItems": 1,
-        "items": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "step_key": { "type": "string" },
-            "role": { "type": "string", "enum": ["entry", "target"] },
-            "depends_on_step_key": { "type": ["string", "null"] },
-            "input_binding": { "type": ["object", "null"] },
-            "endpoint_key": { "type": "string" },
-            "platform": { "type": "string", "enum": ["tiktok", "douyin", "xiaohongshu"] },
-            "data_type": { "$ref": "#/$defs/data_type" },
-            "params": { "type": "object" },
-            "request_limit": { "type": "integer", "minimum": 1 },
-            "output_selected": { "type": "boolean" }
-          },
-          "required": [
-            "step_key", "role", "depends_on_step_key", "input_binding", "endpoint_key",
-            "platform", "data_type", "params", "request_limit", "output_selected"
-          ]
-        }
-      },
-      "record_limit": { "type": "integer", "minimum": 1 },
-      "request_limit": { "type": "integer", "minimum": 1 },
-      "budget_limit": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "currency": { "type": "string", "const": "USD" },
-          "amount_micros": { "type": "integer", "minimum": 1 }
-        },
-        "required": ["currency", "amount_micros"]
-      },
-      "output_rules": { "type": "object" },
-      "missing_fields": { "type": "array", "items": { "type": "string" } },
-      "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-      "requires_user_confirmation": { "type": "boolean", "const": true }
-    },
-    "required": [
-      "schema_version", "platforms", "data_types", "internal_data_types", "region",
-      "keywords", "accounts", "time_range", "age_range", "gender_filter", "steps",
-      "record_limit", "request_limit", "budget_limit", "output_rules", "missing_fields",
-      "confidence", "requires_user_confirmation"
-    ],
-    "$defs": {
-      "data_type": {
-        "type": "string",
-        "enum": ["keyword_search", "comments", "account_profile", "account_posts", "item_detail"]
-      }
-    }
-  })
 }
 
 fn validate_config(config: &ProviderConfig) -> AppResult<()> {
@@ -582,6 +476,48 @@ mod tests {
     assert_eq!(response.output_json["schema_version"], 3);
     assert_eq!(response.input_tokens, Some(23));
     assert_eq!(response.output_tokens, Some(7));
+  }
+
+  #[test]
+  fn official_openai_sends_the_strict_collection_plan_schema() {
+    let response_body = json!({
+      "choices": [{ "message": { "content": "{\"schema_version\":3}" } }]
+    })
+    .to_string();
+    let (base_url, server) = serve_once(200, response_body, |request| {
+      let body = request
+        .split("\r\n\r\n")
+        .nth(1)
+        .expect("request body should exist");
+      let payload: Value = serde_json::from_str(body).expect("request body should be JSON");
+      assert_eq!(
+        payload.pointer("/response_format/type"),
+        Some(&json!("json_schema"))
+      );
+      assert_eq!(
+        payload.pointer("/response_format/json_schema/strict"),
+        Some(&json!(true))
+      );
+      assert_eq!(
+        payload.pointer(
+          "/response_format/json_schema/schema/properties/steps/items/properties/params/additionalProperties"
+        ),
+        Some(&json!(false))
+      );
+      assert_eq!(
+        payload.pointer(
+          "/response_format/json_schema/schema/properties/output_rules/additionalProperties"
+        ),
+        Some(&json!(false))
+      );
+    });
+
+    call_model(
+      &config(AiProviderType::Openai, base_url),
+      &collection_plan_request("真实提示词正文", "采集 TikTok 汽车账号"),
+    )
+    .expect("official OpenAI request should succeed");
+    server.join().expect("test server should finish");
   }
 
   #[test]
