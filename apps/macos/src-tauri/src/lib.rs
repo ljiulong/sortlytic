@@ -3,6 +3,7 @@ pub mod ai;
 mod app_runtime;
 pub mod app_state;
 pub mod collection;
+mod config_commands;
 pub mod domain;
 pub mod exports;
 #[cfg(target_os = "macos")]
@@ -26,16 +27,19 @@ use collection::{
   CollectionParamValidationResult, CollectionPlanDraftView, DataTypeCapabilityView,
   FormCollectionPlanRequest, PlatformCapabilityView,
 };
+use config_commands::{
+  create_model_provider, delete_model_provider, delete_secret, get_tikhub_connector,
+  list_model_profiles, list_model_providers, list_secret_refs, quote_tikhub_connector_price,
+  save_secret, save_tikhub_connector, set_active_model_provider, set_default_model,
+  test_model_provider, test_secret_connection, test_tikhub_connection, test_tikhub_connector,
+  update_model_provider, update_secret, upsert_model_profile,
+};
 use domain::{AppError, AppErrorStage, AppResult};
 use exports::{ExportIntegrityResult, ExportJobView, ReportView};
 use prompts::{
   CreatePromptVersionInput, PromptRegressionCaseView, PromptRegressionRunView, PromptTemplateView,
   PromptVersionView,
 };
-use providers::{
-  ModelProfileInput, ModelProfileView, ModelProviderInput, ModelProviderView, ProviderTestResult,
-};
-use secrets::{SecretConnectionTestResult, SecretRefView};
 use task_commands::{
   cancel_task, confirm_collection_plan, copy_task, create_collection_task, delete_task,
   enqueue_task, estimate_task_cost, execute_next_task, get_latest_collection_plan, get_task,
@@ -43,9 +47,6 @@ use task_commands::{
 };
 use tasks::CostEstimateView;
 use tauri::Manager;
-use tikhub::{
-  TikhubConnectionTestResult, TikhubConnectorInput, TikhubConnectorView, TikhubPriceQuote,
-};
 use workspace::{WorkspaceHealthCheck, WorkspaceSummary};
 
 #[tauri::command]
@@ -135,224 +136,6 @@ fn close_workspace(workspace_id: String, state: tauri::State<'_, AppState>) -> A
 
   state.clear_active_workspace();
   Ok(true)
-}
-
-#[tauri::command]
-fn save_secret(
-  provider_type: String,
-  provider_id: String,
-  secret: String,
-  alias: Option<String>,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<SecretRefView> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  secrets::save_secret(root_path, &provider_type, &provider_id, &secret, alias)
-}
-
-#[tauri::command]
-fn update_secret(
-  secret_ref_id: String,
-  secret: String,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<SecretRefView> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  secrets::update_secret(root_path, &secret_ref_id, &secret)
-}
-
-#[tauri::command]
-fn delete_secret(
-  secret_ref_id: String,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<bool> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  secrets::delete_secret(root_path, &secret_ref_id)
-}
-
-#[tauri::command]
-fn list_secret_refs(
-  provider_type: Option<String>,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<Vec<SecretRefView>> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  secrets::list_secret_refs(root_path, provider_type)
-}
-
-#[tauri::command]
-fn test_secret_connection(
-  secret_ref_id: String,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<SecretConnectionTestResult> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  secrets::test_secret_connection(root_path, &secret_ref_id)
-}
-
-#[tauri::command]
-async fn test_tikhub_connection(
-  secret_ref_id: String,
-  base_url: Option<String>,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<TikhubConnectionTestResult> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  run_tikhub_blocking(move || tikhub::test_tikhub_connection(root_path, &secret_ref_id, base_url))
-    .await
-}
-
-#[tauri::command]
-fn get_tikhub_connector(
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<Option<TikhubConnectorView>> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  tikhub::get_tikhub_connector(root_path)
-}
-
-#[tauri::command]
-fn save_tikhub_connector(
-  input: TikhubConnectorInput,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<TikhubConnectorView> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  tikhub::save_tikhub_connector(root_path, input)
-}
-
-#[tauri::command]
-async fn test_tikhub_connector(
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<TikhubConnectionTestResult> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  run_tikhub_blocking(move || tikhub::test_tikhub_connector(root_path)).await
-}
-
-#[tauri::command]
-async fn quote_tikhub_connector_price(
-  endpoint: String,
-  request_per_day: i64,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<TikhubPriceQuote> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  run_tikhub_blocking(move || {
-    tikhub::quote_tikhub_connector_price(root_path, &endpoint, request_per_day)
-  })
-  .await
-}
-
-async fn run_tikhub_blocking<T, F>(task: F) -> AppResult<T>
-where
-  T: Send + 'static,
-  F: FnOnce() -> AppResult<T> + Send + 'static,
-{
-  tauri::async_runtime::spawn_blocking(task)
-    .await
-    .map_err(|_| {
-      AppError::new(
-        domain::AppErrorCode::TikhubRequestError,
-        "TikHub 后台任务意外终止",
-        AppErrorStage::Collection,
-        true,
-      )
-    })?
-}
-
-#[tauri::command]
-fn list_model_providers(
-  enabled: Option<bool>,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<Vec<ModelProviderView>> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  providers::list_model_providers(root_path, enabled)
-}
-
-#[tauri::command]
-fn create_model_provider(
-  input: ModelProviderInput,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<ModelProviderView> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  providers::create_model_provider(root_path, input)
-}
-
-#[tauri::command]
-fn update_model_provider(
-  provider_id: String,
-  input: ModelProviderInput,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<ModelProviderView> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  providers::update_model_provider(root_path, &provider_id, input)
-}
-
-#[tauri::command]
-fn delete_model_provider(
-  provider_id: String,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<bool> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  providers::delete_model_provider(root_path, &provider_id)
-}
-
-#[tauri::command]
-fn list_model_profiles(
-  provider_id: String,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<Vec<ModelProfileView>> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  providers::list_model_profiles(root_path, &provider_id)
-}
-
-#[tauri::command]
-fn upsert_model_profile(
-  input: ModelProfileInput,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<ModelProfileView> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  providers::upsert_model_profile(root_path, input)
-}
-
-#[tauri::command]
-fn test_model_provider(
-  provider_id: String,
-  model_id: Option<String>,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<ProviderTestResult> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  providers::test_model_provider(root_path, &provider_id, model_id)
-}
-
-#[tauri::command]
-fn set_default_model(
-  provider_id: String,
-  model_id: String,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<bool> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  providers::set_default_model(root_path, &provider_id, &model_id)
-}
-
-#[tauri::command]
-fn set_active_model_provider(
-  provider_id: String,
-  root_path: Option<String>,
-  state: tauri::State<'_, AppState>,
-) -> AppResult<bool> {
-  let root_path = resolve_workspace_root(root_path, &state)?;
-  providers::set_active_model_provider(root_path, &provider_id)
 }
 
 #[tauri::command]
