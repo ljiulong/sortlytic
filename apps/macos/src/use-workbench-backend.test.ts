@@ -9,11 +9,8 @@ import {
   type CollectionTaskView,
   deleteTask,
   getLatestCollectionPlan,
-  getTikhubConnector,
   installAppUpdate,
   quoteTikhubConnectorPrice,
-  type SecretRefView,
-  type TikhubConnectorView,
   updateCollectionTask,
   type WorkspaceSummary,
 } from './backend-api'
@@ -22,6 +19,7 @@ import {
   buildFormPlanRequest,
   confirmPersistedTask,
   exportTaskArtifact,
+  loadBackendWorkbench,
   mapBackendData,
   planFromBackend,
   type RuntimeCollectionPlan,
@@ -29,6 +27,7 @@ import {
 } from './use-workbench-backend'
 import { preflightCollectionPlanPricing } from './collection-pricing'
 import { buildPlanParams } from './collection-plan-client'
+import type { ApiProfileRegistryView } from './api-profiles'
 
 type CapturedMutationOptions = {
   onSuccess?: (data: unknown) => unknown
@@ -108,13 +107,6 @@ const task: CollectionTaskView = {
   actual_cost_json: {},
 }
 
-const tikhubSecret: SecretRefView = {
-  id: 'secret-tikhub-1',
-  provider_type: 'tikhub',
-  provider_id: 'default',
-  masked_hint: 'tikh...[REDACTED]...1234',
-}
-
 function tikhubRegistryFixture({
   activeProfileId = 'tikhub-profile-1',
   profileId = 'tikhub-profile-1',
@@ -131,7 +123,7 @@ function tikhubRegistryFixture({
   balance?: number | null
   freeCredit?: number | null
   availableCredit?: number | null
-} = {}) {
+} = {}): ApiProfileRegistryView {
   return {
     activeProfileIds: { tikhub: activeProfileId, ai: null },
     tikhubProfiles: includeProfile
@@ -158,24 +150,6 @@ function tikhubRegistryFixture({
         }]
       : [],
     aiProfiles: [],
-  }
-}
-
-function connectorFixture(
-  overrides: Partial<TikhubConnectorView> = {},
-): TikhubConnectorView {
-  return {
-    id: 'default',
-    workspace_id: workspace.id,
-    secret_ref_id: tikhubSecret.id,
-    base_url: 'https://api.tikhub.io',
-    enabled: true,
-    config_version: 1,
-    last_tested_at: null,
-    last_test_status: null,
-    created_at: '2026-07-13T00:00:00Z',
-    updated_at: '2026-07-13T00:00:00Z',
-    ...overrides,
   }
 }
 
@@ -369,17 +343,13 @@ describe('应用更新 API', () => {
   })
 })
 
-describe('TikHub connector 只读镜像', () => {
-  it('使用固定 command 读取镜像并获取实时价格', async () => {
+describe('TikHub 实时价格', () => {
+  it('使用固定 command 读取实时价格', async () => {
     invokeMock.mockResolvedValue(undefined)
 
-    await getTikhubConnector()
     await quoteTikhubConnectorPrice('/api/v1/tiktok/app/v3/fetch_video_comments', 1)
 
-    expect(invokeMock).toHaveBeenNthCalledWith(1, 'get_tikhub_connector', {
-      rootPath: null,
-    })
-    expect(invokeMock).toHaveBeenNthCalledWith(2, 'quote_tikhub_connector_price', {
+    expect(invokeMock).toHaveBeenCalledWith('quote_tikhub_connector_price', {
       endpoint: '/api/v1/tiktok/app/v3/fetch_video_comments',
       requestPerDay: 1,
       rootPath: null,
@@ -580,7 +550,12 @@ describe('backendErrorMessage', () => {
 
 describe('mapBackendData', () => {
   it('不会把浏览器演示数据伪装成真实工作区结果', () => {
-    const result = mapBackendData(workspace, [task], [], null, [], 1_000)
+    const result = mapBackendData(
+      workspace,
+      [task],
+      tikhubRegistryFixture({ activeProfileId: null, includeProfile: false }),
+      1_000,
+    )
 
     expect(result.records).toEqual([])
     expect(result.promptRuns).toEqual([])
@@ -596,50 +571,62 @@ describe('mapBackendData', () => {
   })
 
   it('把 queued 明确映射为已排队，而不是运行中', () => {
-    const result = mapBackendData(workspace, [task], [], null, [], 1_000)
+    const result = mapBackendData(
+      workspace,
+      [task],
+      tikhubRegistryFixture({ activeProfileId: null, includeProfile: false }),
+      1_000,
+    )
 
     expect(result.tasks[0]?.status).toBe('已排队')
     expect(result.tasks[0]?.progress).toBe(0)
   })
 
   it('把 partial_success 映射为已结束的部分成功', () => {
-    const result = mapBackendData(workspace, [{ ...task, status: 'partial_success' }], [], null, [], 1_000)
+    const result = mapBackendData(
+      workspace,
+      [{ ...task, status: 'partial_success' }],
+      tikhubRegistryFixture({ activeProfileId: null, includeProfile: false }),
+      1_000,
+    )
 
     expect(result.tasks[0]?.status).toBe('部分成功')
     expect(result.tasks[0]?.progress).toBe(100)
   })
 
-  it('孤立 TikHub 密钥不会被当成已配置 connector', () => {
-    const result = mapBackendData(workspace, [], [tikhubSecret], null, [], 1_000)
+  it('没有 TikHub 配置时明确显示未配置', () => {
+    const result = mapBackendData(
+      workspace,
+      [],
+      tikhubRegistryFixture({ activeProfileId: null, includeProfile: false }),
+      1_000,
+    )
     const connection = result.connections[0]
 
     expect(connection?.status).toBe('未配置')
-    expect(connection?.meta).not.toContain(tikhubSecret.masked_hint)
   })
 
   it.each([
-    ['待测试', connectorFixture()],
-    ['已验证', connectorFixture({ last_test_status: 'success' })],
-    ['测试失败', connectorFixture({ last_test_status: 'failed' })],
-    ['已禁用', connectorFixture({ enabled: false })],
-    ['需重新绑定', connectorFixture({ secret_ref_id: null })],
-  ])('把 connector 状态映射为“%s”', (expected, connector) => {
-    const result = mapBackendData(workspace, [], [tikhubSecret], connector, [], 1_000)
+    ['待测试', 'untested'],
+    ['已验证', 'success'],
+    ['测试失败', 'failed'],
+    ['需重新绑定', 'needs_rebind'],
+  ] as const)('把 TikHub 配置状态映射为“%s”', (expected, status) => {
+    const registry = tikhubRegistryFixture({ status })
+    const result = mapBackendData(workspace, [], registry, 1_000)
     const connection = result.connections[0]
 
     expect(connection?.status).toBe(expected)
-    expect(connection?.meta).toContain(connector.base_url)
-    if (connector.secret_ref_id) {
-      expect(connection?.meta).toContain(tikhubSecret.masked_hint)
-    }
+    expect(connection?.meta).toContain(registry.tikhubProfiles[0]?.baseUrl)
+    expect(connection?.meta).toContain(registry.tikhubProfiles[0]?.maskedKey)
   })
 
-  it('连接卡片不会显示非官方 Base URL', () => {
-    const connector = connectorFixture({ base_url: 'https://untrusted.example/api' })
-    const result = mapBackendData(workspace, [], [tikhubSecret], connector, [], 1_000)
+  it('API 配置文件不可读时显示错误但保留工作区数据', () => {
+    const result = mapBackendData(workspace, [task], null, 1_000)
 
-    expect(result.connections[0]?.meta).not.toContain('untrusted.example')
-    expect(result.connections[0]?.meta).toContain(tikhubSecret.masked_hint)
+    expect(result.runtimeMode).toBe('backend')
+    expect(result.tasks).toHaveLength(1)
+    expect(result.connections[0]?.status).toBe('配置不可用')
   })
 })
 
@@ -807,6 +794,36 @@ describe('v3 form plan request', () => {
 })
 
 describe('useWorkbenchBackend 数据边界', () => {
+  it('即使 API 配置 JSON 损坏也保留历史任务浏览', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'ensure_default_workspace') return Promise.resolve(workspace)
+      if (command === 'get_backend_status') {
+        return Promise.resolve({
+          service: 'sortlytic',
+          backend_version: '0.2.3',
+          has_active_workspace: true,
+          uptime_ms: 1_000,
+        })
+      }
+      if (command === 'list_tasks') return Promise.resolve([task])
+      if (command === 'get_api_profile_registry') {
+        return Promise.reject(new Error('api-config.json 无法解析'))
+      }
+      return Promise.reject(new Error(`不应调用旧配置命令: ${command}`))
+    })
+
+    const result = await loadBackendWorkbench()
+
+    expect(result.runtimeMode).toBe('backend')
+    expect(result.tasks).toHaveLength(1)
+    expect(result.tasks[0]?.id).toBe(task.id)
+    expect(result.connections[0]).toMatchObject({ status: '配置不可用' })
+    expect(invokeMock).not.toHaveBeenCalledWith('list_secret_refs', expect.anything())
+    expect(invokeMock).not.toHaveBeenCalledWith('get_tikhub_connector', expect.anything())
+    expect(invokeMock).not.toHaveBeenCalledWith('list_model_providers', expect.anything())
+  })
+
   it('加载 Tauri 后端期间只返回空状态，不暴露浏览器演示数据', () => {
     const result = renderWorkbenchHook()
 

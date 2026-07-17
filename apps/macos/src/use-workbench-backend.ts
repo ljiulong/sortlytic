@@ -15,20 +15,19 @@ import {
   getLatestCollectionPlan,
   type GenerateFormPlanInput,
   getBackendStatus,
-  getTikhubConnector,
-  listModelProviders,
-  listSecretRefs,
   listTasks,
   saveCollectionPlan,
   type CollectionPlanView,
   type CollectionTaskView,
   type ExportJobView,
-  type ModelProviderView,
-  type SecretRefView,
-  type TikhubConnectorView,
   type WorkspaceSummary,
   updateCollectionTask,
 } from './backend-api'
+import {
+  getApiProfileRegistry,
+  type ApiProfileRegistryView,
+  type ApiProfileStatus,
+} from './api-profiles'
 import { useAppUpdater } from './use-app-updater'
 import { buildPlanParams } from './collection-plan-client'
 import {
@@ -99,7 +98,6 @@ export type WorkbenchRuntimeData = {
     lastBackup: string
     health: string
   }
-  tikhubConnector?: TikhubConnectorView | null
   connections: Array<{
     name: string
     detail: string
@@ -121,7 +119,6 @@ export type WorkbenchRuntimeData = {
   }>
   records: SocialRecord[]
   promptRuns: Array<{ name: string; status: '通过' | '失败'; provider: string; diff: string }>
-  modelProviders: ModelProviderView[]
 }
 
 type BackendWorkbenchData = WorkbenchRuntimeData & {
@@ -177,7 +174,6 @@ function createEmptyWorkbenchData(mode: 'loading' | 'error' | 'unavailable'): Ba
     tasks: [],
     records: [],
     promptRuns: [],
-    modelProviders: [],
     latestTaskId: undefined,
     runtimeMode: mode,
   }
@@ -372,21 +368,19 @@ export function useWorkbenchBackend() {
   }
 }
 
-async function loadBackendWorkbench(): Promise<BackendWorkbenchData> {
+export async function loadBackendWorkbench(): Promise<BackendWorkbenchData> {
   if (!isTauriRuntime()) {
     return browserFallbackData
   }
 
   const workspace = await ensureDefaultWorkspace()
-  const [status, tasks, secretRefs, connector, providers] = await Promise.all([
+  const [status, tasks, registry] = await Promise.all([
     getBackendStatus(),
     listTasks(),
-    listSecretRefs(),
-    getTikhubConnector(),
-    listModelProviders(),
+    getApiProfileRegistry().catch(() => null),
   ])
 
-  return mapBackendData(workspace, tasks, secretRefs, connector, providers, status.uptime_ms)
+  return mapBackendData(workspace, tasks, registry, status.uptime_ms)
 }
 
 async function createFormPlan(values: CollectionFormPayload): Promise<RuntimeCollectionPlan> {
@@ -465,9 +459,7 @@ async function createNaturalPlan(intentText: string): Promise<RuntimeCollectionP
 export function mapBackendData(
   workspace: WorkspaceSummary,
   tasks: CollectionTaskView[],
-  secretRefs: SecretRefView[],
-  connector: TikhubConnectorView | null,
-  providers: ModelProviderView[],
+  registry: ApiProfileRegistryView | null,
   uptimeMs: number,
 ): BackendWorkbenchData {
   const latestTaskId = tasks[0]?.id
@@ -482,8 +474,7 @@ export function mapBackendData(
       lastBackup: '未创建备份',
       health: `可用，运行 ${Math.max(1, Math.round(uptimeMs / 1000))} 秒`,
     },
-    tikhubConnector: connector,
-    connections: buildConnections(secretRefs, connector, providers),
+    connections: buildConnections(registry),
     metrics: [
       { label: '本地任务', value: String(tasks.length), delta: `${pendingCount} 个待确认`, tone: 'info' },
       { label: '入库记录', value: '0', delta: '真实记录读取尚未接入', tone: 'info' },
@@ -493,78 +484,95 @@ export function mapBackendData(
     tasks: tasks.map(mapTaskRow),
     records: [],
     promptRuns: [],
-    modelProviders: providers,
     latestTaskId,
     runtimeMode: 'backend',
   }
 }
 
-function buildConnections(
-  secretRefs: SecretRefView[],
-  connector: TikhubConnectorView | null,
-  providers: ModelProviderView[],
-) {
-  const tikhubSecret = connector?.secret_ref_id
-    ? secretRefs.find(
-        (secret) => secret.id === connector.secret_ref_id && secret.provider_type === 'tikhub',
-      )
-    : undefined
-  const officialBaseUrl = isOfficialTikhubBaseUrl(connector?.base_url)
-    ? connector?.base_url
-    : undefined
-  const tikhubMeta = [officialBaseUrl, tikhubSecret?.masked_hint].filter(Boolean).join(' · ')
-  let tikhubStatus = '未配置'
-  let tikhubTone: Tone = 'warning'
-
-  if (connector) {
-    if (!connector.enabled) {
-      tikhubStatus = '已禁用'
-    } else if (!tikhubSecret) {
-      tikhubStatus = '需重新绑定'
-      tikhubTone = 'danger'
-    } else if (connector.last_test_status === 'success') {
-      tikhubStatus = '已验证'
-      tikhubTone = 'success'
-    } else if (connector.last_test_status === 'failed') {
-      tikhubStatus = '测试失败'
-      tikhubTone = 'danger'
-    } else {
-      tikhubStatus = '待测试'
-      tikhubTone = 'info'
-    }
+function buildConnections(registry: ApiProfileRegistryView | null) {
+  if (!registry) {
+    return [
+      unavailableConnection('TikHub', 'REST API'),
+      unavailableConnection('AI API', '结构化输出'),
+      webhookConnection(),
+    ] satisfies WorkbenchRuntimeData['connections']
   }
-  const enabledProviders = providers.filter((provider) => provider.enabled)
+
+  const activeTikhub = registry.tikhubProfiles.find(
+    (profile) => profile.id === registry.activeProfileIds.tikhub,
+  )
+  const activeAi = registry.aiProfiles.find(
+    (profile) => profile.id === registry.activeProfileIds.ai,
+  )
+  const tikhubFallbackStatus = registry.tikhubProfiles.some(
+    (profile) => profile.status === 'needs_rebind',
+  )
+    ? '需重新绑定'
+    : registry.tikhubProfiles.length > 0 ? '待选择' : '未配置'
+  const aiFallbackStatus = registry.aiProfiles.some(
+    (profile) => profile.status === 'needs_rebind',
+  )
+    ? '需重新绑定'
+    : registry.aiProfiles.length > 0 ? '待选择' : '本地规则'
 
   return [
     {
       name: 'TikHub',
       detail: 'REST API',
-      status: tikhubStatus,
-      tone: tikhubTone,
+      status: activeTikhub ? profileStatusLabel(activeTikhub.status) : tikhubFallbackStatus,
+      tone: activeTikhub ? profileStatusTone(activeTikhub.status) : 'warning',
       icon: 'key',
-      meta: tikhubMeta || '等待配置连接器',
+      meta: activeTikhub
+        ? [activeTikhub.baseUrl, activeTikhub.maskedKey].filter(Boolean).join(' · ')
+        : '在设置中选择当前配置',
     },
     {
-      name: '模型供应商',
+      name: 'AI API',
       detail: '结构化输出',
-      status: enabledProviders.length ? '已配置' : '本地规则',
-      tone: enabledProviders.length ? 'success' : 'info',
+      status: activeAi ? profileStatusLabel(activeAi.status) : aiFallbackStatus,
+      tone: activeAi ? profileStatusTone(activeAi.status) : 'info',
       icon: 'bot',
-      meta: enabledProviders[0]?.display_name ?? '无需联网即可生成计划',
+      meta: activeAi
+        ? `${activeAi.name} · ${activeAi.defaultModelId}`
+        : '当前自然语言计划仍使用本地规则',
     },
-    {
-      name: 'Webhook',
-      detail: 'n8n 轻集成',
-      status: '未启用',
-      tone: 'warning',
-      icon: 'share',
-      meta: '仅发送摘要',
-    },
+    webhookConnection(),
   ] satisfies WorkbenchRuntimeData['connections']
 }
 
-function isOfficialTikhubBaseUrl(baseUrl?: string | null) {
-  return baseUrl === 'https://api.tikhub.io' || baseUrl === 'https://api.tikhub.dev'
+function unavailableConnection(name: string, detail: string) {
+  return {
+    name,
+    detail,
+    status: '配置不可用',
+    tone: 'danger',
+    icon: name === 'TikHub' ? 'key' : 'bot',
+    meta: 'API 配置文件无法读取，历史数据仍可浏览',
+  } satisfies WorkbenchRuntimeData['connections'][number]
+}
+
+function webhookConnection() {
+  return {
+    name: 'Webhook',
+    detail: 'n8n 轻集成',
+    status: '未启用',
+    tone: 'warning',
+    icon: 'share',
+    meta: '仅发送摘要',
+  } satisfies WorkbenchRuntimeData['connections'][number]
+}
+
+function profileStatusLabel(status: ApiProfileStatus) {
+  if (status === 'success') return '已验证'
+  if (status === 'failed') return '测试失败'
+  if (status === 'needs_rebind') return '需重新绑定'
+  return '待测试'
+}
+
+function profileStatusTone(status: ApiProfileStatus): Tone {
+  if (status === 'success') return 'success'
+  if (status === 'failed' || status === 'needs_rebind') return 'danger'
+  return 'info'
 }
 
 export function planFromBackend(values: CollectionFormPayload, plan: CollectionPlanView): RuntimeCollectionPlan {

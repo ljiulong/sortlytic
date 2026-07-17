@@ -30,15 +30,6 @@ export type WorkspaceSummary = {
   last_opened_at: string
 }
 
-export type SecretRefView = {
-  id: string
-  provider_type: string
-  provider_id: string
-  alias?: string | null
-  masked_hint: string
-  last_test_status?: string | null
-}
-
 export type TikhubPriceQuote = {
   endpoint: string
   request_per_day: number
@@ -46,37 +37,6 @@ export type TikhubPriceQuote = {
   total_price: number
   currency: string
   quote_json: Record<string, unknown>
-}
-
-export type TikhubConnectorView = {
-  id: string
-  workspace_id: string
-  secret_ref_id?: string | null
-  base_url: string
-  enabled: boolean
-  config_version: number
-  last_tested_at?: string | null
-  last_test_status?: string | null
-  created_at: string
-  updated_at: string
-}
-
-export type ModelProviderView = {
-  id: string
-  provider_id: string
-  display_name: string
-  enabled: boolean
-  auth_type: string
-  secret_ref_id?: string | null
-  base_url?: string | null
-  api_format: string
-  region?: string | null
-  default_model_id?: string | null
-  cost_policy_json: Record<string, unknown>
-  rate_limit_policy_json: Record<string, unknown>
-  health_check_json: Record<string, unknown>
-  created_at: string
-  updated_at: string
 }
 
 export type CollectionTaskView = {
@@ -202,30 +162,10 @@ export function ensureDefaultWorkspace() {
   return invoke<WorkspaceSummary>('ensure_default_workspace')
 }
 
-export function listSecretRefs(providerType?: string) {
-  return invoke<SecretRefView[]>('list_secret_refs', {
-    providerType: providerType ?? null,
-    rootPath: null,
-  })
-}
-
-export function getTikhubConnector() {
-  return invoke<TikhubConnectorView | null>('get_tikhub_connector', {
-    rootPath: null,
-  })
-}
-
 export function quoteTikhubConnectorPrice(endpoint: string, requestPerDay: number) {
   return invoke<TikhubPriceQuote>('quote_tikhub_connector_price', {
     endpoint,
     requestPerDay,
-    rootPath: null,
-  })
-}
-
-export function listModelProviders(enabled?: boolean) {
-  return invoke<ModelProviderView[]>('list_model_providers', {
-    enabled: enabled ?? null,
     rootPath: null,
   })
 }
