@@ -69,7 +69,7 @@ describe('GuidePage', () => {
     expect(markup).not.toContain('guide-token-block')
   })
 
-  it('如实说明工作区私有 JSON、文件权限和 AI 当前边界', () => {
+  it('如实说明工作区私有 JSON、文件权限和真实 AI 到 TikHub 的安全边界', () => {
     const markup = renderGuide()
 
     expect(markup).toContain('当前工作区私有 JSON')
@@ -77,8 +77,15 @@ describe('GuidePage', () => {
     expect(markup).toContain('文件权限为 0600')
     expect(markup).toContain('旧配置需要重新输入')
     expect(markup).toContain('不进入数据库、日志、导出或 Webhook')
-    expect(markup).toContain('当前规则引擎不会调用 AI 模型')
+    expect(markup).toContain('最小真实模型请求')
+    expect(markup).toContain('当前启用的提示词正文')
+    expect(markup).toContain('collection_plan_v3')
+    expect(markup).toContain('用户确认运行后')
+    expect(markup).toContain('真实 TikHub 请求')
     expect(markup).not.toContain('系统安全存储引用')
-    expect(markup).not.toContain('执行真实连通测试')
+    expect(markup).not.toContain('不发起真实模型请求')
+    expect(markup).not.toContain('本地规则引擎')
+    expect(markup).not.toContain('只校验配置完整性')
+    expect(markup).not.toContain('规则引擎不会调用')
   })
 })
