@@ -13,7 +13,7 @@ export const dataTypeOptions = [
 
 export type Platform = (typeof platformOptions)[number]
 export type DataType = (typeof dataTypeOptions)[number]
-export type TaskStatus = '已排队' | '运行中' | '等待确认' | '部分成功' | '成功' | '待人工确认' | '失败'
+export type TaskStatus = '已排队' | '运行中' | '等待确认' | '部分成功' | '成功' | '待人工确认' | '失败' | '已取消'
 export type NavKey = 'overview' | 'guide' | 'settings'
 export type Tone = 'success' | 'warning' | 'danger' | 'info'
 export type ConnectionIcon = 'key' | 'bot' | 'share'

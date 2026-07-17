@@ -35,7 +35,8 @@ export function toUiDataType(dataType: string): DataType {
 export function toUiTaskStatus(status: string): TaskStatus {
   if (status === 'success') return '成功'
   if (status === 'partial_success') return '部分成功'
-  if (status === 'failed' || status === 'cancelled') return '失败'
+  if (status === 'failed') return '失败'
+  if (status === 'cancelled') return '已取消'
   if (status === 'queued') return '已排队'
   if (status === 'waiting_confirmation') return '等待确认'
   if (status === 'draft') return '待人工确认'
