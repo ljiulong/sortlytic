@@ -38,7 +38,7 @@ export function detectInitialLanguage(): AppLanguage {
   return readStoredLanguage() ?? normalizeLanguage(globalThis.navigator?.language)
 }
 
-export const i18n = i18next.createInstance()
+export const i18n = i18next
 
 void i18n.use(initReactI18next).init({
   debug: false,
