@@ -55,15 +55,22 @@ ZA ZM ZW
   .split(/\s+/)
 
 const COMMON_REGION_CODES = ['CN', 'US', 'GB', 'JP', 'KR', 'SG']
-const regionNames = new Intl.DisplayNames(['zh-CN'], { type: 'region' })
+const regionNamesZh = new Intl.DisplayNames(['zh-CN'], { type: 'region' })
+const regionNamesEn = new Intl.DisplayNames(['en'], { type: 'region' })
 
 export const countryRegionOptions = [
   ...COMMON_REGION_CODES,
   ...ISO_COUNTRY_REGION_CODES.filter((code) => !COMMON_REGION_CODES.includes(code)),
-].map((code) => ({
-  code,
-  label: `${regionNames.of(code) ?? code}（${code}）`,
-}))
+].map((code) => {
+  const nameZh = regionNamesZh.of(code) ?? code
+  const nameEn = regionNamesEn.of(code) ?? code
+  return {
+    code,
+    nameZh,
+    nameEn,
+    label: `${nameZh}（${code}）`,
+  }
+})
 
 const optionalAge = z.preprocess(
   (value) => (value === '' || Number.isNaN(value) ? undefined : value),

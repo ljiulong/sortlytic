@@ -18,13 +18,24 @@ describe('collectionDataTypeOptions', () => {
 })
 
 describe('countryRegionOptions', () => {
-  it('提供完整且不重复的 ISO 两位代码并显示中文名称', () => {
+  it('提供完整且不重复的 ISO 两位代码，并保留中英文名称', () => {
     const codes = countryRegionOptions.map((option) => option.code)
 
-    expect(codes.length).toBeGreaterThanOrEqual(249)
+    expect(codes).toHaveLength(249)
     expect(new Set(codes).size).toBe(codes.length)
-    expect(countryRegionOptions).toContainEqual({ code: 'CN', label: '中国（CN）' })
-    expect(countryRegionOptions).toContainEqual({ code: 'US', label: '美国（US）' })
+    expect(countryRegionOptions.find(({ code }) => code === 'CN')).toMatchObject({
+      code: 'CN',
+      label: '中国（CN）',
+      nameZh: '中国',
+      nameEn: 'China',
+    })
+    expect(countryRegionOptions.find(({ code }) => code === 'US')).toMatchObject({
+      code: 'US',
+      label: '美国（US）',
+      nameZh: '美国',
+      nameEn: 'United States',
+    })
+    expect(countryRegionOptions.every(({ nameZh, nameEn }) => nameZh && nameEn)).toBe(true)
   })
 })
 
