@@ -504,9 +504,14 @@ fn delete_task_removes_plan_run_snapshot_and_child_rows_without_orphans() {
   let task = create_collection_task(&root_path, create_task_input()).expect("task created");
   let plan = save_collection_plan(&root_path, plan_input(&task.id)).expect("plan saved");
   confirm_collection_plan(&root_path, &task.id, &plan.id).expect("plan confirmed");
-  insert_ready_tikhub_connector(&root_path);
-  let run = enqueue_task(&root_path, &task.id).expect("task enqueued");
-  cancel_task(&root_path, &task.id).expect("queued task should cancel before deletion");
+  super::test_support::install_successful_tikhub_profile(&root_path)
+    .expect("active TikHub profile should install");
+  let queued = enqueue_task(&root_path, &task.id).expect("task enqueued");
+  let run = claim_next_task(&root_path)
+    .expect("task claim should succeed")
+    .expect("queued task should be claimed");
+  assert_eq!(run.id, queued.id);
+  cancel_task(&root_path, &task.id).expect("running task should cancel before deletion");
 
   let connection = open_workspace_connection(&root_path).expect("database should open");
   assert_eq!(
@@ -614,34 +619,6 @@ fn count_rows_for(connection: &Connection, table: &str, column: &str, value: &st
       |row| row.get(0),
     )
     .expect("row count should query")
-}
-
-fn insert_ready_tikhub_connector(root_path: &Path) {
-  let connection = open_workspace_connection(root_path).expect("database should open");
-  let now = Utc::now().to_rfc3339();
-  connection
-    .execute(
-      "INSERT INTO secret_ref (
-         id, provider_type, provider_id, secret_store_key, masked_hint, created_at, updated_at
-       ) VALUES ('delete-test-secret', 'tikhub', 'default', 'test-store-key', '[REDACTED]', ?1, ?1)",
-      params![now],
-    )
-    .expect("test secret metadata should insert");
-  let workspace_id = connection
-    .query_row("SELECT id FROM workspace LIMIT 1", [], |row| {
-      row.get::<_, String>(0)
-    })
-    .expect("workspace id should load");
-  connection
-    .execute(
-      "INSERT INTO tikhub_connector (
-         id, workspace_id, secret_ref_id, base_url, enabled, config_version,
-         last_tested_at, last_test_status, created_at, updated_at
-       ) VALUES ('default', ?1, 'delete-test-secret', 'https://api.tikhub.dev', 1, 1,
-                 ?2, 'success', ?2, ?2)",
-      params![workspace_id, now],
-    )
-    .expect("ready test connector should insert");
 }
 
 fn create_task_input() -> CreateCollectionTaskInput {
