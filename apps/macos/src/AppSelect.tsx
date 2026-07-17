@@ -1,4 +1,5 @@
 import { Check, ChevronDown, Search } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import {
   useEffect,
   useMemo,
@@ -7,6 +8,7 @@ import {
   type KeyboardEvent,
 } from 'react'
 import './AppSelect.css'
+import './i18n'
 
 export type AppSelectOption = {
   value: string
@@ -54,9 +56,12 @@ function AppSelect({
   disabled = false,
   invalid = false,
   searchable = false,
-  searchPlaceholder = '搜索选项',
-  emptyLabel = '没有匹配的选项',
+  searchPlaceholder,
+  emptyLabel,
 }: AppSelectProps) {
+  const { t } = useTranslation('common')
+  const resolvedSearchPlaceholder = searchPlaceholder ?? t('select.searchOptions')
+  const resolvedEmptyLabel = emptyLabel ?? t('select.noMatchingOptions')
   const [isOpen, setIsOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(-1)
@@ -192,9 +197,9 @@ function AppSelect({
               <Search size={14} aria-hidden="true" />
               <input
                 ref={searchRef}
-                aria-label={searchPlaceholder}
+                aria-label={resolvedSearchPlaceholder}
                 autoComplete="off"
-                placeholder={searchPlaceholder}
+                placeholder={resolvedSearchPlaceholder}
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 onKeyDown={handleSearchKeyDown}
@@ -234,7 +239,7 @@ function AppSelect({
               )
             })}
             {filteredOptions.length === 0 ? (
-              <p className="app-select__empty">{emptyLabel}</p>
+              <p className="app-select__empty">{resolvedEmptyLabel}</p>
             ) : null}
           </div>
         </div>

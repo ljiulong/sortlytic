@@ -24,6 +24,11 @@ const common: TranslationBundle = {
     required: '必填',
     unknownError: '发生未知错误，请稍后重试。',
     noDescription: '暂无更新说明。',
+    'window.close': '关闭窗口',
+    'window.minimize': '最小化窗口',
+    'window.toggleSize': '切换窗口大小',
+    'select.searchOptions': '搜索选项',
+    'select.noMatchingOptions': '没有匹配的选项',
   },
   'en-US': {
     appName: 'Sortlytic',
@@ -48,6 +53,11 @@ const common: TranslationBundle = {
     required: 'Required',
     unknownError: 'Something went wrong. Please try again later.',
     noDescription: 'No update notes are available.',
+    'window.close': 'Close window',
+    'window.minimize': 'Minimize window',
+    'window.toggleSize': 'Toggle window size',
+    'select.searchOptions': 'Search options',
+    'select.noMatchingOptions': 'No matching options',
   },
 }
 

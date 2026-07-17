@@ -1,14 +1,18 @@
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { useTranslation } from 'react-i18next'
+import './i18n'
 import './WindowControls.css'
 
 function WindowControls() {
+  const { t } = useTranslation('common')
   if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return null
 
   return (
     <div className="window-chrome" data-tauri-drag-region>
       <div className="window-controls">
         <button
-          aria-label="关闭窗口"
+          aria-label={t('window.close')}
+          title={t('window.close')}
           className="window-control window-control-close"
           type="button"
           onClick={(event) => {
@@ -17,7 +21,8 @@ function WindowControls() {
           }}
         />
         <button
-          aria-label="最小化窗口"
+          aria-label={t('window.minimize')}
+          title={t('window.minimize')}
           className="window-control window-control-minimize"
           type="button"
           onClick={(event) => {
@@ -26,7 +31,8 @@ function WindowControls() {
           }}
         />
         <button
-          aria-label="切换窗口大小"
+          aria-label={t('window.toggleSize')}
+          title={t('window.toggleSize')}
           className="window-control window-control-maximize"
           type="button"
           onClick={(event) => {
