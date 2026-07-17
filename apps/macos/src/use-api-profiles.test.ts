@@ -13,6 +13,7 @@ import {
 } from './api-profiles'
 import {
   API_PROFILE_REGISTRY_QUERY_KEY,
+  WORKBENCH_BACKEND_QUERY_KEY,
   useApiProfiles,
 } from './use-api-profiles'
 
@@ -209,10 +210,13 @@ describe('API 配置 React Query Hook', () => {
     expect(invalidateQueriesMock).toHaveBeenCalledWith({
       queryKey: API_PROFILE_REGISTRY_QUERY_KEY,
     })
+    expect(invalidateQueriesMock).toHaveBeenCalledWith({
+      queryKey: WORKBENCH_BACKEND_QUERY_KEY,
+    })
     expect(JSON.stringify(mutationVariablesMock.current)).not.toContain(secret)
   })
 
-  it('测试、手动切换和删除后均使安全注册表查询失效', async () => {
+  it('测试、手动切换和删除成功后均使注册表与工作台派生状态失效', async () => {
     invokeMock
       .mockResolvedValueOnce(testResult)
       .mockResolvedValueOnce(registry)
@@ -228,13 +232,28 @@ describe('API 配置 React Query Hook', () => {
       'activate_api_profile',
       'delete_api_profile',
     ])
-    expect(invalidateQueriesMock).toHaveBeenCalledTimes(3)
+    expect(invalidateQueriesMock).toHaveBeenCalledTimes(6)
     expect(invalidateQueriesMock).toHaveBeenNthCalledWith(1, {
       queryKey: API_PROFILE_REGISTRY_QUERY_KEY,
     })
+    expect(invalidateQueriesMock).toHaveBeenNthCalledWith(2, {
+      queryKey: WORKBENCH_BACKEND_QUERY_KEY,
+    })
+    expect(invalidateQueriesMock).toHaveBeenNthCalledWith(3, {
+      queryKey: API_PROFILE_REGISTRY_QUERY_KEY,
+    })
+    expect(invalidateQueriesMock).toHaveBeenNthCalledWith(4, {
+      queryKey: WORKBENCH_BACKEND_QUERY_KEY,
+    })
+    expect(invalidateQueriesMock).toHaveBeenNthCalledWith(5, {
+      queryKey: API_PROFILE_REGISTRY_QUERY_KEY,
+    })
+    expect(invalidateQueriesMock).toHaveBeenNthCalledWith(6, {
+      queryKey: WORKBENCH_BACKEND_QUERY_KEY,
+    })
   })
 
-  it('查询使用独立键，失败保存也刷新列表且不在缓存变量或错误中暴露密钥', async () => {
+  it('查询使用独立键，失败保存也刷新注册表与工作台且不在缓存变量或错误中暴露密钥', async () => {
     const secret = 'failed-secret-that-must-not-leak'
     invokeMock.mockRejectedValueOnce(new Error(`保存 ${secret} 失败`))
 
@@ -250,6 +269,25 @@ describe('API 配置 React Query Hook', () => {
     expect(invalidateQueriesMock).toHaveBeenCalledWith({
       queryKey: API_PROFILE_REGISTRY_QUERY_KEY,
     })
+    expect(invalidateQueriesMock).toHaveBeenCalledWith({
+      queryKey: WORKBENCH_BACKEND_QUERY_KEY,
+    })
     expect(JSON.stringify(mutationVariablesMock.current)).not.toContain(secret)
+  })
+
+  it.each([
+    ['测试', (hook: ReturnType<typeof useApiProfiles>) => hook.retestProfile('tikhub', 'tikhub-1')],
+    ['切换', (hook: ReturnType<typeof useApiProfiles>) => hook.activateProfile('tikhub', 'tikhub-1')],
+    ['删除', (hook: ReturnType<typeof useApiProfiles>) => hook.deleteProfile('tikhub', 'tikhub-1')],
+  ])('%s失败后仍使注册表与工作台派生状态失效', async (_label, runMutation) => {
+    invokeMock.mockRejectedValueOnce(new Error('操作失败'))
+
+    const hook = renderApiProfilesHook()
+    await expect(runMutation(hook)).rejects.toThrow('操作失败')
+
+    expect(invalidateQueriesMock.mock.calls).toEqual([
+      [{ queryKey: API_PROFILE_REGISTRY_QUERY_KEY }],
+      [{ queryKey: WORKBENCH_BACKEND_QUERY_KEY }],
+    ])
   })
 })

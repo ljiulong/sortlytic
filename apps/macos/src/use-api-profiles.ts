@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  type QueryClient,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import {
   activateApiProfile,
   deleteApiProfile,
@@ -12,6 +17,7 @@ import {
 } from './api-profiles'
 
 export const API_PROFILE_REGISTRY_QUERY_KEY = ['api-profile-registry'] as const
+export const WORKBENCH_BACKEND_QUERY_KEY = ['workbench-backend'] as const
 
 type PrivateMutationOperation<T> = () => Promise<T>
 
@@ -22,13 +28,11 @@ export function useApiProfiles() {
     queryFn: getApiProfileRegistry,
     retry: 1,
   })
-  const invalidateRegistry = () => queryClient.invalidateQueries({
-    queryKey: API_PROFILE_REGISTRY_QUERY_KEY,
-  })
-  const saveMutation = usePrivateApiProfileMutation<ApiProfileTestResult>(invalidateRegistry)
-  const testMutation = usePrivateApiProfileMutation<ApiProfileTestResult>(invalidateRegistry)
-  const activateMutation = usePrivateApiProfileMutation<ApiProfileRegistryView>(invalidateRegistry)
-  const deleteMutation = usePrivateApiProfileMutation<ApiProfileRegistryView>(invalidateRegistry)
+  const invalidateProfileConsumers = () => invalidateApiProfileQueries(queryClient)
+  const saveMutation = usePrivateApiProfileMutation<ApiProfileTestResult>(invalidateProfileConsumers)
+  const testMutation = usePrivateApiProfileMutation<ApiProfileTestResult>(invalidateProfileConsumers)
+  const activateMutation = usePrivateApiProfileMutation<ApiProfileRegistryView>(invalidateProfileConsumers)
+  const deleteMutation = usePrivateApiProfileMutation<ApiProfileRegistryView>(invalidateProfileConsumers)
 
   const saveAndTestProfile = (input: SaveApiProfileInput) => saveMutation.mutateAsync(async () => {
     const registry = await saveApiProfile(input)
@@ -55,7 +59,7 @@ export function useApiProfiles() {
     retestProfile,
     activateProfile,
     deleteProfile: removeProfile,
-    refreshProfiles: invalidateRegistry,
+    refreshProfiles: invalidateProfileConsumers,
     isSaving: saveMutation.isPending,
     isTesting: testMutation.isPending,
     isActivating: activateMutation.isPending,
@@ -66,6 +70,15 @@ export function useApiProfiles() {
       || activateMutation.isPending
       || deleteMutation.isPending,
   }
+}
+
+function invalidateApiProfileQueries(
+  queryClient: Pick<QueryClient, 'invalidateQueries'>,
+) {
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: API_PROFILE_REGISTRY_QUERY_KEY }),
+    queryClient.invalidateQueries({ queryKey: WORKBENCH_BACKEND_QUERY_KEY }),
+  ])
 }
 
 function usePrivateApiProfileMutation<T>(
