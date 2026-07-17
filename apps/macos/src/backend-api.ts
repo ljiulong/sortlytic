@@ -442,6 +442,13 @@ export function cancelTask(taskId: string) {
   })
 }
 
+export function deleteTask(taskId: string) {
+  return invoke<void>('delete_task', {
+    taskId,
+    rootPath: null,
+  })
+}
+
 export function generateFormCollectionPlan(request: GenerateFormPlanInput) {
   return invoke<CollectionPlanDraftView>('generate_form_collection_plan', { request })
 }

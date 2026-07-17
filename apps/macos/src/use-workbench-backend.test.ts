@@ -7,6 +7,7 @@ import {
   checkForAppUpdate,
   type CollectionPlanView,
   type CollectionTaskView,
+  deleteTask,
   getLatestCollectionPlan,
   getTikhubConnector,
   installAppUpdate,
@@ -172,12 +173,13 @@ beforeEach(() => {
 })
 
 describe('任务页动作', () => {
-  it('使用稳定的 Tauri 命令读取、更新并取消指定任务', async () => {
+  it('使用稳定的 Tauri 命令读取、更新、取消并删除指定任务', async () => {
     invokeMock.mockResolvedValue({})
 
     await getLatestCollectionPlan('task-1')
     await updateCollectionTask('task-1', { name: '更新后的任务名' })
     await cancelTask('task-1')
+    await deleteTask('task-1')
 
     expect(invokeMock).toHaveBeenNthCalledWith(1, 'get_latest_collection_plan', {
       taskId: 'task-1',
@@ -192,6 +194,22 @@ describe('任务页动作', () => {
       taskId: 'task-1',
       rootPath: null,
     })
+    expect(invokeMock).toHaveBeenNthCalledWith(4, 'delete_task', {
+      taskId: 'task-1',
+      rootPath: null,
+    })
+  })
+
+  it('删除成功后更新状态消息并刷新工作台真实数据', async () => {
+    renderWorkbenchHook()
+    const deleteMutation = mutationOptionsMock.current[7]
+    const actionMessageSetter = stateSettersMock.current[1]
+
+    expect(deleteMutation).toBeDefined()
+    await deleteMutation?.onSuccess?.(undefined)
+
+    expect(actionMessageSetter).toHaveBeenCalledWith('任务已删除')
+    expect(invalidateQueriesMock).toHaveBeenCalledWith({ queryKey: ['workbench-backend'] })
   })
 
   it('从持久化计划完成计价、确认和入队，不依赖页面内存中的 activePlan', async () => {

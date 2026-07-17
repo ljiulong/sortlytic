@@ -7,6 +7,7 @@ import {
   confirmCollectionPlan,
   createCollectionTask,
   createExportJob,
+  deleteTask,
   enqueueTask,
   ensureDefaultWorkspace,
   generateCollectionPlanFromText,
@@ -338,6 +339,19 @@ export function useWorkbenchBackend() {
     onError: (error) => setActionMessage(backendErrorMessage(error)),
   })
 
+  const deleteTaskMutation = useMutation({
+    mutationFn: async (taskId: string) => {
+      assertTauriRuntime()
+      return deleteTask(taskId)
+    },
+    onSuccess: (_, taskId) => {
+      setActivePlan((plan) => (plan?.taskId === taskId ? undefined : plan))
+      setActionMessage('任务已删除')
+      void queryClient.invalidateQueries({ queryKey })
+    },
+    onError: (error) => setActionMessage(backendErrorMessage(error)),
+  })
+
   const confirmTaskMutation = useMutation({
     mutationFn: confirmPersistedTask,
     onSuccess: (run) => {
@@ -373,6 +387,7 @@ export function useWorkbenchBackend() {
       saveTikhubTokenMutation.isPending ||
       updateTaskMutation.isPending ||
       cancelTaskMutation.isPending ||
+      deleteTaskMutation.isPending ||
       confirmTaskMutation.isPending ||
       modelSettings.isModelSettingsPending ||
       modelSettings.isModelActivationPending ||
@@ -382,6 +397,7 @@ export function useWorkbenchBackend() {
     confirmActivePlan: confirmPlanMutation.mutateAsync,
     updateTask: updateTaskMutation.mutateAsync,
     cancelTask: cancelTaskMutation.mutateAsync,
+    deleteTask: deleteTaskMutation.mutateAsync,
     confirmTask: confirmTaskMutation.mutateAsync,
     exportTask: exportMutation.mutateAsync,
     saveAndTestTikhubToken: saveTikhubTokenMutation.mutateAsync,
