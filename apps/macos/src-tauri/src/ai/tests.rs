@@ -121,6 +121,38 @@ fn text_generation_uses_active_prompt_and_real_provider_response() {
 }
 
 #[test]
+fn prompt_regression_calls_the_active_model_with_the_candidate_content() {
+  let root_path = unique_temp_workspace("ai-prompt-regression");
+  create_workspace("提示词真实回归测试", &root_path).expect("workspace should be created");
+  let plan = valid_keyword_plan();
+  let response = serde_json::json!({
+    "choices": [{ "message": { "content": plan.to_string() } }],
+    "usage": { "prompt_tokens": 36, "completion_tokens": 64 }
+  })
+  .to_string();
+  let (base_url, server) = serve_ai_once(200, response, |request| {
+    assert!(request.contains("候选提示词正文-必须真实发送"));
+    assert!(request.contains("回归样例-最近 7 天美国 TikTok 汽车内容"));
+    assert!(request.contains("collection_plan_v3"));
+  });
+  let profile_id = configure_active_ai(&root_path, base_url);
+
+  let result = run_collection_prompt_regression(
+    &root_path,
+    "候选提示词正文-必须真实发送",
+    "回归样例-最近 7 天美国 TikTok 汽车内容",
+  )
+  .expect("prompt regression should call the active model");
+  server.join().expect("test server should finish");
+
+  assert_eq!(result.provider_id, profile_id);
+  assert_eq!(result.model_id, "deepseek-test");
+  assert_eq!(result.output_json, plan);
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn provider_failure_is_persisted_without_secret_or_body() {
   let root_path = unique_temp_workspace("ai-provider-failure");
   create_workspace("AI 失败记录测试", &root_path).expect("workspace should be created");

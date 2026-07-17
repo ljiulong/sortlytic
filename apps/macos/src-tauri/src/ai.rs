@@ -76,6 +76,38 @@ pub struct GeneratedCollectionPlanView {
   pub collection_plan: CollectionPlanView,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct PromptRegressionModelOutput {
+  pub provider_id: String,
+  pub model_id: String,
+  pub output_json: Value,
+}
+
+pub fn run_collection_prompt_regression(
+  root_path: impl AsRef<Path>,
+  prompt_content: &str,
+  intent_text: &str,
+) -> AppResult<PromptRegressionModelOutput> {
+  let root_path = root_path.as_ref();
+  let profile = active_ai_profile(
+    root_path,
+    &GenerateCollectionPlanFromTextInput {
+      task_id: String::new(),
+      intent_text: intent_text.to_string(),
+      provider_id: None,
+      model_id: None,
+    },
+  )?;
+  let request = collection_plan_request(prompt_content, intent_text);
+  let response = call_model(&profile.config, &request)?;
+
+  Ok(PromptRegressionModelOutput {
+    provider_id: profile.profile_id,
+    model_id: profile.config.model_id,
+    output_json: normalize_model_plan(response.output_json),
+  })
+}
+
 pub fn generate_collection_plan_from_text(
   root_path: impl AsRef<Path>,
   input: GenerateCollectionPlanFromTextInput,
