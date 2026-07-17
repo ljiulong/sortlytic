@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import * as Tabs from '@radix-ui/react-tabs'
 import { zodResolver } from '@hookform/resolvers/zod'
 import {
@@ -70,6 +70,7 @@ export function CollectionBuilder({
 }) {
   const { t } = useTranslation('collection', { i18n })
   const [naturalText, setNaturalText] = useState(naturalIntentDefault)
+  const planSubmissionInFlightRef = useRef(false)
   const formSchema = useMemo(() => createCollectionFormSchema(t), [t])
   const localizedDataTypeOptions = useMemo(() => getCollectionDataTypeOptions(t), [t])
   const localizedGenderFilterOptions = useMemo(() => getGenderFilterOptions(t), [t])
@@ -114,14 +115,24 @@ export function CollectionBuilder({
     }
   }, [selectedRange, setValue, timeRanges.values])
 
+  const submitPlanOnce = async (submission: () => Promise<RuntimeCollectionPlan>) => {
+    if (planSubmissionInFlightRef.current) return
+    planSubmissionInFlightRef.current = true
+    try {
+      await submission()
+    } finally {
+      planSubmissionInFlightRef.current = false
+    }
+  }
+
   const submitForm = async (values: CollectionFormValues) => {
-    await onGenerateFormPlan(values)
+    await submitPlanOnce(() => onGenerateFormPlan(values))
   }
 
   const submitNaturalText = async () => {
     const intentText = normalizeNaturalIntent(naturalText)
     if (!intentText) return
-    await onGenerateNaturalPlan(intentText)
+    await submitPlanOnce(() => onGenerateNaturalPlan(intentText))
   }
 
   return (

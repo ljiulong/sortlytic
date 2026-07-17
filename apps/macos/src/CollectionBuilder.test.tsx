@@ -1,6 +1,9 @@
-import { createElement } from 'react'
+// @vitest-environment happy-dom
+
+import { act, createElement } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CollectionBuilder,
   CollectionPlanPreview,
@@ -16,6 +19,7 @@ import {
   countryRegionOptions,
   supportsRegionSelection,
 } from './collection-options'
+import { i18n } from './i18n'
 import type { RuntimeCollectionPlan } from './use-workbench-backend'
 
 const draftPlan: RuntimeCollectionPlan = {
@@ -29,6 +33,54 @@ const draftPlan: RuntimeCollectionPlan = {
   status: '等待确认',
   missing: [],
 }
+
+type MountedBuilder = {
+  container: HTMLDivElement
+  root: Root
+}
+
+const mountedBuilders = new Set<MountedBuilder>()
+
+function mountBuilder({
+  onGenerateNaturalPlan,
+}: {
+  onGenerateNaturalPlan: (intentText: string) => Promise<RuntimeCollectionPlan>
+}) {
+  const container = document.createElement('div')
+  const root = createRoot(container)
+  const mounted = { container, root }
+  document.body.append(container)
+  mountedBuilders.add(mounted)
+
+  act(() => root.render(createElement(CollectionBuilder, {
+    actionMessage: '等待生成',
+    isBusy: false,
+    onConfirmPlan: vi.fn(async () => undefined),
+    onGenerateFormPlan: vi.fn(async () => draftPlan),
+    onGenerateNaturalPlan,
+  })))
+
+  return mounted
+}
+
+function findButton(container: HTMLElement, text: string) {
+  return Array.from(container.querySelectorAll('button'))
+    .find((button) => button.textContent?.includes(text))
+}
+
+beforeEach(async () => {
+  ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
+    .IS_REACT_ACT_ENVIRONMENT = true
+  await i18n.changeLanguage('zh-CN')
+})
+
+afterEach(() => {
+  for (const mounted of mountedBuilders) {
+    act(() => mounted.root.unmount())
+    mounted.container.remove()
+  }
+  mountedBuilders.clear()
+})
 
 function renderBuilder(activePlan?: RuntimeCollectionPlan) {
   return renderToStaticMarkup(
@@ -243,6 +295,44 @@ describe('collection form controls', () => {
     expect(naturalIntentDefault).toBe('')
     expect(normalizeNaturalIntent('  采集公开账号  ')).toBe('采集公开账号')
     expect(normalizeNaturalIntent('   ')).toBe('')
+  })
+
+  it('同一渲染帧内快速重复提交自然语言计划时只生成一次', async () => {
+    let resolvePlan!: (plan: RuntimeCollectionPlan) => void
+    const pendingPlan = new Promise<RuntimeCollectionPlan>((resolve) => {
+      resolvePlan = resolve
+    })
+    const onGenerateNaturalPlan = vi.fn(() => pendingPlan)
+    const mounted = mountBuilder({ onGenerateNaturalPlan })
+
+    act(() => findButton(mounted.container, '自然语言')?.dispatchEvent(
+      new MouseEvent('mousedown', { bubbles: true, button: 0 }),
+    ))
+    const textarea = mounted.container.querySelector<HTMLTextAreaElement>('#intent')
+    act(() => {
+      if (!textarea) throw new Error('未找到自然语言输入框')
+      const nativeSetter = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )?.set
+      nativeSetter?.call(textarea, '  采集公开账号  ')
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const submitButton = findButton(mounted.container, '解析为计划')
+
+    act(() => {
+      submitButton?.click()
+      submitButton?.click()
+    })
+
+    expect(onGenerateNaturalPlan).toHaveBeenCalledTimes(1)
+    expect(onGenerateNaturalPlan).toHaveBeenCalledWith('采集公开账号')
+
+    resolvePlan(draftPlan)
+    await act(async () => pendingPlan)
+
+    await act(async () => submitButton?.click())
+    expect(onGenerateNaturalPlan).toHaveBeenCalledTimes(2)
   })
 
   it('数据类型至少选择一项，且年龄范围使用闭区间校验', () => {
