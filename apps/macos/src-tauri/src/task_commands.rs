@@ -150,6 +150,15 @@ pub(super) fn list_tasks(
 }
 
 #[tauri::command]
+pub(super) fn list_latest_task_runs(
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<Vec<TaskRunView>> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  tasks::list_latest_task_runs(root_path)
+}
+
+#[tauri::command]
 pub(super) fn list_task_logs(
   task_run_id: String,
   root_path: Option<String>,

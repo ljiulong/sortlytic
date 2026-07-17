@@ -22,6 +22,17 @@ fn legacy_api_profile_reads_are_not_exposed_as_tauri_commands() {
 }
 
 #[test]
+fn latest_task_run_states_are_exposed_as_a_single_batch_command() {
+  let source = include_str!("lib.rs");
+  let handler = source
+    .split(".invoke_handler(tauri::generate_handler![")
+    .nth(1)
+    .expect("Tauri invoke handler should exist");
+
+  assert!(handler.contains("\n      list_latest_task_runs,"));
+}
+
+#[test]
 fn prompt_activation_keeps_real_model_regressions_off_the_ui_thread() {
   let source = include_str!("lib.rs");
   let command = source
