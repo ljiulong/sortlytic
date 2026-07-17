@@ -1,4 +1,5 @@
-import { quoteTikhubConnectorPrice, testTikhubConnector } from './backend-api'
+import { getApiProfileRegistry, testApiProfile } from './api-profiles'
+import { quoteTikhubConnectorPrice } from './backend-api'
 
 export type CollectionPricingPlan = {
   pricingEndpoints?: string[]
@@ -49,10 +50,50 @@ export async function preflightCollectionPlanPricing(plan: CollectionPricingPlan
   }
   if (!endpoints.length) throw new Error('TikHub 计价端点未知，无法确认运行')
 
-  const quota = await testTikhubConnector()
-  const balance = requiredMoney(quota.balance, 'TikHub 充值余额')
-  const freeCredit = requiredMoney(quota.free_credit, 'TikHub 免费额度')
-  const availableCredit = requiredMoney(quota.available_credit, 'TikHub 可用额度合计')
+  let registry
+  try {
+    registry = await getApiProfileRegistry()
+  } catch {
+    throw new Error('TikHub API 配置读取失败，无法确认运行')
+  }
+
+  const activeProfileId = registry.activeProfileIds.tikhub
+  if (!activeProfileId) {
+    throw new Error('当前未选择 TikHub API 配置，无法确认运行')
+  }
+  const activeProfile = registry.tikhubProfiles.find(({ id }) => id === activeProfileId)
+  if (!activeProfile) {
+    throw new Error('当前 TikHub API 配置不存在，无法确认运行')
+  }
+  if (activeProfile.status !== 'success') {
+    throw new Error('当前 TikHub API 配置未通过验证，无法确认运行')
+  }
+
+  let testResult
+  try {
+    testResult = await testApiProfile('tikhub', activeProfileId)
+  } catch {
+    throw new Error('当前 TikHub API 配置测试失败，无法确认运行')
+  }
+  if (!testResult.success) {
+    throw new Error('当前 TikHub API 配置测试失败，无法确认运行')
+  }
+  if (testResult.registry.activeProfileIds.tikhub !== activeProfileId) {
+    throw new Error('当前 TikHub API 配置在测试期间已变更，无法确认运行')
+  }
+  const testedProfile = testResult.registry.tikhubProfiles.find(
+    ({ id }) => id === activeProfileId,
+  )
+  if (!testedProfile || testedProfile.status !== 'success' || !testedProfile.testSummary) {
+    throw new Error('当前 TikHub API 配置测试结果不完整，无法确认运行')
+  }
+
+  const balance = requiredMoney(testedProfile.testSummary.balance, 'TikHub 充值余额')
+  const freeCredit = requiredMoney(testedProfile.testSummary.freeCredit, 'TikHub 免费额度')
+  const availableCredit = requiredMoney(
+    testedProfile.testSummary.availableCredit,
+    'TikHub 可用额度合计',
+  )
   if (Math.abs(balance + freeCredit - availableCredit) > 0.000001) {
     throw new Error('TikHub 额度合计与免费额度、充值余额不一致')
   }

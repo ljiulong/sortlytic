@@ -119,6 +119,52 @@ const tikhubSecret: SecretRefView = {
   masked_hint: 'tikh...[REDACTED]...1234',
 }
 
+function tikhubRegistryFixture({
+  activeProfileId = 'tikhub-profile-1',
+  profileId = 'tikhub-profile-1',
+  includeProfile = true,
+  status = 'success',
+  balance = 0.2,
+  freeCredit = 0.1,
+  availableCredit = 0.3,
+}: {
+  activeProfileId?: string | null
+  profileId?: string
+  includeProfile?: boolean
+  status?: 'needs_rebind' | 'untested' | 'success' | 'failed'
+  balance?: number | null
+  freeCredit?: number | null
+  availableCredit?: number | null
+} = {}) {
+  return {
+    activeProfileIds: { tikhub: activeProfileId, ai: null },
+    tikhubProfiles: includeProfile
+      ? [{
+          kind: 'tikhub',
+          id: profileId,
+          name: '主账号',
+          baseUrl: 'https://api.tikhub.io',
+          revision: 1,
+          status,
+          maskedKey: 'tikh...[REDACTED]...1234',
+          hasCredential: true,
+          isActive: activeProfileId === profileId,
+          lastTestedAt: '2026-07-17T00:00:00Z',
+          testSummary: {
+            maskedAccount: 'st***@example.com',
+            balance,
+            freeCredit,
+            availableCredit,
+            todayUsage: 0.01,
+          },
+          createdAt: '2026-07-17T00:00:00Z',
+          updatedAt: '2026-07-17T00:00:00Z',
+        }]
+      : [],
+    aiProfiles: [],
+  }
+}
+
 function connectorFixture(
   overrides: Partial<TikhubConnectorView> = {},
 ): TikhubConnectorView {
@@ -214,6 +260,7 @@ describe('任务页动作', () => {
 
   it('从持久化计划完成计价、确认和入队，不依赖页面内存中的 activePlan', async () => {
     vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    const registry = tikhubRegistryFixture({ balance: 1, freeCredit: 1, availableCredit: 2 })
     invokeMock.mockImplementation(async (command: string) => {
       if (command === 'get_latest_collection_plan') {
         return {
@@ -238,12 +285,9 @@ describe('任务页动作', () => {
           updated_at: '2026-07-17T00:00:00Z',
         }
       }
-      if (command === 'test_tikhub_connector') {
-        return {
-          balance: 1,
-          free_credit: 1,
-          available_credit: 2,
-        }
+      if (command === 'get_api_profile_registry') return registry
+      if (command === 'test_api_profile') {
+        return { success: true, message: 'TikHub API 配置测试成功', registry }
       }
       if (command === 'quote_tikhub_connector_price') {
         return { total_price: 0.01 }
@@ -259,7 +303,8 @@ describe('任务页动作', () => {
     })
     expect(invokeMock.mock.calls.map(([command]) => command)).toEqual([
       'get_latest_collection_plan',
-      'test_tikhub_connector',
+      'get_api_profile_registry',
+      'test_api_profile',
       'quote_tikhub_connector_price',
       'confirm_collection_plan',
       'enqueue_task',
@@ -492,16 +537,19 @@ describe('计划实时计价预检', () => {
   } satisfies RuntimeCollectionPlan
 
   it('同时读取双额度并使用最高单次报价核对计划请求上限', async () => {
+    const registryBeforeTest = tikhubRegistryFixture({
+      balance: 9,
+      freeCredit: 1,
+      availableCredit: 10,
+    })
+    const testedRegistry = tikhubRegistryFixture()
     invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
-      if (command === 'test_tikhub_connector') {
+      if (command === 'get_api_profile_registry') return registryBeforeTest
+      if (command === 'test_api_profile') {
         return {
           success: true,
-          base_url: 'https://api.tikhub.io',
-          balance: 0.2,
-          free_credit: 0.1,
-          available_credit: 0.3,
-          daily_usage_json: {},
-          message: '可用',
+          message: 'TikHub API 配置测试成功',
+          registry: testedRegistry,
         }
       }
       if (command === 'quote_tikhub_connector_price') {
@@ -524,20 +572,26 @@ describe('计划实时计价预检', () => {
       availableCredit: 0.3,
       quotedTotalMicros: 60_000,
     })
+    expect(invokeMock).toHaveBeenCalledWith('test_api_profile', {
+      kind: 'tikhub',
+      profileId: 'tikhub-profile-1',
+      rootPath: null,
+    })
+    expect(invokeMock.mock.calls.map(([command]) => command)).not.toContain(
+      'test_tikhub_connector',
+    )
   })
 
   it('免费额度与充值余额合计不足时阻止确认', async () => {
+    const registry = tikhubRegistryFixture({
+      balance: 0.01,
+      freeCredit: 0.01,
+      availableCredit: 0.02,
+    })
     invokeMock.mockImplementation(async (command: string) => {
-      if (command === 'test_tikhub_connector') {
-        return {
-          success: true,
-          base_url: 'https://api.tikhub.io',
-          balance: 0.01,
-          free_credit: 0.01,
-          available_credit: 0.02,
-          daily_usage_json: {},
-          message: '可用',
-        }
+      if (command === 'get_api_profile_registry') return registry
+      if (command === 'test_api_profile') {
+        return { success: true, message: 'TikHub API 配置测试成功', registry }
       }
       if (command === 'quote_tikhub_connector_price') {
         return {
@@ -555,6 +609,63 @@ describe('计划实时计价预检', () => {
     await expect(preflightCollectionPlanPricing(plan)).rejects.toThrow(
       'TikHub 免费额度与充值余额合计不足',
     )
+  })
+
+  it('没有当前 TikHub 配置时失败关闭且不测试、不报价', async () => {
+    invokeMock.mockResolvedValue(tikhubRegistryFixture({ activeProfileId: null }))
+
+    await expect(preflightCollectionPlanPricing(plan)).rejects.toThrow(
+      '当前未选择 TikHub API 配置，无法确认运行',
+    )
+    expect(invokeMock.mock.calls.map(([command]) => command)).toEqual([
+      'get_api_profile_registry',
+    ])
+  })
+
+  it('当前 TikHub 配置未验证时失败关闭', async () => {
+    invokeMock.mockResolvedValue(tikhubRegistryFixture({ status: 'needs_rebind' }))
+
+    await expect(preflightCollectionPlanPricing(plan)).rejects.toThrow(
+      '当前 TikHub API 配置未通过验证，无法确认运行',
+    )
+    expect(invokeMock.mock.calls.map(([command]) => command)).toEqual([
+      'get_api_profile_registry',
+    ])
+  })
+
+  it('注册表读取失败时使用固定安全错误且不泄露完整密钥', async () => {
+    const secret = 'tikhub-secret-that-must-not-leak'
+    invokeMock.mockRejectedValue(new Error(`读取失败：token=${secret}`))
+
+    const rejection = expect(preflightCollectionPlanPricing(plan)).rejects
+    await rejection.toThrow('TikHub API 配置读取失败，无法确认运行')
+    await rejection.not.toThrow(secret)
+    expect(invokeMock.mock.calls.map(([command]) => command)).toEqual([
+      'get_api_profile_registry',
+    ])
+  })
+
+  it('当前配置的真实账号测试失败时不继续报价', async () => {
+    const registry = tikhubRegistryFixture()
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'get_api_profile_registry') return registry
+      if (command === 'test_api_profile') {
+        return {
+          success: false,
+          message: 'TikHub API 配置测试失败',
+          registry: tikhubRegistryFixture({ activeProfileId: null, status: 'failed' }),
+        }
+      }
+      throw new Error(`意外命令：${command}`)
+    })
+
+    await expect(preflightCollectionPlanPricing(plan)).rejects.toThrow(
+      '当前 TikHub API 配置测试失败，无法确认运行',
+    )
+    expect(invokeMock.mock.calls.map(([command]) => command)).toEqual([
+      'get_api_profile_registry',
+      'test_api_profile',
+    ])
   })
 })
 
