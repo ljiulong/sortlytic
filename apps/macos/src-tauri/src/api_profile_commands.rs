@@ -9,6 +9,8 @@ use crate::secrets::mask_secret;
 use super::{resolve_workspace_root, AppState};
 
 #[cfg(test)]
+mod activation_tests;
+#[cfg(test)]
 mod mutation_race_tests;
 mod service;
 mod validation;

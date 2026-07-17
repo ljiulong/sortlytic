@@ -291,7 +291,14 @@ where
     .get(&profile.credential_ref_id)
     .cloned();
   let Some(credential) = credential else {
-    persist_tikhub(root, &profile, None, ApiProfileStatus::NeedsRebind, None)?;
+    persist_tikhub(
+      root,
+      &profile,
+      None,
+      ApiProfileStatus::NeedsRebind,
+      None,
+      false,
+    )?;
     audit(
       root,
       "test_api_profile",
@@ -327,7 +334,21 @@ where
       Some(format!("{:?}", failure.code)),
     ),
   };
-  persist_tikhub(root, &profile, Some(credential.revision), status, summary)?;
+  let auto_activate = status == ApiProfileStatus::Success
+    && auto_activation_allowed(
+      root,
+      ApiProfileKind::Tikhub,
+      id,
+      registry.tikhub_profiles.len(),
+    )?;
+  persist_tikhub(
+    root,
+    &profile,
+    Some(credential.revision),
+    status,
+    summary,
+    auto_activate,
+  )?;
   audit(
     root,
     "test_api_profile",
@@ -343,6 +364,7 @@ fn persist_tikhub(
   credential_revision: Option<u64>,
   status: ApiProfileStatus,
   summary: Option<TikhubSafeTestSummary>,
+  auto_activate: bool,
 ) -> AppResult<()> {
   let now = Utc::now().to_rfc3339();
   update_api_profile_registry(root, |registry| {
@@ -360,16 +382,11 @@ fn persist_tikhub(
     {
       return Err(error("TikHub 配置已在测试期间变更，请重新测试"));
     }
-    let was_successful = profile.status == ApiProfileStatus::Success;
     profile.status = status;
     profile.last_tested_at = Some(now.clone());
     profile.test_summary = summary;
     profile.updated_at = now.clone();
-    if status == ApiProfileStatus::Success
-      && !was_successful
-      && registry.active_profile_ids.tikhub.is_none()
-      && registry.tikhub_profiles.len() == 1
-    {
+    if auto_activate && registry.active_profile_ids.tikhub.is_none() {
       registry.active_profile_ids.tikhub = Some(expected.id.clone());
     } else if status != ApiProfileStatus::Success
       && registry.active_profile_ids.tikhub.as_deref() == Some(expected.id.as_str())
@@ -399,6 +416,8 @@ fn test_ai(root: &Path, id: &str) -> AppResult<ServiceTestResult> {
   } else {
     ApiProfileStatus::NeedsRebind
   };
+  let auto_activate =
+    success && auto_activation_allowed(root, ApiProfileKind::Ai, id, registry.ai_profiles.len())?;
   let now = Utc::now().to_rfc3339();
   update_api_profile_registry(root, |registry| {
     let current_revision = credential_revision(registry, &profile);
@@ -412,15 +431,10 @@ fn test_ai(root: &Path, id: &str) -> AppResult<ServiceTestResult> {
     {
       return Err(error("AI 配置已在校验期间变更，请重新校验"));
     }
-    let was_successful = current.status == ApiProfileStatus::Success;
     current.status = status;
     current.last_tested_at = Some(now.clone());
     current.updated_at = now.clone();
-    if success
-      && !was_successful
-      && registry.active_profile_ids.ai.is_none()
-      && registry.ai_profiles.len() == 1
-    {
+    if auto_activate && registry.active_profile_ids.ai.is_none() {
       registry.active_profile_ids.ai = Some(id.to_string());
     } else if !success && registry.active_profile_ids.ai.as_deref() == Some(id) {
       registry.active_profile_ids.ai = None;
@@ -473,10 +487,14 @@ pub(super) fn delete_profile(
   kind: ApiProfileKind,
   id: &str,
 ) -> AppResult<ApiProfileRegistry> {
-  mutate_registry(root, |transaction, registry| {
+  let was_active = mutate_registry(root, |transaction, registry| {
     ensure_mutable(transaction, registry, kind, id)?;
     #[cfg(test)]
     super::tests::run_after_mutability_check_hook();
+    let was_active = match kind {
+      ApiProfileKind::Tikhub => registry.active_profile_ids.tikhub.as_deref() == Some(id),
+      ApiProfileKind::Ai => registry.active_profile_ids.ai.as_deref() == Some(id),
+    };
     let credential_id = match kind {
       ApiProfileKind::Tikhub => registry
         .tikhub_profiles
@@ -497,13 +515,13 @@ pub(super) fn delete_profile(
     if registry.active_profile_ids.ai.as_deref() == Some(id) {
       registry.active_profile_ids.ai = None;
     }
-    Ok(())
+    Ok(was_active)
   })?;
   audit(
     root,
     "delete_api_profile",
     id,
-    serde_json::json!({"kind":kind_name(kind)}),
+    serde_json::json!({"kind":kind_name(kind), "was_active":was_active}),
   )?;
   get_registry(root)
 }
@@ -640,6 +658,65 @@ fn today_usage(value: &Value) -> Option<f64> {
 
 fn safe_message(message: &str, secret: &str) -> String {
   redact_sensitive_text(&message.replace(secret, "[REDACTED]"))
+}
+
+fn auto_activation_allowed(
+  root: &Path,
+  kind: ApiProfileKind,
+  profile_id: &str,
+  profile_count: usize,
+) -> AppResult<bool> {
+  let connection = open_workspace_database(root.join(DATABASE_FILE_NAME))?;
+  let mut statement = connection
+    .prepare(
+      "SELECT entity_id,action,safe_details_json FROM audit_log
+       WHERE entity_type = 'api_profile'
+         AND action IN ('save_api_profile','delete_api_profile')
+       ORDER BY rowid",
+    )
+    .map_err(database_error)?;
+  let entries = statement
+    .query_map([], |row| {
+      Ok((
+        row.get::<_, Option<String>>(0)?,
+        row.get::<_, String>(1)?,
+        row.get::<_, String>(2)?,
+      ))
+    })
+    .map_err(database_error)?;
+  let expected_kind = kind_name(kind);
+  let mut first_created_id = None;
+  let mut any_delete = false;
+  let mut deleted_current = false;
+  for entry in entries {
+    let (entity_id, action, details) = entry.map_err(database_error)?;
+    let Ok(details) = serde_json::from_str::<Value>(&details) else {
+      return Ok(false);
+    };
+    if details.get("kind").and_then(Value::as_str) != Some(expected_kind) {
+      continue;
+    }
+    if action == "save_api_profile" && details.get("created").and_then(Value::as_bool) == Some(true)
+    {
+      let Some(entity_id) = entity_id else {
+        return Ok(false);
+      };
+      first_created_id.get_or_insert(entity_id);
+    } else if action == "delete_api_profile" {
+      any_delete = true;
+      deleted_current |= details
+        .get("was_active")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    }
+  }
+  if deleted_current {
+    return Ok(false);
+  }
+  if let Some(first_created_id) = first_created_id {
+    return Ok(first_created_id == profile_id);
+  }
+  Ok(!any_delete && profile_count == 1)
 }
 
 fn audit(root: &Path, action: &str, id: &str, details: Value) -> AppResult<()> {
