@@ -1,5 +1,6 @@
 pub mod accounts;
 pub mod ai;
+mod api_profile_commands;
 pub mod api_profiles;
 mod app_runtime;
 pub mod app_state;
@@ -22,6 +23,10 @@ pub mod workspace;
 use std::{fs, path::PathBuf};
 
 use ai::{AiRunView, GenerateCollectionPlanFromTextInput, GeneratedCollectionPlanView};
+use api_profile_commands::{
+  activate_api_profile, delete_api_profile, get_api_profile_registry, save_api_profile,
+  test_api_profile,
+};
 use app_runtime::workspace_context_from_summary;
 use app_state::{AppState, BackendStatus, WorkspaceContext};
 use collection::{
@@ -366,6 +371,11 @@ pub fn run() {
       get_active_workspace,
       run_workspace_health_check,
       close_workspace,
+      get_api_profile_registry,
+      save_api_profile,
+      test_api_profile,
+      activate_api_profile,
+      delete_api_profile,
       save_secret,
       update_secret,
       delete_secret,
