@@ -8,6 +8,7 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
+use crate::workspace::{open_workspace_database, DATABASE_FILE_NAME};
 
 mod storage;
 
@@ -61,6 +62,12 @@ pub struct NormalizedRecordView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TaskRecordCountView {
+  pub task_id: String,
+  pub record_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PersistCollectionPageResult {
   pub inserted_count: usize,
   pub existing_count: usize,
@@ -75,6 +82,30 @@ pub fn persist_collection_page(
   let input = normalize_input(input)?;
   let prepared = prepare_records(&input)?;
   storage::persist_prepared_records(root_path.as_ref(), &input, prepared)
+}
+
+pub fn list_task_record_counts(root_path: impl AsRef<Path>) -> AppResult<Vec<TaskRecordCountView>> {
+  let connection = open_workspace_database(root_path.as_ref().join(DATABASE_FILE_NAME))?;
+  let mut statement = connection
+    .prepare(
+      "SELECT task.id, COUNT(record.id)
+       FROM collection_task AS task
+       LEFT JOIN normalized_record AS record ON record.task_id = task.id
+       GROUP BY task.id
+       ORDER BY task.created_at DESC, task.id ASC",
+    )
+    .map_err(database_error)?;
+  let rows = statement
+    .query_map([], |row| {
+      Ok(TaskRecordCountView {
+        task_id: row.get(0)?,
+        record_count: row.get(1)?,
+      })
+    })
+    .map_err(database_error)?;
+  rows
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .map_err(database_error)
 }
 
 #[derive(Debug)]
@@ -499,3 +530,6 @@ fn json_error(error: impl ToString) -> AppError {
     false,
   )
 }
+
+#[cfg(test)]
+mod summary_tests;
