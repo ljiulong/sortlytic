@@ -594,6 +594,19 @@ describe('backendErrorMessage', () => {
 })
 
 describe('mapBackendData', () => {
+  it('把 SQLite 标准化记录数关联到对应任务', () => {
+    const result = mapBackendData(
+      workspace,
+      [task],
+      tikhubRegistryFixture(),
+      1_000,
+      [],
+      [{ task_id: task.id, record_count: 42 }],
+    )
+
+    expect(result.tasks[0]?.records).toBe(42)
+  })
+
   it('把最新运行阶段、安全错误和重试状态关联到对应任务', () => {
     const run: TaskRunView = {
       id: 'run-2',

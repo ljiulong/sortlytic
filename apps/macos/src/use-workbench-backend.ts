@@ -16,11 +16,13 @@ import {
   type GenerateFormPlanInput,
   getBackendStatus,
   listLatestTaskRuns,
+  listTaskRecordCounts,
   listTasks,
   saveCollectionPlan,
   type CollectionPlanView,
   type CollectionTaskView,
   type ExportJobView,
+  type TaskRecordCountView,
   type TaskRunView,
   type WorkspaceSummary,
   updateCollectionTask,
@@ -398,14 +400,15 @@ export async function loadBackendWorkbench(): Promise<BackendWorkbenchData> {
   }
 
   const workspace = await ensureDefaultWorkspace()
-  const [status, tasks, latestRuns, registry] = await Promise.all([
+  const [status, tasks, latestRuns, recordCounts, registry] = await Promise.all([
     getBackendStatus(),
     listTasks(),
     listLatestTaskRuns().catch(() => []),
+    listTaskRecordCounts().catch(() => []),
     getApiProfileRegistry().catch(() => null),
   ])
 
-  return mapBackendData(workspace, tasks, registry, status.uptime_ms, latestRuns)
+  return mapBackendData(workspace, tasks, registry, status.uptime_ms, latestRuns, recordCounts)
 }
 
 async function createFormPlan(values: CollectionFormPayload): Promise<RuntimeCollectionPlan> {
@@ -487,6 +490,7 @@ export function mapBackendData(
   registry: ApiProfileRegistryView | null,
   uptimeMs: number,
   latestRuns: TaskRunView[] = [],
+  recordCounts: TaskRecordCountView[] = [],
 ): BackendWorkbenchData {
   const latestTaskId = tasks[0]?.id
   const pendingCount = tasks.filter((task) => task.status === 'waiting_confirmation').length
@@ -494,6 +498,7 @@ export function mapBackendData(
   const requestCount = tasks.reduce((total, task) => total + numberFromJson(task.cost_estimate_json), 0)
 
   const latestRunByTask = new Map(latestRuns.map((run) => [run.task_id, run]))
+  const recordCountByTask = new Map(recordCounts.map((count) => [count.task_id, count.record_count]))
 
   return {
     workspace: {
@@ -514,6 +519,7 @@ export function mapBackendData(
       const run = latestRunByTask.get(task.id)
       return {
         ...row,
+        records: recordCountByTask.get(task.id) ?? 0,
         latestRun: run
           ? {
               id: run.id,
