@@ -35,6 +35,21 @@ pub(super) struct AccountQuota {
   pub(super) available_credit: Option<f64>,
 }
 
+pub(super) fn validate_business_response(response: Value) -> AppResult<Value> {
+  let code = response_code(&response).ok_or_else(|| {
+    AppError::new(
+      AppErrorCode::TikhubRequestError,
+      "TikHub 响应缺少业务状态码 code",
+      AppErrorStage::Collection,
+      false,
+    )
+  })?;
+  if code != 200 {
+    return Err(business_response_error(code));
+  }
+  Ok(response)
+}
+
 pub fn quote_tikhub_connector_price(
   root_path: impl AsRef<Path>,
   endpoint: &str,
@@ -175,14 +190,7 @@ pub(super) fn parse_price_quote(
   request_per_day: i64,
   response: Value,
 ) -> AppResult<TikhubPriceQuote> {
-  if response_code(&response) != Some(200) {
-    return Err(AppError::new(
-      AppErrorCode::TikhubRequestError,
-      "TikHub 实时计价请求未成功",
-      AppErrorStage::Collection,
-      false,
-    ));
-  }
+  let response = validate_business_response(response)?;
   let data = response.get("data").unwrap_or(&Value::Null);
   let total_price = ["total_price", "final_price", "total_cost"]
     .iter()
@@ -230,6 +238,25 @@ fn response_code(response: &Value) -> Option<i64> {
       .as_i64()
       .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
   })
+}
+
+fn business_response_error(code: i64) -> AppError {
+  let (error_code, retryable) = match code {
+    401 | 403 => (AppErrorCode::TikhubAuthError, false),
+    402 => (AppErrorCode::CostLimitError, false),
+    408 | 425 => (AppErrorCode::TikhubRequestError, true),
+    429 => (AppErrorCode::TikhubRateLimit, true),
+    500..=599 => (AppErrorCode::TikhubRequestError, true),
+    _ => (AppErrorCode::TikhubRequestError, false),
+  };
+
+  AppError::new(
+    error_code,
+    format!("TikHub 业务请求失败，code {code}"),
+    AppErrorStage::Collection,
+    retryable,
+  )
+  .with_safe_detail("business_code", code.to_string())
 }
 
 #[cfg(test)]

@@ -248,14 +248,15 @@ fn get_tikhub_json(
     return Err(error_for_status(status, safe_body_summary(&body)));
   }
 
-  serde_json::from_str(&body).map_err(|error| {
+  let response = serde_json::from_str(&body).map_err(|error| {
     AppError::new(
       AppErrorCode::TikhubRequestError,
       format!("TikHub 返回内容不是合法 JSON：{error}"),
       AppErrorStage::Collection,
       true,
     )
-  })
+  })?;
+  account::validate_business_response(response)
 }
 
 fn open_connector_connection(root_path: impl AsRef<Path>) -> AppResult<Connection> {
@@ -791,3 +792,7 @@ mod tests {
 #[cfg(test)]
 #[path = "tikhub/collection_tests.rs"]
 mod collection_tests;
+
+#[cfg(test)]
+#[path = "tikhub/business_response_tests.rs"]
+mod business_response_tests;
