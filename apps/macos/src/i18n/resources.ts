@@ -1,76 +1,38 @@
 import type { AppLanguage } from './index'
 
 export type TranslationNamespace = Record<string, string>
+export type TranslationBundle = Record<AppLanguage, TranslationNamespace>
 
-const emptyNamespace: TranslationNamespace = {}
+const namespaceNames = [
+  'common',
+  'navigation',
+  'dashboard',
+  'collection',
+  'tasks',
+  'settings',
+  'guide',
+  'updates',
+  'messages',
+] as const
+
+export type TranslationNamespaceName = (typeof namespaceNames)[number]
+export type LocaleResources = Record<TranslationNamespaceName, TranslationNamespace>
+
+const bundles = import.meta.glob<TranslationBundle>('./resource-bundles/*.ts', {
+  eager: true,
+  import: 'default',
+})
+
+function buildLocale(language: AppLanguage): LocaleResources {
+  return Object.fromEntries(
+    namespaceNames.map((namespace) => {
+      const bundle = bundles[`./resource-bundles/${namespace}.ts`]
+      return [namespace, bundle?.[language] ?? {}]
+    }),
+  ) as LocaleResources
+}
 
 export const resources = {
-  'zh-CN': {
-    common: {
-      appName: 'Sortlytic',
-      brandSubtitle: '用于采集、整理、校验和导出公开社交平台研究数据的本地优先 macOS 工作区。',
-      language: '语言',
-      languageZh: '简体中文',
-      languageEn: 'English',
-      themeLight: '浅色主题',
-      themeDark: '暗色主题',
-      themeSystem: '跟随系统',
-      loading: '正在加载',
-      save: '保存',
-      cancel: '取消',
-      close: '关闭',
-      confirm: '确认',
-      retry: '重试',
-      refresh: '刷新',
-      back: '返回',
-      next: '下一步',
-      done: '完成',
-      optional: '可选',
-      required: '必填',
-      unknownError: '发生未知错误，请稍后重试。',
-      noDescription: '暂无更新说明。',
-    },
-    navigation: emptyNamespace,
-    dashboard: emptyNamespace,
-    collection: emptyNamespace,
-    tasks: emptyNamespace,
-    settings: emptyNamespace,
-    guide: emptyNamespace,
-    updates: emptyNamespace,
-    messages: emptyNamespace,
-  },
-  'en-US': {
-    common: {
-      appName: 'Sortlytic',
-      brandSubtitle: 'A local-first macOS workspace for collecting, organizing, validating, and exporting public social research data.',
-      language: 'Language',
-      languageZh: '简体中文',
-      languageEn: 'English',
-      themeLight: 'Light theme',
-      themeDark: 'Dark theme',
-      themeSystem: 'System theme',
-      loading: 'Loading',
-      save: 'Save',
-      cancel: 'Cancel',
-      close: 'Close',
-      confirm: 'Confirm',
-      retry: 'Retry',
-      refresh: 'Refresh',
-      back: 'Back',
-      next: 'Next',
-      done: 'Done',
-      optional: 'Optional',
-      required: 'Required',
-      unknownError: 'Something went wrong. Please try again later.',
-      noDescription: 'No update notes are available.',
-    },
-    navigation: emptyNamespace,
-    dashboard: emptyNamespace,
-    collection: emptyNamespace,
-    tasks: emptyNamespace,
-    settings: emptyNamespace,
-    guide: emptyNamespace,
-    updates: emptyNamespace,
-    messages: emptyNamespace,
-  },
-} as const satisfies Record<AppLanguage, Record<string, TranslationNamespace>>
+  'zh-CN': buildLocale('zh-CN'),
+  'en-US': buildLocale('en-US'),
+} satisfies Record<AppLanguage, LocaleResources>
