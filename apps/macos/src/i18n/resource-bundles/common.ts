@@ -5,7 +5,7 @@ const common: TranslationBundle = {
     appName: 'Sortlytic',
     brandSubtitle: '用于采集、整理、校验和导出公开社交平台研究数据的本地优先 macOS 工作区。',
     language: '语言',
-    languageZh: '简体中文',
+    languageZh: 'Simplified Chinese',
     languageEn: 'English',
     themeLight: '浅色主题',
     themeDark: '暗色主题',

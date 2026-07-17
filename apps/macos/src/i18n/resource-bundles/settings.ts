@@ -49,7 +49,7 @@ const settings: TranslationBundle = {
     'language.title': '选择应用语言',
     'language.description': '语言选择会保存在当前设备，并优先于系统语言。',
     'language.placeholder': '选择语言',
-    'language.chinese': '简体中文',
+    'language.chinese': 'Simplified Chinese',
     'language.english': 'English',
     'language.switching': '正在切换',
     'kind.tikhub.eyebrow': 'TikHub API',
