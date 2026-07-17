@@ -80,6 +80,10 @@ function AppSelect({
       option.keywords,
     ].filter(Boolean).join(' ')).includes(normalizedQuery))
   }, [normalizedQuery, options])
+  const activeOption = activeIndex >= 0 ? filteredOptions[activeIndex] : undefined
+  const activeOptionId = isOpen && activeOption
+    ? optionId(id, activeOption.value)
+    : undefined
 
   useEffect(() => {
     if (!isOpen) return
@@ -108,6 +112,8 @@ function AppSelect({
   const open = () => {
     if (disabled) return
     setQuery('')
+    const selectedIndex = options.findIndex((option) => option.value === value)
+    setActiveIndex(selectedIndex >= 0 ? selectedIndex : options.length > 0 ? 0 : -1)
     setIsOpen(true)
   }
 
@@ -124,6 +130,11 @@ function AppSelect({
 
   const move = (direction: 1 | -1) => {
     setActiveIndex((current) => nextOptionIndex(current, filteredOptions.length, direction))
+  }
+
+  const moveToBoundary = (boundary: 'first' | 'last') => {
+    if (filteredOptions.length === 0) return
+    setActiveIndex(boundary === 'first' ? 0 : filteredOptions.length - 1)
   }
 
   const chooseActiveOption = () => {
@@ -144,9 +155,19 @@ function AppSelect({
       else open()
       return
     }
+    if (event.key === 'Home' && isOpen) {
+      event.preventDefault()
+      moveToBoundary('first')
+      return
+    }
+    if (event.key === 'End' && isOpen) {
+      event.preventDefault()
+      moveToBoundary('last')
+      return
+    }
     if (event.key === 'Escape' && isOpen) {
       event.preventDefault()
-      close()
+      close(true)
     }
   }
 
@@ -159,6 +180,16 @@ function AppSelect({
     if (event.key === 'Enter') {
       event.preventDefault()
       chooseActiveOption()
+      return
+    }
+    if (event.key === 'Home') {
+      event.preventDefault()
+      moveToBoundary('first')
+      return
+    }
+    if (event.key === 'End') {
+      event.preventDefault()
+      moveToBoundary('last')
       return
     }
     if (event.key === 'Escape') {
@@ -179,7 +210,9 @@ function AppSelect({
         aria-expanded={isOpen}
         aria-haspopup="listbox"
         aria-invalid={invalid}
+        aria-activedescendant={!searchable ? activeOptionId : undefined}
         disabled={disabled}
+        role={!searchable ? 'combobox' : undefined}
         onClick={() => isOpen ? close() : open()}
         onKeyDown={handleTriggerKeyDown}
       >
@@ -197,7 +230,13 @@ function AppSelect({
               <Search size={14} aria-hidden="true" />
               <input
                 ref={searchRef}
+                role="combobox"
                 aria-label={resolvedSearchPlaceholder}
+                aria-activedescendant={activeOptionId}
+                aria-autocomplete="list"
+                aria-controls={listboxId}
+                aria-expanded={isOpen}
+                aria-haspopup="listbox"
                 autoComplete="off"
                 placeholder={resolvedSearchPlaceholder}
                 value={query}
@@ -211,9 +250,6 @@ function AppSelect({
             className="app-select__listbox"
             role="listbox"
             aria-labelledby={id}
-            aria-activedescendant={activeIndex >= 0
-              ? optionId(id, filteredOptions[activeIndex]?.value ?? '')
-              : undefined}
           >
             {filteredOptions.map((option, index) => {
               const selected = option.value === value
@@ -224,6 +260,7 @@ function AppSelect({
                   type="button"
                   role="option"
                   aria-selected={selected}
+                  tabIndex={-1}
                   data-active={index === activeIndex}
                   key={option.value}
                   onClick={() => choose(option)}
