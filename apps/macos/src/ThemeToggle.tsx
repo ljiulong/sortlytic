@@ -1,5 +1,7 @@
 import { Moon, Sun } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import './i18n'
 
 type Theme = 'light' | 'dark'
 
@@ -21,6 +23,7 @@ function readSystemTheme(): Theme {
 }
 
 function ThemeToggle() {
+  const { t } = useTranslation('settings')
   const [theme, setTheme] = useState<Theme>(() => readStoredTheme() ?? readSystemTheme())
 
   useEffect(() => {
@@ -41,7 +44,7 @@ function ThemeToggle() {
   }, [])
 
   const nextTheme = theme === 'dark' ? 'light' : 'dark'
-  const label = `切换为${nextTheme === 'dark' ? '深色' : '浅色'}主题`
+  const label = t(nextTheme === 'dark' ? 'themeSwitchDark' : 'themeSwitchLight')
   const Icon = theme === 'dark' ? Sun : Moon
 
   return (
