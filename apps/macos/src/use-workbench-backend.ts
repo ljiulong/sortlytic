@@ -59,7 +59,6 @@ import {
   type SocialRecord,
   type TaskStatus,
   type Tone,
-  workspaceSnapshot,
 } from './workbench-data'
 
 const queryKey = ['workbench-backend']
@@ -140,56 +139,51 @@ export type WorkbenchRuntimeData = {
 
 type BackendWorkbenchData = WorkbenchRuntimeData & {
   latestTaskId?: string
-  runtimeMode: 'backend' | 'demo' | 'loading' | 'error'
+  runtimeMode: 'backend' | 'unavailable' | 'loading' | 'error'
 }
 
 const initialActionMessage = '后端正在初始化本地工作区'
 
-const browserPreviewData: BackendWorkbenchData = {
-  ...workspaceSnapshot,
-  modelProviders: [],
-  workspace: {
-    ...workspaceSnapshot.workspace,
-    health: '浏览器预览',
-  },
-  latestTaskId: undefined,
-  runtimeMode: 'demo',
-}
-
-function createEmptyWorkbenchData(mode: 'loading' | 'error'): BackendWorkbenchData {
+function createEmptyWorkbenchData(mode: 'loading' | 'error' | 'unavailable'): BackendWorkbenchData {
   const isError = mode === 'error'
+  const isUnavailable = mode === 'unavailable'
+  const stateLabel = isError
+    ? '后端读取失败'
+    : isUnavailable
+      ? '仅打包后的 macOS 应用可读取'
+      : '正在读取真实数据'
 
   return {
     workspace: {
       name: '本地工作区',
       storage: '尚未读取',
       lastBackup: '尚未读取',
-      health: isError ? '后端不可用' : '正在加载',
+      health: isError ? '后端不可用' : isUnavailable ? '未连接本地后端' : '正在加载',
     },
     connections: [],
     metrics: [
       {
         label: '本地任务',
         value: '—',
-        delta: isError ? '后端读取失败' : '正在读取真实数据',
+        delta: stateLabel,
         tone: isError ? 'danger' : 'info',
       },
       {
         label: '入库记录',
         value: '—',
-        delta: isError ? '后端读取失败' : '正在读取真实数据',
+        delta: stateLabel,
         tone: isError ? 'danger' : 'info',
       },
       {
         label: '预计请求',
         value: '—',
-        delta: isError ? '后端读取失败' : '正在读取真实数据',
+        delta: stateLabel,
         tone: isError ? 'danger' : 'info',
       },
       {
         label: '证据覆盖',
         value: '—',
-        delta: isError ? '后端读取失败' : '正在读取真实数据',
+        delta: stateLabel,
         tone: isError ? 'danger' : 'info',
       },
     ],
@@ -201,6 +195,8 @@ function createEmptyWorkbenchData(mode: 'loading' | 'error'): BackendWorkbenchDa
     runtimeMode: mode,
   }
 }
+
+export const browserFallbackData = createEmptyWorkbenchData('unavailable')
 
 export function useWorkbenchBackend() {
   const queryClient = useQueryClient()
@@ -388,8 +384,8 @@ export function useWorkbenchBackend() {
   const resolvedActionMessage = dataQuery.error
     ? backendErrorMessage(dataQuery.error)
     : actionMessage === initialActionMessage && dataQuery.isSuccess
-      ? data.runtimeMode === 'demo'
-        ? '浏览器演示模式：未连接 Tauri 后端，当前内容均为演示数据'
+      ? data.runtimeMode === 'unavailable'
+        ? '当前未连接本地后端，不展示预览数据；请打开打包后的 macOS 应用'
         : '本地工作区已打开，后端可用'
       : actionMessage
 
@@ -426,7 +422,7 @@ export function useWorkbenchBackend() {
 
 async function loadBackendWorkbench(): Promise<BackendWorkbenchData> {
   if (!isTauriRuntime()) {
-    return browserPreviewData
+    return browserFallbackData
   }
 
   const workspace = await ensureDefaultWorkspace()

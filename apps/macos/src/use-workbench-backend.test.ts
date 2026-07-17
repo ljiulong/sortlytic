@@ -17,6 +17,7 @@ import {
   type WorkspaceSummary,
 } from './backend-api'
 import {
+  browserFallbackData,
   buildFormPlanRequest,
   mapBackendData,
   planFromBackend,
@@ -26,7 +27,6 @@ import {
 } from './use-workbench-backend'
 import { preflightCollectionPlanPricing } from './collection-pricing'
 import { buildPlanParams } from './collection-plan-client'
-import { workspaceSnapshot } from './workbench-data'
 
 type CapturedMutationOptions = {
   onSuccess?: (data: unknown) => unknown
@@ -893,17 +893,15 @@ describe('useWorkbenchBackend 数据边界', () => {
     expect(JSON.stringify(result.data)).not.toContain('100%')
   })
 
-  it('浏览器预览明确标记为演示模式且不声称后端可用', () => {
+  it('非 Tauri 环境只提供真实空状态，不回退演示业务数据', () => {
+    expect(browserFallbackData.tasks).toEqual([])
+    expect(browserFallbackData.records).toEqual([])
+    expect(browserFallbackData.metrics.every((metric) => metric.value === '—')).toBe(true)
+    expect(JSON.stringify(browserFallbackData)).not.toContain('example.local')
+    expect(JSON.stringify(browserFallbackData)).not.toContain('8,742')
+
     queryMock.current = {
-      data: {
-        ...workspaceSnapshot,
-        workspace: {
-          ...workspaceSnapshot.workspace,
-          health: '浏览器预览',
-        },
-        modelProviders: [],
-        runtimeMode: 'demo',
-      },
+      data: browserFallbackData,
       error: null,
       isLoading: false,
       isSuccess: true,
@@ -911,8 +909,8 @@ describe('useWorkbenchBackend 数据边界', () => {
 
     const result = renderWorkbenchHook()
 
-    expect(result.data.runtimeMode).toBe('demo')
-    expect(result.actionMessage).toBe('浏览器演示模式：未连接 Tauri 后端，当前内容均为演示数据')
+    expect(result.data.runtimeMode).toBe('unavailable')
+    expect(result.actionMessage).toContain('不展示预览数据')
     expect(result.actionMessage).not.toContain('后端可用')
   })
 })

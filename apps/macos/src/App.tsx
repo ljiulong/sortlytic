@@ -127,7 +127,7 @@ function Workbench() {
               />
               <UpdateSettingsPanel
                 {...backend}
-                isTauriApp={data.runtimeMode !== 'demo' && data.runtimeMode !== 'loading'}
+                isTauriApp={data.runtimeMode === 'backend'}
               />
             </div>
           </section>
@@ -216,7 +216,11 @@ function LocalWorkspacePanel({
   health: string
   storage: string
 }) {
-  const healthTone = health === '浏览器预览' ? 'warning' : 'success'
+  const healthTone = health === '后端不可用'
+    ? 'danger'
+    : health === '未连接本地后端' || health === '正在加载'
+      ? 'warning'
+      : 'success'
 
   return (
     <section className="glass-panel local-workspace-panel" aria-label="本地工作区">
