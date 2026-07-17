@@ -9,8 +9,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   Bot,
   BookOpen,
+  CirclePlus,
+  House,
   KeyRound,
-  MonitorCheck,
+  ListTodo,
   RefreshCcw,
   Settings,
   Share2,
@@ -19,7 +21,6 @@ import './App.css'
 import './App.responsive.css'
 import { type WorkbenchRuntimeData, useWorkbenchBackend } from './use-workbench-backend'
 import { CollectionBuilder, StatusPill } from './CollectionBuilder'
-import ExportPanel from './ExportPanel'
 import AppLogo from './AppLogo'
 import GuidePage from './GuidePage'
 import ModelSettingsPanel from './ModelSettingsPanel'
@@ -28,14 +29,24 @@ import TikhubSettingsPanel from './TikhubSettingsPanel'
 import UpdateSettingsPanel from './UpdateSettingsPanel'
 import {
   type NavKey,
+  type PrimaryNavKey,
+  primaryNavigation,
+} from './navigation'
+import {
   type SocialRecord,
   type TaskStatus,
 } from './workbench-data'
 const queryClient = new QueryClient()
-const navItems = [
-  { key: 'overview', label: '工作台', icon: MonitorCheck },
-  { key: 'settings', label: '设置', icon: Settings },
-] satisfies Array<{ key: NavKey; label: string; icon: typeof MonitorCheck }>
+const navigationIcons: Record<PrimaryNavKey, typeof House> = {
+  overview: House,
+  'new-task': CirclePlus,
+  tasks: ListTodo,
+  settings: Settings,
+}
+const navItems = primaryNavigation.map((item) => ({
+  ...item,
+  icon: navigationIcons[item.key],
+}))
 const appIdentifier = 'com.steven.sortlytic'
 const defaultWorkspaceDirectory = 'default-workspace'
 const connectionIcons = {
@@ -54,7 +65,7 @@ function Workbench() {
   const backend = useWorkbenchBackend()
   const data = backend.data
   const [activeNav, setActiveNav] = useState<NavKey>('overview')
-  const [selectedRecordId, setSelectedRecordId] = useState('rec-104')
+  const [selectedRecordId, setSelectedRecordId] = useState('')
   return (
     <div className="app-shell" lang="zh-CN">
       <a className="skip-link" href="#main-content">跳至主要内容</a>
@@ -131,6 +142,25 @@ function Workbench() {
               />
             </div>
           </section>
+        ) : activeNav === 'new-task' ? (
+          <section className="main-grid" aria-label="新建任务">
+            <div className="main-column">
+              <CollectionBuilder
+                actionMessage={backend.actionMessage}
+                activePlan={backend.activePlan}
+                isBusy={backend.isBusy}
+                onConfirmPlan={backend.confirmActivePlan}
+                onGenerateFormPlan={backend.generateFormPlan}
+                onGenerateNaturalPlan={backend.generateNaturalPlan}
+              />
+            </div>
+          </section>
+        ) : activeNav === 'tasks' ? (
+          <section className="main-grid" aria-label="任务">
+            <div className="main-column">
+              <TaskQueue tasks={data.tasks} />
+            </div>
+          </section>
         ) : (
           <>
             <section className="metric-grid" aria-label="工作区指标">
@@ -145,15 +175,10 @@ function Workbench() {
                   isBusy={backend.isBusy}
                   onRefresh={backend.refresh}
                 />
-                <CollectionBuilder
-                  actionMessage={backend.actionMessage}
-                  activePlan={backend.activePlan}
-                  isBusy={backend.isBusy}
-                  onConfirmPlan={backend.confirmActivePlan}
-                  onGenerateFormPlan={backend.generateFormPlan}
-                  onGenerateNaturalPlan={backend.generateNaturalPlan}
+                <LocalWorkspacePanel
+                  health={data.workspace.health}
+                  storage={data.workspace.storage}
                 />
-                <TaskQueue tasks={data.tasks} />
                 <RecordTable
                   records={data.records}
                   selectedRecordId={selectedRecordId}
@@ -163,11 +188,6 @@ function Workbench() {
               <aside className="inspector" aria-label="详情与证据">
                 <EvidencePanel records={data.records} selectedRecordId={selectedRecordId} />
                 <PromptRegressionPanel runs={data.promptRuns} />
-                <ExportPanel
-                  isBusy={backend.isBusy}
-                  latestExports={backend.latestExports}
-                  onExport={backend.exportLatestReport}
-                />
               </aside>
             </section>
           </>
