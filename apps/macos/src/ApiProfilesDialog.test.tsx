@@ -256,7 +256,7 @@ describe('ApiProfilesDialog 列表优先界面', () => {
     expect(markup).toContain('dateTime="2026-07-17T08:30:00Z"')
   })
 
-  it('TikHub 测试未返回今日用量时不渲染该项', () => {
+  it('TikHub 测试未返回今日用量时仍明确展示暂不可用', () => {
     useApiProfilesMock.mockReturnValue(hookResult({
       registry: {
         ...registry,
@@ -276,7 +276,8 @@ describe('ApiProfilesDialog 列表优先界面', () => {
       onClose: vi.fn(),
     }))
 
-    expect(markup).not.toContain('今日用量')
+    expect(markup).toContain('今日用量')
+    expect(markup).toMatch(/今日用量<\/dt><dd>暂不可用<\/dd>/u)
   })
 
   it('空注册表仍先展示空列表与新增按钮，不直接进入表单', () => {

@@ -510,11 +510,11 @@ function ProfileList({
                     <dd>{formatUsd(profile.testSummary?.freeCredit ?? null, locale, t)}</dd></div>
                   <div><dt>{t('list.availableCredit')}</dt>
                     <dd>{formatUsd(profile.testSummary?.availableCredit ?? null, locale, t)}</dd></div>
-                  {profile.testSummary?.todayUsage !== null
-                    && profile.testSummary?.todayUsage !== undefined ? (
-                      <div><dt>{t('list.todayUsage')}</dt>
-                        <dd>{new Intl.NumberFormat(locale).format(profile.testSummary.todayUsage)}</dd></div>
-                    ) : null}
+                  <div><dt>{t('list.todayUsage')}</dt>
+                    <dd>{profile.testSummary?.todayUsage === null || profile.testSummary?.todayUsage === undefined
+                      || !Number.isFinite(profile.testSummary.todayUsage)
+                      ? t('list.valueUnavailable')
+                      : new Intl.NumberFormat(locale).format(profile.testSummary.todayUsage)}</dd></div>
                   <div><dt>{t('list.lastTestedAt')}</dt>
                     <dd>
                       {profile.lastTestedAt ? (
