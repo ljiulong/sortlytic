@@ -64,9 +64,7 @@
   font-size: 13px;
   font-weight: 650;
 }
-.brand-subtitle,
 .muted-text,
-.sidebar-footer p,
 .export-item span {
   margin: 0;
   color: var(--text-muted);
@@ -115,13 +113,6 @@
 .primary-button:active,
 .toolbar-icon-button:active {
   transform: scale(0.96);
-}
-.sidebar-footer {
-  display: grid;
-  gap: 9px;
-  margin-top: auto;
-  padding: 14px 8px 2px;
-  border-top: 1px solid var(--border-subtle);
 }
 .workspace {
   width: 100%;

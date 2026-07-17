@@ -57,10 +57,6 @@
     min-width: 40px;
   }
 
-  .sidebar-footer {
-    display: none;
-  }
-
   .workspace {
     max-width: none;
     padding-top: 18px;
@@ -95,10 +91,6 @@
 @media (max-width: 560px) {
   .sidebar {
     grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .brand-subtitle {
-    display: none;
   }
 
   .nav-item {

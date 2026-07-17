@@ -11,7 +11,7 @@ import {
 import './App.css'
 import './App.responsive.css'
 import { useWorkbenchBackend } from './use-workbench-backend'
-import { CollectionBuilder, StatusPill } from './CollectionBuilder'
+import { CollectionBuilder } from './CollectionBuilder'
 import AppLogo from './AppLogo'
 import Dashboard from './Dashboard'
 import GuidePage from './GuidePage'
@@ -90,10 +90,7 @@ function Workbench() {
           <div className="brand-mark">
             <AppLogo />
           </div>
-          <div>
-            <p className="brand-name">{t('common:appName')}</p>
-            <p className="brand-subtitle">{t('common:brandSubtitle')}</p>
-          </div>
+          <p className="brand-name">{t('common:appName')}</p>
         </div>
 
         <nav className="nav-list">
@@ -113,11 +110,6 @@ function Workbench() {
             )
           })}
         </nav>
-
-        <div className="sidebar-footer">
-          <StatusPill tone="success" label={t('localFirst')} />
-          <p>{t('secretsNotice')}</p>
-        </div>
       </aside>
       <main className="workspace" id="main-content" tabIndex={-1}>
         <TopBar
