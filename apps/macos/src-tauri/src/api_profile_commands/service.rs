@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use chrono::Utc;
-use rusqlite::params;
+use rusqlite::{params, Transaction, TransactionBehavior};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -30,41 +30,43 @@ pub(super) fn save_profile(
   root: &Path,
   input: SaveApiProfileInput,
 ) -> AppResult<ApiProfileRegistry> {
-  get_registry(root)?;
   let (kind, editing_id) = match &input {
-    SaveApiProfileInput::Tikhub { id, .. } => (ApiProfileKind::Tikhub, id.as_deref()),
-    SaveApiProfileInput::Ai { id, .. } => (ApiProfileKind::Ai, id.as_deref()),
+    SaveApiProfileInput::Tikhub { id, .. } => (ApiProfileKind::Tikhub, id.clone()),
+    SaveApiProfileInput::Ai { id, .. } => (ApiProfileKind::Ai, id.clone()),
   };
-  if let Some(id) = editing_id {
-    ensure_mutable(root, kind, id)?;
-  }
-  let (profile_id, created) = update_api_profile_registry(root, |registry| match input {
-    SaveApiProfileInput::Tikhub {
-      id,
-      name,
-      base_url,
-      api_key,
-    } => save_tikhub(registry, id, name, base_url, api_key),
-    SaveApiProfileInput::Ai {
-      id,
-      name,
-      provider_type,
-      api_format,
-      base_url,
-      default_model_id,
-      api_key,
-    } => save_ai(
-      registry,
-      id,
-      name,
-      provider_type,
-      api_format,
-      base_url,
-      default_model_id,
-      api_key,
-    ),
+  let (profile_id, created) = mutate_registry(root, |transaction, registry| {
+    if let Some(id) = editing_id.as_deref() {
+      ensure_mutable(transaction, registry, kind, id)?;
+      #[cfg(test)]
+      super::tests::run_after_mutability_check_hook();
+    }
+    match input {
+      SaveApiProfileInput::Tikhub {
+        id,
+        name,
+        base_url,
+        api_key,
+      } => save_tikhub(registry, id, name, base_url, api_key),
+      SaveApiProfileInput::Ai {
+        id,
+        name,
+        provider_type,
+        api_format,
+        base_url,
+        default_model_id,
+        api_key,
+      } => save_ai(
+        registry,
+        id,
+        name,
+        provider_type,
+        api_format,
+        base_url,
+        default_model_id,
+        api_key,
+      ),
+    }
   })?;
-  sync_api_profile_mirror(root)?;
   audit(
     root,
     "save_api_profile",
@@ -467,9 +469,10 @@ pub(super) fn delete_profile(
   kind: ApiProfileKind,
   id: &str,
 ) -> AppResult<ApiProfileRegistry> {
-  get_registry(root)?;
-  ensure_mutable(root, kind, id)?;
-  update_api_profile_registry(root, |registry| {
+  mutate_registry(root, |transaction, registry| {
+    ensure_mutable(transaction, registry, kind, id)?;
+    #[cfg(test)]
+    super::tests::run_after_mutability_check_hook();
     let credential_id = match kind {
       ApiProfileKind::Tikhub => registry
         .tikhub_profiles
@@ -492,7 +495,6 @@ pub(super) fn delete_profile(
     }
     Ok(())
   })?;
-  sync_api_profile_mirror(root)?;
   audit(
     root,
     "delete_api_profile",
@@ -502,17 +504,36 @@ pub(super) fn delete_profile(
   get_registry(root)
 }
 
-fn ensure_mutable(root: &Path, kind: ApiProfileKind, id: &str) -> AppResult<()> {
+fn mutate_registry<T>(
+  root: &Path,
+  update: impl FnOnce(&Transaction<'_>, &mut ApiProfileRegistry) -> AppResult<T>,
+) -> AppResult<T> {
+  let mut connection = open_workspace_database(root.join(DATABASE_FILE_NAME))?;
+  let transaction = connection
+    .transaction_with_behavior(TransactionBehavior::Immediate)
+    .map_err(database_error)?;
+  get_registry(root)?;
+  let result = update_api_profile_registry(root, |registry| update(&transaction, registry))?;
+  transaction.commit().map_err(database_error)?;
+  sync_api_profile_mirror(root)?;
+  Ok(result)
+}
+
+fn ensure_mutable(
+  transaction: &Transaction<'_>,
+  registry: &ApiProfileRegistry,
+  kind: ApiProfileKind,
+  id: &str,
+) -> AppResult<()> {
   if kind == ApiProfileKind::Ai {
     return Ok(());
   }
-  let credential_ref_id = get_registry(root)?
+  let credential_ref_id = registry
     .tikhub_profiles
     .get(id)
     .map(|profile| profile.credential_ref_id.clone())
     .unwrap_or_default();
-  let connection = open_workspace_database(root.join(DATABASE_FILE_NAME))?;
-  let referenced: i64 = connection
+  let referenced: i64 = transaction
     .query_row(
       "SELECT EXISTS (
          SELECT 1 FROM collection_runtime_snapshot AS snapshot
@@ -531,7 +552,6 @@ fn ensure_mutable(root: &Path, kind: ApiProfileKind, id: &str) -> AppResult<()> 
   }
   Ok(())
 }
-
 fn result(root: &Path, success: bool, message: &str) -> AppResult<ServiceTestResult> {
   Ok(ServiceTestResult {
     success,
@@ -539,7 +559,6 @@ fn result(root: &Path, success: bool, message: &str) -> AppResult<ServiceTestRes
     registry: get_registry(root)?,
   })
 }
-
 fn validate_ai(registry: &ApiProfileRegistry, profile: &AiApiProfile) -> Result<String, String> {
   validate_ai_format(profile.provider_type, profile.api_format).map_err(|value| value.message)?;
   if profile.default_model_id.trim().is_empty() {
@@ -555,7 +574,6 @@ fn validate_ai(registry: &ApiProfileRegistry, profile: &AiApiProfile) -> Result<
   }
   Ok("AI API 配置完整性校验通过；本版本不会发起真实模型请求".to_string())
 }
-
 fn may_store_failed(registry: &ApiProfileRegistry, profile: &AiApiProfile) -> bool {
   let has_key = profile
     .credential_ref_id
@@ -565,7 +583,6 @@ fn may_store_failed(registry: &ApiProfileRegistry, profile: &AiApiProfile) -> bo
     && !profile.default_model_id.is_empty()
     && (profile.provider_type == AiProviderType::Ollama || has_key)
 }
-
 fn credential_revision(registry: &ApiProfileRegistry, profile: &AiApiProfile) -> Option<u64> {
   profile
     .credential_ref_id
@@ -573,7 +590,6 @@ fn credential_revision(registry: &ApiProfileRegistry, profile: &AiApiProfile) ->
     .and_then(|value| registry.credentials.get(value))
     .map(|value| value.revision)
 }
-
 fn put_credential(
   registry: &mut ApiProfileRegistry,
   id: &str,
@@ -599,7 +615,6 @@ fn put_credential(
   );
   Ok(())
 }
-
 fn validate_ai_format(provider: AiProviderType, format: AiApiFormat) -> AppResult<()> {
   let expected = match provider {
     AiProviderType::Openai | AiProviderType::CustomOpenaiCompatible => {
@@ -615,7 +630,6 @@ fn validate_ai_format(provider: AiProviderType, format: AiApiFormat) -> AppResul
     Err(error("AI 供应商类型与 API 格式不匹配"))
   }
 }
-
 fn credential_type(provider: AiProviderType) -> CredentialProviderType {
   match provider {
     AiProviderType::Openai => CredentialProviderType::Openai,
@@ -625,7 +639,6 @@ fn credential_type(provider: AiProviderType) -> CredentialProviderType {
     AiProviderType::Ollama => CredentialProviderType::Ollama,
   }
 }
-
 fn completeness_status(
   provider: AiProviderType,
   base_url: &str,
@@ -638,7 +651,6 @@ fn completeness_status(
     ApiProfileStatus::NeedsRebind
   }
 }
-
 fn key_status(has_key: bool) -> ApiProfileStatus {
   if has_key {
     ApiProfileStatus::Untested
@@ -646,7 +658,6 @@ fn key_status(has_key: bool) -> ApiProfileStatus {
     ApiProfileStatus::NeedsRebind
   }
 }
-
 fn tikhub_url(value: &str) -> AppResult<String> {
   let value = value.trim().trim_end_matches('/');
   match value {
@@ -656,7 +667,6 @@ fn tikhub_url(value: &str) -> AppResult<String> {
     )),
   }
 }
-
 fn ai_url(provider: AiProviderType, value: &str) -> AppResult<String> {
   let value = value.trim().trim_end_matches('/');
   let value = if !value.is_empty() {
@@ -676,7 +686,6 @@ fn ai_url(provider: AiProviderType, value: &str) -> AppResult<String> {
   validate_ai_url(&value)?;
   Ok(value)
 }
-
 fn validate_ai_url(value: &str) -> AppResult<()> {
   let url = reqwest::Url::parse(value).map_err(|_| error("AI Base URL 不是完整的 HTTP(S) 地址"))?;
   if matches!(url.scheme(), "http" | "https")
