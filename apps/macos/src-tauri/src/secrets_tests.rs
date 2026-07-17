@@ -74,6 +74,11 @@ fn snapshot_secret_reads_require_exact_profile_and_revision() {
     read_secret_for_snapshot(&root, &saved.id, "tikhub", &saved.provider_id, 1).unwrap(),
     original
   );
+  assert_eq!(
+    read_secret_for_snapshot(&root, &saved.id, "tikhub", "default", 1)
+      .expect("旧 v7 TikHub 快照标识应继续绑定同一凭据修订"),
+    original
+  );
 
   update_secret(&root, &saved.id, replacement).unwrap();
   for error in [
