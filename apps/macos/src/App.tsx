@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next'
 import {
   BookOpen,
   CirclePlus,
@@ -17,6 +18,7 @@ import GuidePage from './GuidePage'
 import SettingsPage from './SettingsPage'
 import TaskQueue from './TaskQueue'
 import ThemeToggle from './ThemeToggle'
+import { i18n } from './i18n'
 import {
   type NavKey,
   type PrimaryNavKey,
@@ -34,6 +36,39 @@ const navItems = primaryNavigation.map((item) => ({
   ...item,
   icon: navigationIcons[item.key],
 }))
+const navigationLabelKeys: Record<PrimaryNavKey, string> = {
+  overview: 'overview',
+  'new-task': 'newTask',
+  tasks: 'tasks',
+  settings: 'settings',
+}
+const pageMetaTranslationKeys: Record<NavKey, { context: string; title: string; description: string }> = {
+  overview: {
+    context: 'overviewContext',
+    title: 'overviewTitle',
+    description: 'overviewDescription',
+  },
+  'new-task': {
+    context: 'newTaskContext',
+    title: 'newTaskTitle',
+    description: 'newTaskDescription',
+  },
+  tasks: {
+    context: 'tasksContext',
+    title: 'tasksTitle',
+    description: 'tasksDescription',
+  },
+  settings: {
+    context: 'settingsContext',
+    title: 'settingsTitle',
+    description: 'settingsDescription',
+  },
+  guide: {
+    context: 'guideContext',
+    title: 'guideTitle',
+    description: 'guideDescription',
+  },
+}
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -42,15 +77,16 @@ function App() {
   )
 }
 function Workbench() {
+  const { t } = useTranslation(['navigation', 'common'])
   const backend = useWorkbenchBackend()
   const data = backend.data
   const [activeNav, setActiveNav] = useState<NavKey>('overview')
   const [selectedRecordId, setSelectedRecordId] = useState('')
   const pageLayoutClassName = `page-layout page-layout--${pageMeta[activeNav].layout}`
   return (
-    <div className="app-shell" lang="zh-CN">
-      <a className="skip-link" href="#main-content">跳至主要内容</a>
-      <aside className="sidebar" aria-label="主导航">
+    <div className="app-shell" lang={i18n.language}>
+      <a className="skip-link" href="#main-content">{t('skipToContent')}</a>
+      <aside className="sidebar" aria-label={t('mainNavigation')}>
         <div className="brand-block">
           <div className="brand-mark">
             <AppLogo />
@@ -73,15 +109,15 @@ function Workbench() {
                 onClick={() => setActiveNav(item.key)}
               >
                 <Icon size={17} aria-hidden="true" />
-                <span>{item.label}</span>
+                <span>{t(navigationLabelKeys[item.key])}</span>
               </button>
             )
           })}
         </nav>
 
         <div className="sidebar-footer">
-          <StatusPill tone="success" label="本地优先" />
-          <p>密钥明文写入当前工作区私有 JSON，不进入数据库、日志或导出。</p>
+          <StatusPill tone="success" label={t('localFirst')} />
+          <p>{t('secretsNotice')}</p>
         </div>
       </aside>
       <main className="workspace" id="main-content" tabIndex={-1}>
@@ -96,11 +132,11 @@ function Workbench() {
             <GuidePage onOpenSettings={() => setActiveNav('settings')} />
           </div>
         ) : activeNav === 'settings' ? (
-          <section className={pageLayoutClassName} aria-label="连接与本地设置">
+          <section className={pageLayoutClassName} aria-label={t('settingsSection')}>
             <SettingsPage backend={backend} />
           </section>
         ) : activeNav === 'new-task' ? (
-          <section className={pageLayoutClassName} aria-label="新建任务">
+          <section className={pageLayoutClassName} aria-label={t('newTaskSection')}>
             <div className="main-column">
               <CollectionBuilder
                 actionMessage={backend.actionMessage}
@@ -113,7 +149,7 @@ function Workbench() {
             </div>
           </section>
         ) : activeNav === 'tasks' ? (
-          <section className={pageLayoutClassName} aria-label="任务">
+          <section className={pageLayoutClassName} aria-label={t('tasksSection')}>
             <div className="main-column">
               <TaskQueue
                 isBusy={backend.isBusy}
@@ -155,24 +191,25 @@ function TopBar({
   isInitializing: boolean
   onOpenGuide: () => void
 }) {
-  const currentPage = pageMeta[activeNav]
+  const { t } = useTranslation('navigation')
+  const pageCopy = pageMetaTranslationKeys[activeNav]
 
   return (
     <header className="topbar">
       <div className="topbar-copy">
-        <p className="eyebrow">{currentPage.context}</p>
-        <h1>{currentPage.title}</h1>
-        <p className="page-description">{currentPage.description}</p>
+        <p className="eyebrow">{t(pageCopy.context)}</p>
+        <h1>{t(pageCopy.title)}</h1>
+        <p className="page-description">{t(pageCopy.description)}</p>
       </div>
       <div className="topbar-actions">
         <p className="topbar-status" aria-live="polite">
-          {isInitializing ? '正在连接本地后端' : actionMessage}
+          {isInitializing ? t('initializingBackend') : actionMessage}
         </p>
         <ThemeToggle />
         <button
-          aria-label="打开使用指南"
+          aria-label={t('openGuide')}
           className="toolbar-icon-button"
-          title="使用指南"
+          title={t('guide')}
           type="button"
           onClick={onOpenGuide}
         >
