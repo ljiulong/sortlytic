@@ -3,7 +3,6 @@ import type { TranslationBundle } from '../resources'
 const common: TranslationBundle = {
   'zh-CN': {
     appName: 'Sortlytic',
-    brandSubtitle: '用于采集、整理、校验和导出公开社交平台研究数据的本地优先 macOS 工作区。',
     language: '语言',
     languageZh: '简体中文',
     languageEn: 'English',
@@ -32,7 +31,6 @@ const common: TranslationBundle = {
   },
   'en-US': {
     appName: 'Sortlytic',
-    brandSubtitle: 'A local-first macOS workspace for collecting, organizing, validating, and exporting public social research data.',
     language: 'Language',
     languageZh: 'Simplified Chinese',
     languageEn: 'English',
