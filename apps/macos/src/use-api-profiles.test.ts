@@ -213,7 +213,7 @@ describe('API 配置 React Query Hook', () => {
     expect(invalidateQueriesMock).toHaveBeenCalledWith({
       queryKey: WORKBENCH_BACKEND_QUERY_KEY,
     })
-    expect(JSON.stringify(mutationVariablesMock.current)).not.toContain(secret)
+    expect(mutationVariablesMock.current).toEqual([])
   })
 
   it('测试、手动切换和删除成功后均使注册表与工作台派生状态失效', async () => {
@@ -272,7 +272,7 @@ describe('API 配置 React Query Hook', () => {
     expect(invalidateQueriesMock).toHaveBeenCalledWith({
       queryKey: WORKBENCH_BACKEND_QUERY_KEY,
     })
-    expect(JSON.stringify(mutationVariablesMock.current)).not.toContain(secret)
+    expect(mutationVariablesMock.current).toEqual([])
   })
 
   it.each([

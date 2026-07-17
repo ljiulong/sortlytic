@@ -4,6 +4,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
+import { useState } from 'react'
 import {
   activateApiProfile,
   deleteApiProfile,
@@ -23,22 +24,31 @@ type PrivateMutationOperation<T> = () => Promise<T>
 
 export function useApiProfiles() {
   const queryClient = useQueryClient()
+  const [isSaving, setIsSaving] = useState(false)
   const registryQuery = useQuery({
     queryKey: API_PROFILE_REGISTRY_QUERY_KEY,
     queryFn: getApiProfileRegistry,
     retry: 1,
   })
   const invalidateProfileConsumers = () => invalidateApiProfileQueries(queryClient)
-  const saveMutation = usePrivateApiProfileMutation<ApiProfileTestResult>(invalidateProfileConsumers)
   const testMutation = usePrivateApiProfileMutation<ApiProfileTestResult>(invalidateProfileConsumers)
   const activateMutation = usePrivateApiProfileMutation<ApiProfileRegistryView>(invalidateProfileConsumers)
   const deleteMutation = usePrivateApiProfileMutation<ApiProfileRegistryView>(invalidateProfileConsumers)
 
-  const saveAndTestProfile = (input: SaveApiProfileInput) => saveMutation.mutateAsync(async () => {
-    const registry = await saveApiProfile(input)
-    const profileId = findSavedProfileId(registry, input)
-    return testApiProfile(input.kind, profileId)
-  })
+  const saveAndTestProfile = async (input: SaveApiProfileInput) => {
+    setIsSaving(true)
+    try {
+      const registry = await saveApiProfile(input)
+      const profileId = findSavedProfileId(registry, input)
+      return await testApiProfile(input.kind, profileId)
+    } finally {
+      try {
+        await invalidateProfileConsumers()
+      } finally {
+        setIsSaving(false)
+      }
+    }
+  }
 
   const retestProfile = (kind: ApiProfileKind, profileId: string) => (
     testMutation.mutateAsync(() => testApiProfile(kind, profileId))
@@ -60,12 +70,12 @@ export function useApiProfiles() {
     activateProfile,
     deleteProfile: removeProfile,
     refreshProfiles: invalidateProfileConsumers,
-    isSaving: saveMutation.isPending,
+    isSaving,
     isTesting: testMutation.isPending,
     isActivating: activateMutation.isPending,
     isDeleting: deleteMutation.isPending,
     isPending:
-      saveMutation.isPending
+      isSaving
       || testMutation.isPending
       || activateMutation.isPending
       || deleteMutation.isPending,
