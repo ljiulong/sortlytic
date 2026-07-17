@@ -253,22 +253,30 @@ export function useWorkbenchBackend() {
 
   const generateFormPlanMutation = useMutation({
     mutationFn: createFormPlan,
+    retry: false,
     onSuccess: (plan) => {
       setActivePlan(plan)
       setActionMessage('采集计划已保存到本地 SQLite，等待确认运行')
       void queryClient.invalidateQueries({ queryKey })
     },
-    onError: (error) => setActionMessage(backendErrorMessage(error)),
+    onError: (error) => {
+      setActionMessage(backendErrorMessage(error))
+      void queryClient.invalidateQueries({ queryKey })
+    },
   })
 
   const generateNaturalPlanMutation = useMutation({
     mutationFn: createNaturalPlan,
+    retry: false,
     onSuccess: (plan) => {
       setActivePlan(plan)
       setActionMessage('自然语言计划已生成，并保存了提示词运行快照')
       void queryClient.invalidateQueries({ queryKey })
     },
-    onError: (error) => setActionMessage(backendErrorMessage(error)),
+    onError: (error) => {
+      setActionMessage(backendErrorMessage(error))
+      void queryClient.invalidateQueries({ queryKey })
+    },
   })
 
   const confirmPlanMutation = useMutation({
@@ -421,16 +429,22 @@ async function createFormPlan(values: CollectionFormPayload): Promise<RuntimeCol
     platforms: [request.platform],
     data_types: request.data_types ?? [request.data_type ?? 'keyword_search'],
   })
-  const plan = await saveCollectionPlan({
-    task_id: task.id,
-    source: draft.source,
-    plan_json: draft.plan_json,
-    validation_status: draft.validation_status,
-    validation_errors_json: draft.validation_errors_json,
-    cost_estimate_json: draft.cost_estimate_json,
-  })
+  let runtimePlan: RuntimeCollectionPlan
+  try {
+    const plan = await saveCollectionPlan({
+      task_id: task.id,
+      source: draft.source,
+      plan_json: draft.plan_json,
+      validation_status: draft.validation_status,
+      validation_errors_json: draft.validation_errors_json,
+      cost_estimate_json: draft.cost_estimate_json,
+    })
+    runtimePlan = planFromBackend(values, plan)
+  } catch (error) {
+    return cleanupFailedDraftTask(task.id, error)
+  }
 
-  return preparePlanPricing(planFromBackend(values, plan))
+  return preparePlanPricing(runtimePlan)
 }
 
 export function buildFormPlanRequest(values: CollectionFormPayload): GenerateFormPlanInput {
@@ -463,25 +477,43 @@ async function createNaturalPlan(intentText: string): Promise<RuntimeCollectionP
     platforms: [hints.platform],
     data_types: [hints.dataType],
   })
-  const result = await generateCollectionPlanFromText({
-    task_id: task.id,
-    intent_text: intentText,
-    provider_id: null,
-    model_id: null,
-  })
+  let runtimePlan: RuntimeCollectionPlan
+  try {
+    const result = await generateCollectionPlanFromText({
+      task_id: task.id,
+      intent_text: intentText,
+      provider_id: null,
+      model_id: null,
+    })
+    runtimePlan = planFromBackend(
+      {
+        platform: toUiPlatform(hints.platform),
+        dataType: toUiDataType(hints.dataType),
+        regionCode: '',
+        keyword: '',
+        range: '未提供时间范围',
+        maxRecords: 0,
+        budget: 0,
+      },
+      result.collection_plan,
+    )
+  } catch (error) {
+    return cleanupFailedDraftTask(task.id, error)
+  }
 
-  return preparePlanPricing(planFromBackend(
-    {
-      platform: toUiPlatform(hints.platform),
-      dataType: toUiDataType(hints.dataType),
-      regionCode: '',
-      keyword: '',
-      range: '未提供时间范围',
-      maxRecords: 0,
-      budget: 0,
-    },
-    result.collection_plan,
-  ))
+  return preparePlanPricing(runtimePlan)
+}
+
+async function cleanupFailedDraftTask(taskId: string, originalError: unknown): Promise<never> {
+  try {
+    await deleteTask(taskId)
+  } catch (cleanupError) {
+    throw new Error(
+      `${backendErrorMessage(originalError)}；草稿任务清理失败：${backendErrorMessage(cleanupError)}`
+      + '。任务页可能存在待删除草稿，请手动删除。',
+    )
+  }
+  throw originalError
 }
 
 export function mapBackendData(

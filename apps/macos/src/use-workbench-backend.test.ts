@@ -34,8 +34,10 @@ import { buildPlanParams } from './collection-plan-client'
 import type { ApiProfileRegistryView } from './api-profiles'
 
 type CapturedMutationOptions = {
+  mutationFn?: (input: unknown) => Promise<unknown>
   onSuccess?: (data: unknown) => unknown
   onError?: (error: unknown) => unknown
+  retry?: boolean | number
 }
 
 type CapturedQueryOptions = {
@@ -119,6 +121,43 @@ const task: CollectionTaskView = {
   cost_estimate_json: { request_count_estimate: 3 },
   actual_cost_json: {},
 }
+
+const generatedFormDraft = {
+  source: 'form_generated',
+  schema_version: 3,
+  plan_json: {
+    platforms: ['xiaohongshu'],
+    data_types: ['keyword_search'],
+    keywords: ['新能源汽车'],
+    time_range: '7',
+    record_limit: 100,
+    budget_limit: { currency: 'USD', amount_micros: 1_000_000 },
+    steps: [],
+  },
+  validation_status: 'valid',
+  validation_errors_json: [],
+  cost_estimate_json: { request_count_estimate: 2 },
+}
+
+const savedFormPlan: CollectionPlanView = {
+  id: 'plan-draft-1',
+  task_id: 'task-draft-1',
+  ...generatedFormDraft,
+  confirmed_by_user: false,
+  created_at: '2026-07-18T00:00:00Z',
+  updated_at: '2026-07-18T00:00:00Z',
+}
+
+const formPlanInput = {
+  platform: '小红书',
+  dataType: '关键词搜索',
+  dataTypes: ['keyword_search'],
+  regionCode: 'CN',
+  keyword: '新能源汽车',
+  range: '7',
+  maxRecords: 100,
+  budget: 1,
+} satisfies Parameters<typeof buildFormPlanRequest>[0]
 
 function tikhubRegistryFixture({
   activeProfileId = 'tikhub-profile-1',
@@ -354,6 +393,118 @@ describe('任务页动作', () => {
       'create_export_job',
       expect.objectContaining({ exportType: 'xlsx' }),
     )
+  })
+})
+
+describe('计划生成失败的草稿清理', () => {
+  it('表单计划保存失败后删除已创建的草稿任务', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'generate_form_collection_plan') return generatedFormDraft
+      if (command === 'create_collection_task') {
+        return { ...task, id: 'task-draft-1', status: 'waiting_confirmation' }
+      }
+      if (command === 'save_collection_plan') throw new Error('保存计划失败')
+      if (command === 'delete_task') return undefined
+      throw new Error(`意外命令：${command}`)
+    })
+    renderWorkbenchHook()
+    const generateFormMutation = mutationOptionsMock.current[0]
+
+    await expect(generateFormMutation?.mutationFn?.(formPlanInput))
+      .rejects.toThrow('保存计划失败')
+    expect(invokeMock.mock.calls.map(([command]) => command)).toEqual([
+      'generate_form_collection_plan',
+      'create_collection_task',
+      'save_collection_plan',
+      'delete_task',
+    ])
+    expect(invokeMock).toHaveBeenLastCalledWith('delete_task', {
+      taskId: 'task-draft-1',
+      rootPath: null,
+    })
+  })
+
+  it('自然语言 AI 生成失败后删除已创建的草稿任务', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'create_collection_task') {
+        return { ...task, id: 'task-natural-1', status: 'waiting_confirmation' }
+      }
+      if (command === 'generate_collection_plan_from_text') throw new Error('AI 结构化输出无效')
+      if (command === 'delete_task') return undefined
+      throw new Error(`意外命令：${command}`)
+    })
+    renderWorkbenchHook()
+    const generateNaturalMutation = mutationOptionsMock.current[1]
+
+    await expect(generateNaturalMutation?.mutationFn?.('采集小红书公开账号'))
+      .rejects.toThrow('AI 结构化输出无效')
+    expect(invokeMock.mock.calls.map(([command]) => command)).toEqual([
+      'create_collection_task',
+      'generate_collection_plan_from_text',
+      'delete_task',
+    ])
+    expect(invokeMock).toHaveBeenLastCalledWith('delete_task', {
+      taskId: 'task-natural-1',
+      rootPath: null,
+    })
+  })
+
+  it('草稿清理失败时同时返回原始错误与明确的人工清理提示', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'generate_form_collection_plan') return generatedFormDraft
+      if (command === 'create_collection_task') {
+        return { ...task, id: 'task-draft-1', status: 'waiting_confirmation' }
+      }
+      if (command === 'save_collection_plan') throw new Error('原始保存错误')
+      if (command === 'delete_task') throw new Error('数据库删除失败')
+      throw new Error(`意外命令：${command}`)
+    })
+    renderWorkbenchHook()
+    const generateFormMutation = mutationOptionsMock.current[0]
+
+    await expect(generateFormMutation?.mutationFn?.(formPlanInput)).rejects.toThrow(
+      /原始保存错误.*草稿任务清理失败.*数据库删除失败.*手动删除/,
+    )
+  })
+
+  it('表单和自然语言生成均禁止自动重试，且 onError 后刷新任务查询', async () => {
+    renderWorkbenchHook()
+    const generateFormMutation = mutationOptionsMock.current[0]
+    const generateNaturalMutation = mutationOptionsMock.current[1]
+
+    expect(generateFormMutation?.retry).toBe(false)
+    expect(generateNaturalMutation?.retry).toBe(false)
+
+    await generateFormMutation?.onError?.(new Error('表单生成失败'))
+    await generateNaturalMutation?.onError?.(new Error('自然语言生成失败'))
+
+    expect(invalidateQueriesMock).toHaveBeenCalledTimes(2)
+    expect(invalidateQueriesMock).toHaveBeenNthCalledWith(1, { queryKey: ['workbench-backend'] })
+    expect(invalidateQueriesMock).toHaveBeenNthCalledWith(2, { queryKey: ['workbench-backend'] })
+  })
+
+  it('定价预检失败只返回 pricingBlocker，不删除已保存计划的任务', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'generate_form_collection_plan') return generatedFormDraft
+      if (command === 'create_collection_task') {
+        return { ...task, id: 'task-draft-1', status: 'waiting_confirmation' }
+      }
+      if (command === 'save_collection_plan') return savedFormPlan
+      throw new Error(`意外命令：${command}`)
+    })
+    renderWorkbenchHook()
+    const generateFormMutation = mutationOptionsMock.current[0]
+
+    await expect(generateFormMutation?.mutationFn?.(formPlanInput)).resolves.toMatchObject({
+      taskId: 'task-draft-1',
+      pricingReady: false,
+      pricingBlocker: 'TikHub 计价端点未知，无法确认运行',
+    })
+    expect(invokeMock).not.toHaveBeenCalledWith('delete_task', expect.anything())
   })
 })
 
