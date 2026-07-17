@@ -325,7 +325,7 @@ fn v5_workspace_migrates_without_fabricating_historical_runtime_snapshots() {
   let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME))
     .expect("workspace database should open");
   let fixture = insert_runtime_fixture(&connection, "legacy");
-  downgrade_to_v5(&connection);
+  downgrade_to_v5(&connection, &root_path);
   drop(connection);
 
   let summary = open_workspace(&root_path).expect("v5 workspace should migrate to v6");
@@ -353,8 +353,11 @@ fn v5_workspace_migrates_without_fabricating_historical_runtime_snapshots() {
     ),
     0
   );
-  assert_eq!(secret_revision(&migrated, &fixture.secret_ref_id), 1);
-  assert_eq!(connector_test_state(&migrated), (2, None, None));
+  assert_eq!(secret_revision(&migrated, &fixture.secret_ref_id), 2);
+  assert_eq!(
+    connector_test_state(&migrated),
+    (2, None, Some("needs_rebind".to_string()))
+  );
   assert_eq!(foreign_key_violation_count(&migrated), 0);
   drop(migrated);
 
@@ -375,7 +378,10 @@ fn v5_workspace_migrates_without_fabricating_historical_runtime_snapshots() {
     ),
     0
   );
-  assert_eq!(connector_test_state(&reopened), (2, None, None));
+  assert_eq!(
+    connector_test_state(&reopened),
+    (2, None, Some("needs_rebind".to_string()))
+  );
   fs::remove_dir_all(root_path).ok();
 }
 
@@ -392,13 +398,16 @@ fn v5_migration_invalidates_an_in_flight_first_connector_test() {
       [],
     )
     .expect("legacy first-test fixture should have no stored result");
-  downgrade_to_v5(&connection);
+  downgrade_to_v5(&connection, &root_path);
   drop(connection);
 
   open_workspace(&root_path).expect("v5 workspace should migrate to v6");
   let migrated = open_workspace_database(root_path.join(DATABASE_FILE_NAME))
     .expect("migrated database should open");
-  assert_eq!(connector_test_state(&migrated), (2, None, None));
+  assert_eq!(
+    connector_test_state(&migrated),
+    (2, None, Some("needs_rebind".to_string()))
+  );
   assert_eq!(
     migrated
       .execute(
@@ -410,7 +419,10 @@ fn v5_migration_invalidates_an_in_flight_first_connector_test() {
       .expect("legacy test writeback should execute"),
     0
   );
-  assert_eq!(connector_test_state(&migrated), (2, None, None));
+  assert_eq!(
+    connector_test_state(&migrated),
+    (2, None, Some("needs_rebind".to_string()))
+  );
   fs::remove_dir_all(root_path).ok();
 }
 
@@ -689,7 +701,7 @@ fn v6_partial_artifacts_and_marker_failure_leave_v5_unchanged() {
   create_workspace("v6 半套结构", &partial_root).expect("workspace should create");
   let partial = open_workspace_database(partial_root.join(DATABASE_FILE_NAME))
     .expect("workspace database should open");
-  downgrade_to_v5(&partial);
+  downgrade_to_v5(&partial, &partial_root);
   partial
     .execute_batch(
       "ALTER TABLE secret_ref ADD COLUMN credential_revision INTEGER NOT NULL DEFAULT 1
@@ -721,7 +733,7 @@ fn v6_partial_artifacts_and_marker_failure_leave_v5_unchanged() {
   let rollback = open_workspace_database(rollback_root.join(DATABASE_FILE_NAME))
     .expect("workspace database should open");
   let fixture = insert_runtime_fixture(&rollback, "rollback");
-  downgrade_to_v5(&rollback);
+  downgrade_to_v5(&rollback, &rollback_root);
   rollback
     .execute_batch(
       "CREATE TRIGGER fail_v6_marker
@@ -971,7 +983,7 @@ fn insert_runtime_snapshot(
   )
 }
 
-fn downgrade_to_v5(connection: &Connection) {
+fn downgrade_to_v5(connection: &Connection, root_path: &PathBuf) {
   connection
     .execute_batch(
       "DROP TRIGGER trg_collection_runtime_snapshot_immutable_delete;
@@ -987,6 +999,8 @@ fn downgrade_to_v5(connection: &Connection) {
        UPDATE workspace SET schema_version = 5;",
     )
     .expect("workspace should downgrade to v5 fixture");
+  fs::remove_file(crate::api_profiles::api_profile_registry_path(root_path))
+    .expect("v5 fixture should not retain the future API profile registry");
 }
 
 fn secret_revision(connection: &Connection, secret_ref_id: &str) -> i64 {
