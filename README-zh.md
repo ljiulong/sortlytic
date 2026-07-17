@@ -295,7 +295,6 @@ graph LR
 │   ├── src-tauri/              # Rust 命令、存储、任务执行器与打包配置
 │   └── package.json            # pnpm 脚本与前端依赖
 ├── excel/                      # 项目使用的表格模板
-├── plan/                       # 产品、架构、测试与交付文档
 ├── AGENTS.md                   # 仓库协作规则
 ├── README.md                   # 英文文档
 └── README-zh.md                # 简体中文文档
