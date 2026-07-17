@@ -16,9 +16,10 @@ fn request_json(body: &str) -> AppResult<Value> {
   let server = thread::spawn(move || {
     let (mut stream, _) = listener.accept().expect("test server should accept");
     let mut request = [0_u8; 4096];
-    stream
+    let request_bytes_read = stream
       .read(&mut request)
       .expect("request should be readable");
+    assert!(request_bytes_read > 0, "request should not be empty");
     write!(
       stream,
       "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",

@@ -192,7 +192,7 @@ fn maybe_fail_write(final_path: &Path, failure: WriteFailurePoint) -> AppResult<
   if should_fail {
     return Err(io_error(
       failure.error_context(),
-      std::io::Error::new(ErrorKind::Other, "injected storage failure"),
+      std::io::Error::other("injected storage failure"),
     ));
   }
   Ok(())
