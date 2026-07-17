@@ -577,6 +577,12 @@ mod tests {
     create_workspace("API 导入测试", &root).unwrap();
     fs::remove_file(api_profile_registry_path(&root)).unwrap();
     let connection = open_workspace_database(root.join(DATABASE_FILE_NAME)).unwrap();
+    connection
+      .execute("DELETE FROM schema_migrations WHERE version = 8", [])
+      .unwrap();
+    connection
+      .execute("UPDATE workspace SET schema_version = 7", [])
+      .unwrap();
     let workspace_id: String = connection
       .query_row("SELECT id FROM workspace", [], |row| row.get(0))
       .unwrap();
@@ -634,10 +640,13 @@ mod tests {
   }
 
   #[test]
-  fn legacy_metadata_import_requires_rebind_without_keychain_access() {
+  fn opening_legacy_workspace_imports_metadata_for_rebind_without_keychain_access() {
     let (root, tikhub_secret_id, ai_secret_id) = legacy_workspace();
 
-    let registry = initialize_api_profile_registry(&root).unwrap();
+    let summary = open_workspace(&root).expect("legacy workspace should open");
+    assert_eq!(summary.schema_version, 8);
+    assert!(api_profile_registry_path(&root).is_file());
+    let registry = load_api_profile_registry(&root).unwrap();
 
     assert_eq!(registry.tikhub_profiles.len(), 1);
     assert_eq!(registry.ai_profiles.len(), 1);
@@ -710,9 +719,11 @@ mod tests {
   fn damaged_registry_does_not_block_local_workspace_browsing() {
     let root = std::env::temp_dir().join(format!("api-corrupt-open-{}", Uuid::new_v4()));
     create_workspace("损坏注册表测试", &root).unwrap();
-    fs::write(api_profile_registry_path(&root), b"{ damaged").unwrap();
+    let damaged = b"{ damaged registry sentinel";
+    fs::write(api_profile_registry_path(&root), damaged).unwrap();
 
     assert!(open_workspace(&root).is_ok());
+    assert_eq!(fs::read(api_profile_registry_path(&root)).unwrap(), damaged);
     assert!(load_api_profile_registry(&root).is_err());
     fs::remove_dir_all(root).ok();
   }

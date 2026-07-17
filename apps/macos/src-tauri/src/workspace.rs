@@ -176,7 +176,21 @@ pub fn open_workspace(root_path: impl AsRef<Path>) -> AppResult<WorkspaceSummary
   summary.last_opened_at = now.clone();
   summary.updated_at = now;
   validate_private_workspace_permissions(&root_path, &database_path)?;
+  drop(connection);
+  initialize_opened_workspace_api_registry(&root_path)?;
   Ok(summary)
+}
+
+fn initialize_opened_workspace_api_registry(root_path: &Path) -> AppResult<()> {
+  match crate::api_profiles::initialize_api_profile_registry(root_path) {
+    Ok(_) => Ok(()),
+    Err(initialization_error) => {
+      match crate::api_profiles::load_existing_api_profile_registry(root_path) {
+        Err(_) => Ok(()),
+        Ok(_) => Err(initialization_error),
+      }
+    }
+  }
 }
 
 pub fn run_workspace_health_check(root_path: impl AsRef<Path>) -> AppResult<WorkspaceHealthCheck> {
