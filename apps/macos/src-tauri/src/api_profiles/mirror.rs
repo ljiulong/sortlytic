@@ -568,7 +568,8 @@ mod tests {
   use super::*;
   use crate::api_profiles::{
     api_profile_registry_path, initialize_api_profile_registry, load_api_profile_registry,
-    save_api_profile_registry, sync_api_profile_mirror, CredentialProviderType,
+    load_existing_api_profile_registry, save_api_profile_registry, sync_api_profile_mirror,
+    CredentialProviderType,
   };
   use crate::workspace::{create_workspace, open_workspace};
 
@@ -725,6 +726,42 @@ mod tests {
     assert!(open_workspace(&root).is_ok());
     assert_eq!(fs::read(api_profile_registry_path(&root)).unwrap(), damaged);
     assert!(load_api_profile_registry(&root).is_err());
+    fs::remove_dir_all(root).ok();
+  }
+
+  #[test]
+  fn rejected_legacy_api_metadata_does_not_block_local_workspace_browsing() {
+    const SENTINEL: &str = "legacy-url-secret-sentinel-4071";
+    let (root, _, _) = legacy_workspace();
+    let connection = open_workspace_database(root.join(DATABASE_FILE_NAME)).unwrap();
+    connection
+      .execute(
+        "UPDATE model_provider SET base_url = ?1",
+        [format!(
+          "https://{SENTINEL}@example.test/v1?api_key={SENTINEL}"
+        )],
+      )
+      .unwrap();
+    drop(connection);
+
+    let summary = open_workspace(&root).expect("local workspace should remain browseable");
+    assert_eq!(summary.schema_version, 8);
+    let connection = open_workspace_database(root.join(DATABASE_FILE_NAME)).unwrap();
+    let migration_count: i64 = connection
+      .query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 8",
+        [],
+        |row| row.get(0),
+      )
+      .unwrap();
+    assert_eq!(migration_count, 1);
+    drop(connection);
+
+    assert!(!api_profile_registry_path(&root).exists());
+    assert_eq!(load_existing_api_profile_registry(&root).unwrap(), None);
+    let error = initialize_api_profile_registry(&root).unwrap_err();
+    assert!(!error.message.contains(SENTINEL));
+    assert!(!api_profile_registry_path(&root).exists());
     fs::remove_dir_all(root).ok();
   }
 
