@@ -521,6 +521,82 @@ mod tests {
   }
 
   #[test]
+  fn changing_ai_provider_never_reuses_the_previous_provider_key() {
+    let root = workspace("ai-provider-change");
+    let original = service::save_profile(&root, ai_input(None, "OpenAI", Some(AI_SECRET))).unwrap();
+    let profile_id = original.ai_profiles.values().next().unwrap().id.clone();
+
+    let rejected = service::save_profile(
+      &root,
+      SaveApiProfileInput::Ai {
+        id: Some(profile_id.clone()),
+        name: "Anthropic".to_string(),
+        provider_type: AiProviderType::Anthropic,
+        api_format: AiApiFormat::AnthropicMessages,
+        base_url: "https://api.anthropic.com".to_string(),
+        default_model_id: "claude-sonnet-4-5".to_string(),
+        api_key: Some(String::new()),
+      },
+    )
+    .unwrap_err();
+
+    assert!(rejected.message.contains("必须重新输入 API Key"));
+    let unchanged = service::get_registry(&root).unwrap();
+    assert_eq!(
+      unchanged
+        .ai_profiles
+        .get(&profile_id)
+        .unwrap()
+        .provider_type,
+      AiProviderType::Openai
+    );
+    assert!(unchanged
+      .credentials
+      .values()
+      .any(|value| value.secret == AI_SECRET));
+
+    let ollama = service::save_profile(
+      &root,
+      SaveApiProfileInput::Ai {
+        id: Some(profile_id.clone()),
+        name: "Ollama".to_string(),
+        provider_type: AiProviderType::Ollama,
+        api_format: AiApiFormat::Ollama,
+        base_url: "http://localhost:11434".to_string(),
+        default_model_id: "qwen3".to_string(),
+        api_key: Some(String::new()),
+      },
+    )
+    .unwrap();
+    assert!(ollama
+      .ai_profiles
+      .get(&profile_id)
+      .unwrap()
+      .credential_ref_id
+      .is_none());
+    assert!(!ollama
+      .credentials
+      .values()
+      .any(|value| value.secret == AI_SECRET));
+
+    let cloud_without_new_key = service::save_profile(
+      &root,
+      SaveApiProfileInput::Ai {
+        id: Some(profile_id.clone()),
+        name: "Anthropic".to_string(),
+        provider_type: AiProviderType::Anthropic,
+        api_format: AiApiFormat::AnthropicMessages,
+        base_url: "https://api.anthropic.com".to_string(),
+        default_model_id: "claude-sonnet-4-5".to_string(),
+        api_key: Some(String::new()),
+      },
+    );
+    assert!(cloud_without_new_key.is_err());
+
+    fs::remove_dir_all(root).ok();
+  }
+
+  #[test]
   fn tikhub_test_persists_safe_summary_and_redacts_failures() {
     let root = workspace("tikhub");
     let registry = service::save_profile(

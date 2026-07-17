@@ -175,27 +175,32 @@ fn save_ai(
   let key = secret(api_key);
   let now = Utc::now().to_rfc3339();
   if let Some(id) = optional_id(id)? {
-    let (mut credential_id, revision) = registry
+    let (mut credential_id, previous_provider, revision) = registry
       .ai_profiles
       .get(&id)
       .map(|profile| {
         Ok((
           profile.credential_ref_id.clone(),
+          profile.provider_type,
           next_revision(profile.revision)?,
         ))
       })
       .transpose()?
       .ok_or_else(|| error("AI 配置不存在"))?;
+    let provider_changed = previous_provider != provider;
+    if provider_changed && key.is_none() && provider != AiProviderType::Ollama {
+      return Err(error("切换 AI 供应商时必须重新输入 API Key"));
+    }
+    if provider_changed && provider == AiProviderType::Ollama && key.is_none() {
+      if let Some(previous_credential_id) = credential_id.take() {
+        registry.credentials.remove(&previous_credential_id);
+      }
+    }
     if (key.is_some() || provider != AiProviderType::Ollama) && credential_id.is_none() {
       credential_id = Some(Uuid::new_v4().to_string());
     }
     if let (Some(key), Some(credential_id)) = (key, credential_id.as_deref()) {
       put_credential(registry, credential_id, &id, credential_type(provider), key)?;
-    } else if let Some(credential) = credential_id
-      .as_ref()
-      .and_then(|credential_id| registry.credentials.get_mut(credential_id))
-    {
-      credential.provider_type = credential_type(provider);
     }
     let has_key = credential_id
       .as_ref()
