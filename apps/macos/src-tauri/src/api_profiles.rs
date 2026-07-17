@@ -14,6 +14,9 @@ mod storage;
 #[cfg(test)]
 mod concurrency_tests;
 
+#[cfg(test)]
+mod url_validation_tests;
+
 pub const API_PROFILE_SCHEMA_VERSION: u32 = 1;
 
 static REGISTRY_LOCK: Mutex<()> = Mutex::new(());
@@ -383,13 +386,23 @@ fn validate_ai_profile(profile: &AiApiProfile) -> AppResult<()> {
   {
     return Err(registry_error("AI 默认模型 ID 不能为空或包含首尾空格"));
   }
-  if (profile.base_url.is_empty() && profile.status != ApiProfileStatus::NeedsRebind)
-    || (!profile.base_url.is_empty()
-      && !profile.base_url.starts_with("https://")
-      && !profile.base_url.starts_with("http://"))
-    || profile.base_url.chars().any(char::is_whitespace)
-  {
-    return Err(registry_error("AI Base URL 必须是有效的 HTTP(S) 地址"));
+  if profile.base_url.is_empty() {
+    if profile.status != ApiProfileStatus::NeedsRebind {
+      return Err(registry_error("AI Base URL 必须是有效的 HTTP(S) 地址"));
+    }
+  } else {
+    let url = reqwest::Url::parse(&profile.base_url)
+      .map_err(|_| registry_error("AI Base URL 必须是有效的 HTTP(S) 地址"))?;
+    if !matches!(url.scheme(), "http" | "https")
+      || url.host_str().is_none()
+      || !url.username().is_empty()
+      || url.password().is_some()
+      || url.query().is_some()
+      || url.fragment().is_some()
+      || profile.base_url.chars().any(char::is_whitespace)
+    {
+      return Err(registry_error("AI Base URL 不能包含凭据、查询串或片段"));
+    }
   }
   if let Some(credential_ref_id) = &profile.credential_ref_id {
     validate_uuid(credential_ref_id, "AI 密钥引用")?;
