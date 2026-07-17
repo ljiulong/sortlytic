@@ -10,6 +10,7 @@ import {
   newCollectionFormDefaults,
   normalizeNaturalIntent,
 } from './collection-form-defaults'
+import { countryRegionSelectOptions } from './collection-select-options'
 import {
   collectionFormSchema,
   countryRegionOptions,
@@ -198,6 +199,7 @@ describe('collection form controls', () => {
   it('平台与国家地区使用应用内下拉，且地区代码仍完整', () => {
     const markup = renderBuilder()
     const regionCodes = countryRegionOptions.map(({ code }) => code)
+    const unitedStates = countryRegionSelectOptions.find(({ value }) => value === 'US')
 
     expect(markup).toMatch(/<button[^>]*id="platform"[^>]*aria-haspopup="listbox"/)
     expect(markup).toMatch(/<button[^>]*id="region-code"[^>]*aria-haspopup="listbox"/)
@@ -206,6 +208,12 @@ describe('collection form controls', () => {
     expect(regionCodes).toContain('CN')
     expect(regionCodes).toContain('US')
     expect(regionCodes).toContain('JP')
+    expect(unitedStates).toMatchObject({
+      label: '美国',
+      description: 'United States',
+      meta: 'US',
+    })
+    expect(unitedStates?.keywords).toContain('美国 United States US')
   })
 
   it('自然语言入口不预填具体任务，并在提交前去除首尾空白', () => {

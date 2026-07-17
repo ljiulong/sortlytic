@@ -30,8 +30,12 @@ import {
   newCollectionFormDefaults,
   normalizeNaturalIntent,
 } from './collection-form-defaults'
+import {
+  countryRegionSelectOptions,
+  platformSelectOptions,
+} from './collection-select-options'
 import type { RuntimeCollectionPlan } from './use-workbench-backend'
-import { type DataType, platformOptions } from './workbench-data'
+import type { DataType } from './workbench-data'
 
 export type CollectionFormInput = z.input<typeof collectionFormSchema>
 export type CollectionFormValues = z.output<typeof collectionFormSchema>
@@ -43,21 +47,6 @@ const dataTypeLabels: Record<CollectionDataType, DataType> = {
   account_posts: '账号作品所属账号',
   comments: '评论用户',
 }
-
-const platformSelectOptions = platformOptions.map((platform) => ({
-  value: platform,
-  label: platform,
-}))
-
-const countryRegionSelectOptions = countryRegionOptions.map(({ code, label }) => {
-  const codeSuffix = `（${code}）`
-  return {
-    value: code,
-    label: label.endsWith(codeSuffix) ? label.slice(0, -codeSuffix.length) : label,
-    meta: code,
-    keywords: label,
-  }
-})
 
 export function CollectionBuilder({
   actionMessage,
