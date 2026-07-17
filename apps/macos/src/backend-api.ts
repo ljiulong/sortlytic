@@ -123,6 +123,11 @@ export type TaskLogView = {
   created_at: string
 }
 
+export type TaskRecordCountView = {
+  task_id: string
+  record_count: number
+}
+
 export type PromptTemplateView = {
   id: string
   template_key: string
@@ -231,6 +236,10 @@ export function listTaskLogs(taskRunId: string) {
     taskRunId,
     rootPath: null,
   })
+}
+
+export function listTaskRecordCounts() {
+  return invoke<TaskRecordCountView[]>('list_task_record_counts', { rootPath: null })
 }
 
 export function createCollectionTask(input: {

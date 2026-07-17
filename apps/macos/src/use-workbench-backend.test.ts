@@ -11,6 +11,7 @@ import {
   getLatestCollectionPlan,
   installAppUpdate,
   listLatestTaskRuns,
+  listTaskRecordCounts,
   listTaskLogs,
   quoteTikhubConnectorPrice,
   type TaskRunView,
@@ -219,6 +220,16 @@ describe('任务页动作', () => {
 
     expect(invokeMock).toHaveBeenCalledWith('list_task_logs', {
       taskRunId: 'run-2',
+      rootPath: null,
+    })
+  })
+
+  it('通过单个批量命令读取每条任务的真实入库记录数', async () => {
+    invokeMock.mockResolvedValue([])
+
+    await listTaskRecordCounts()
+
+    expect(invokeMock).toHaveBeenCalledWith('list_task_record_counts', {
       rootPath: null,
     })
   })
