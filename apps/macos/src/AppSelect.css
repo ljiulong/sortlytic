@@ -1,0 +1,230 @@
+.app-select {
+  position: relative;
+  min-width: 0;
+}
+
+.app-select__trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  padding: 8px 10px 8px 11px;
+  color: var(--text-strong);
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  outline: 0;
+  transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.app-select__trigger:disabled {
+  color: var(--text-faint);
+  background: var(--surface-raised);
+  cursor: not-allowed;
+  opacity: 0.76;
+}
+
+.app-select[data-open='true'] .app-select__trigger {
+  border-color: var(--border-strong);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--focus) 24%, transparent);
+}
+
+.app-select__value {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  width: 100%;
+  line-height: 1.35;
+}
+
+.app-select__value > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.app-select__value[data-placeholder='true'] {
+  color: var(--text-faint);
+}
+
+.app-select__value small,
+.app-select__option code {
+  flex: none;
+  color: var(--text-faint);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+}
+
+.app-select__chevron {
+  flex: none;
+  color: var(--text-muted);
+  transition: transform 120ms ease;
+}
+
+.app-select[data-open='true'] .app-select__chevron {
+  transform: rotate(180deg);
+}
+
+.app-select__popover {
+  position: absolute;
+  z-index: 80;
+  top: calc(100% + 6px);
+  left: 0;
+  width: max(100%, 280px);
+  max-width: min(420px, calc(100vw - 40px));
+  padding: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 30px rgb(31 28 22 / 0.14);
+  transform-origin: top left;
+  animation: app-select-enter 120ms ease-out;
+}
+
+.app-select__search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 9px;
+  color: var(--text-muted);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.app-select__search input {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0;
+  color: var(--text-strong);
+  background: transparent;
+  border: 0;
+  outline: 0;
+}
+
+.app-select__search input::placeholder {
+  color: var(--text-faint);
+}
+
+.app-select__listbox {
+  display: grid;
+  gap: 2px;
+  max-height: 260px;
+  margin-top: 5px;
+  overflow-y: auto;
+  outline: 0;
+}
+
+.app-select__option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 16px;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 7px 9px;
+  color: var(--text);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  outline: 0;
+}
+
+.app-select__option > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.app-select__option strong {
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.app-select__option small {
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.app-select__option[data-active='true'],
+.app-select__option[aria-selected='true'] {
+  background: var(--surface-hover);
+}
+
+.app-select__option[aria-selected='true'] strong {
+  color: var(--text-strong);
+}
+
+.app-select__check {
+  color: var(--success);
+  opacity: 0;
+}
+
+.app-select__option[aria-selected='true'] .app-select__check {
+  opacity: 1;
+}
+
+.app-select__empty {
+  margin: 0;
+  padding: 18px 10px;
+  color: var(--text-faint);
+  font-size: 11px;
+  text-align: center;
+}
+
+.app-select__trigger:focus-visible,
+.app-select__search:focus-within,
+.app-select__option:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@media (hover: hover) {
+  .app-select__trigger:not(:disabled):hover,
+  .app-select__option:hover {
+    background: var(--surface-hover);
+  }
+}
+
+@media (max-width: 560px) {
+  .app-select__popover {
+    width: 100%;
+    max-width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-select__popover {
+    animation: none;
+  }
+
+  .app-select__chevron,
+  .app-select__trigger {
+    transition: none;
+  }
+}
+
+@keyframes app-select-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
