@@ -45,7 +45,7 @@
 | 受控任务执行 | 采集前和采集中校验实时接口报价、免费额度、充值余额、请求上限、记录上限与任务预算。 |
 | 自然语言计划 | 通过当前本地规则解析器把中文研究意图转换成经过校验的采集计划，同时保存运行快照。 |
 | 提示词治理 | 保存提示词模板与版本，绑定输出 Schema，并在内置回归样例失败时阻止版本激活。 |
-| 本地优先安全 | 工作区数据保存在本地 SQLite，API 凭据通过作用域隔离的密钥引用写入 macOS Keychain。 |
+| 本地优先安全 | TikHub 与 AI API 配置和明文凭据统一写入当前工作区私有 `secrets/api-config.json`，SQLite 只保留可重建镜像与密钥引用元数据。 |
 | 可审计交付 | 生成报告快照、执行导出完整性校验，并输出带哈希和任务历史的 Excel 工作簿与 PDF 报告。 |
 
 ## 快速开始
@@ -78,7 +78,7 @@ pnpm tauri dev
 pnpm dev
 ```
 
-浏览器预览使用演示数据，不能访问 macOS Keychain、执行原生采集任务、创建本地导出文件或安装应用更新。
+浏览器预览使用演示数据，不能访问工作区私有 API 配置、执行原生采集任务、创建本地导出文件或安装应用更新。
 
 ## 使用方法
 
@@ -118,7 +118,7 @@ pnpm dev
 
 1. [注册 TikHub 账号](https://user.tikhub.io/register)，完成邮箱验证，再[登录用户中心](https://user.tikhub.io/login)。
 2. 在用户中心创建 API Token，并在显示时立即复制；使用付费端点前先查看 [TikHub 价格说明](https://tikhub.io/pricing)。
-3. 在 Sortlytic 中打开**设置 → TikHub 设置 → 配置 TikHub API**。
+3. 在 Sortlytic 中打开**设置 → 配置 TikHub API**。
 4. 选择域名，粘贴 Token，然后点击**保存并测试**。
 
 | 网络环境 | API 域名 |
@@ -126,15 +126,15 @@ pnpm dev
 | 国际网络 | `https://api.tikhub.io` |
 | 中国大陆网络 | `https://api.tikhub.dev` |
 
-测试成功后，界面会显示脱敏账号邮箱、充值余额、免费额度、可用额度合计和邮箱验证状态。Token 写入 macOS Keychain，SQLite 工作区只保存带作用域的密钥引用。编辑已有配置时，可以把 Token 输入框留空以复用已保存 Token。
+测试成功后，界面会显示脱敏账号邮箱、充值余额、免费额度、可用额度合计和邮箱验证状态。Token 以明文写入当前工作区私有 `secrets/api-config.json`，SQLite 只保存可重建镜像与带作用域的密钥引用。第一条测试成功的 TikHub 配置会自动成为当前配置；后续新增配置不会替换当前配置，需要在列表中显式选择**设为当前**。编辑已有配置时，可以把 Token 输入框留空以复用已保存 Token。
 
 首次采集建议只设置 10～50 条记录，先检查平台、数据类型、国家或地区、关键词和端点成本，再逐步扩大任务。
 
-### 配置模型供应商（可选）
+### 配置 AI API（可选）
 
-打开**设置 → 模型 API 设置**，可以保存 OpenAI、Anthropic、Gemini 或自定义 OpenAI 兼容配置。选择 API 格式，按需填写 Base URL，再填写默认模型 ID 和 API Key，最后点击**保存并校验**；已保存的本地供应商配置也可以使用 Ollama API 格式。密钥位于 macOS Keychain，后续可以留空复用。
+打开**设置 → 配置 AI API**，可以保存多条 OpenAI、Anthropic、Gemini、自定义 OpenAI-compatible 或 Ollama 配置，并在脱敏列表中查看和切换当前配置。选择 API 格式，按需填写 Base URL，再填写默认模型 ID 和 API Key；Ollama 可以不填密钥，编辑其他已有配置时可以把 API Key 留空以复用。API Key 与配置统一保存在当前工作区私有 `secrets/api-config.json`。
 
-当前 MVP 不要求配置模型供应商。自然语言计划仍使用 `local-rule-engine/rule-parser-v1`；基于供应商模型的计划生成和真实模型推理尚未接入。
+当前 MVP 不要求配置 AI API。AI 配置只做保存、完整性校验、查看和当前配置切换，不发起真实模型请求；自然语言计划仍使用 `local-rule-engine/rule-parser-v1`，基于供应商模型的计划生成和真实模型推理尚未接入。
 
 ### 创建并确认采集计划
 
@@ -207,6 +207,7 @@ XLSX 账号导出遵循 `excel/社交平台用户数据收集模板_国家地区
 | “Sortlytic 已损坏，无法打开” | 从官方 Release 重新下载匹配架构的 DMG，再按[首次打开与“已损坏”提示](#首次打开与已损坏提示)处理。 |
 | TikHub 测试失败 | 检查 Token 是否完整、邮箱是否已验证、域名是否适合当前网络，以及账号额度是否足够。 |
 | **保存并测试**不可点击 | 新 TikHub Token 至少需要 8 个字符；已有 Token 可以留空复用。 |
+| 旧配置显示**需重新输入** | 新版本只导入旧 SQLite 中的非敏感配置元数据，不读取旧 Keychain；在对应 API 管理弹窗重新输入一次 Token 或 API Key，再测试并显式选择当前配置。 |
 | 计划无法确认 | 查看按钮旁第一条阻塞原因，修正无效筛选或不支持的输入，刷新 TikHub 额度与实时报价，并确认可用额度合计能够覆盖报价和预算。 |
 | 导出失败 | 先创建任务，再查看工作区标题下方的后端错误；任务数据可用后重新执行导出。 |
 | 页面有逼真的记录，但原生功能不可用 | 当前通过 `pnpm dev` 运行浏览器演示模式。请使用 `pnpm tauri dev` 或打包应用。 |
@@ -216,8 +217,11 @@ XLSX 账号导出遵循 `excel/社交平台用户数据收集模板_国家地区
 
 - Sortlytic 当前只创建一个本地 `default-workspace`，不提供用户账号、远端数据库、远端同步或多设备同步。
 - 工作区数据、原始响应、提示词快照、日志、报告和导出文件都保存在 macOS 应用数据目录下。
-- TikHub 与模型 API 密钥保存在 macOS Keychain，不会写入报告或导出文件。
-- 删除应用不一定会删除工作区或 Keychain 条目。手动清理应用数据前，应先备份需要保留的 XLSX、PDF 和原始文件。
+- TikHub 与 AI API 密钥以明文保存在当前工作区 `secrets/api-config.json`；`secrets/` 目录固定为 `0700`，文件固定为 `0600`，权限不安全、路径为符号链接或 JSON 损坏时应用会失败关闭 API 配置管理和新任务领取。
+- `0700/0600` 只能限制其他本机用户，不能防止同一 macOS 账户下的恶意进程读取 JSON。这是停止使用 Keychain 后明确接受的安全降级。
+- 完整 API Key 不进入 SQLite、日志、应用备份、Excel、PDF 或 Webhook；界面和命令返回值只显示脱敏值。
+- 新版本不会读取或删除旧 Keychain 条目。旧配置会标记为**需重新输入**且不自动成为当前配置；确认新版本正常后，可以在“钥匙串访问”中手动删除旧条目。
+- 删除应用不一定会删除工作区或旧 Keychain 条目。手动清理应用数据前，应先备份需要保留的 XLSX、PDF 和原始文件，但不要把 `secrets/api-config.json` 加入共享备份。
 - 只采集有权访问的公开数据，并遵守平台条款、隐私要求与适用法律。
 
 ## 架构
@@ -228,7 +232,6 @@ graph LR
     classDef client fill:#3B82F6,stroke:#2563EB,color:#fff,stroke-width:2px
     classDef service fill:#10B981,stroke:#059669,color:#fff,stroke-width:2px
     classDef data fill:#8B5CF6,stroke:#7C3AED,color:#fff,stroke-width:2px
-    classDef auth fill:#F97316,stroke:#EA580C,color:#fff,stroke-width:2px
     classDef external fill:#F43F5E,stroke:#E11D48,color:#fff,stroke-width:2px
 
     A[React Workbench<br/>TypeScript] --> B[Tauri Command Layer<br/>Rust]
@@ -236,7 +239,7 @@ graph LR
     B --> D[Prompt and Plan Runtime]
     B --> E[Report and Export Engine]
     B --> F[(Local Workspace<br/>SQLite and files)]
-    B --> G[macOS Keychain]
+    B --> G[工作区私有 API 配置库<br/>api-config.json]
     B --> H[TikHub and Model APIs]
     C --> F
     C --> H
@@ -245,8 +248,7 @@ graph LR
 
     class A client
     class B,C,D,E service
-    class F data
-    class G auth
+    class F,G data
     class H external
 ```
 
@@ -266,11 +268,11 @@ graph LR
 
 | 配置项 | 用途 | 存储位置 |
 |---|---|---|
-| TikHub API 域名 | 根据当前网络选择 `api.tikhub.io` 或 `api.tikhub.dev` | 工作区数据库 |
-| TikHub Token | 用于采集请求和账户状态检查 | macOS Keychain |
-| 模型供应商 | 保存 API 格式、端点、地区、策略和健康状态 | 工作区数据库 |
-| 模型 API Key | 用于模型供应商连通测试 | macOS Keychain |
-| 默认模型配置 | 记录模型能力和当前模型选择 | 工作区数据库 |
+| TikHub 配置 | 保存名称、API 域名、测试状态、安全摘要和当前配置 ID | 工作区私有 `secrets/api-config.json` |
+| TikHub Token | 用于采集请求和账户状态检查 | `api-config.json` 的明文 `credentials` 对象 |
+| AI 配置 | 保存供应商、API 格式、Base URL、默认模型、校验状态和当前配置 ID | 工作区私有 `secrets/api-config.json` |
+| AI API Key | 当前只用于配置完整性校验和未来模型执行 | `api-config.json` 的明文 `credentials` 对象；Ollama 可为空 |
+| API 配置镜像 | 支持现有任务与查询代码，不作为主数据源 | 工作区 SQLite，不含明文密钥 |
 
 ### 发布密钥
 
@@ -319,8 +321,8 @@ graph LR
 | Tauri 2 | macOS 原生应用外壳与命令桥接 |
 | Rust | 工作区、采集、任务、提示词、安全和导出逻辑 |
 | SQLite 与 rusqlite | 本地事务型工作区存储 |
-| macOS Keychain | 通过作用域密钥引用保存 API 凭据 |
-| reqwest | TikHub 与模型供应商连通请求 |
+| 工作区私有 JSON | 统一保存多条 TikHub 与 AI API 配置和明文凭据，目录与文件权限分别为 `0700`、`0600` |
+| reqwest | TikHub 账户测试与采集请求；当前 AI 配置校验不发模型请求 |
 | rust_xlsxwriter | 原生 XLSX 报告生成 |
 
 ### 质量与交付
