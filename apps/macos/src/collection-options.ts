@@ -44,6 +44,15 @@ export function getCollectionDataTypeOptions(t: CollectionTranslator) {
 
 export const AGE_RANGE_LIMITS = { min: 0, max: 130 } as const
 
+const PLATFORM_TIME_RANGE_VALUES: Record<
+  (typeof platformOptions)[number],
+  readonly string[]
+> = {
+  TikTok: ['1', '7', '30', '180'],
+  抖音: ['1', '7', '180'],
+  小红书: ['1', '7', '180'],
+}
+
 export const genderFilterOptions = [
   { value: 'female', labelKey: 'options.gender.female' },
   { value: 'male', labelKey: 'options.gender.male' },
@@ -123,7 +132,7 @@ export function createCollectionFormSchema(t: CollectionTranslator) {
         .transform((value) => value.trim().toUpperCase())
         .refine((value) => !value || knownRegionCodes.has(value), t('validation.regionInvalid')),
       keyword: z.string().min(2, t('validation.keywordMin')).max(80, t('validation.keywordMax')),
-      range: z.string().min(4, t('validation.rangeRequired')),
+      range: z.string().trim(),
       maxRecords: z.coerce.number()
         .min(10, t('validation.maxRecordsMin'))
         .max(5000, t('validation.maxRecordsMax')),
@@ -137,6 +146,19 @@ export function createCollectionFormSchema(t: CollectionTranslator) {
       genders: z.array(genderSchema).default([]),
     })
     .superRefine((values, context) => {
+      if (!values.range) {
+        context.addIssue({
+          code: 'custom',
+          path: ['range'],
+          message: t('validation.rangeRequired'),
+        })
+      } else if (!PLATFORM_TIME_RANGE_VALUES[values.platform].includes(values.range)) {
+        context.addIssue({
+          code: 'custom',
+          path: ['range'],
+          message: t('validation.rangeInvalid'),
+        })
+      }
       if (values.ageRangeEnabled) {
         if (values.ageMin === undefined) {
           context.addIssue({ code: 'custom', path: ['ageMin'], message: t('validation.ageMinRequired') })

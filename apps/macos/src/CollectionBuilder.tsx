@@ -37,6 +37,7 @@ import {
   countryRegionSelectOptions,
   platformSelectOptions,
 } from './collection-select-options'
+import { useCollectionTimeRanges } from './collection-time-ranges'
 import { i18n } from './i18n'
 import type { RuntimeCollectionPlan } from './use-workbench-backend'
 import type { DataType } from './workbench-data'
@@ -86,8 +87,15 @@ export function CollectionBuilder({
   const selectedPlatform = watch('platform')
   const selectedDataTypes = watch('dataTypes') ?? []
   const primaryDataType = selectedDataTypes[0]
+  const selectedRange = watch('range')
   const ageRangeEnabled = watch('ageRangeEnabled')
   const genderFilterEnabled = watch('genderFilterEnabled')
+  const timeRanges = useCollectionTimeRanges(selectedPlatform)
+  const timeRangeOptions = useMemo(() => timeRanges.values.map((value) => ({
+    value,
+    label: t('options.timeRange.days', { count: Number(value) }),
+    meta: `${value}d`,
+  })), [t, timeRanges.values])
   const regionEnabled = selectedPlatform
     ? supportsRegionSelection(selectedPlatform, selectedDataTypes)
     : false
@@ -99,6 +107,12 @@ export function CollectionBuilder({
   useEffect(() => {
     if (!regionEnabled) setValue('regionCode', '')
   }, [regionEnabled, setValue])
+
+  useEffect(() => {
+    if (selectedRange && !timeRanges.values.includes(selectedRange)) {
+      setValue('range', '', { shouldValidate: true })
+    }
+  }, [selectedRange, setValue, timeRanges.values])
 
   const submitForm = async (values: CollectionFormValues) => {
     await onGenerateFormPlan(values)
@@ -238,17 +252,33 @@ export function CollectionBuilder({
                   />
                 </FormField>
                 <FormField
-                  error={errors.range?.message}
+                  error={timeRanges.error
+                    ? t('message.timeRangeCapabilityUnavailable')
+                    : errors.range?.message}
                   errorId="range-error"
                   htmlFor="range"
                   label={t('fields.range')}
+                  hint={t('fields.rangeHint')}
                 >
-                  <input
-                    id="range"
-                    aria-describedby={errors.range ? 'range-error' : undefined}
-                    aria-invalid={Boolean(errors.range)}
-                    placeholder={t('placeholders.range')}
-                    {...register('range')}
+                  <Controller
+                    control={control}
+                    name="range"
+                    render={({ field }) => (
+                      <AppSelect
+                        id="range"
+                        ariaDescribedBy={timeRanges.error || errors.range ? 'range-error' : undefined}
+                        disabled={!selectedPlatform || timeRanges.isLoading || Boolean(timeRanges.error)}
+                        invalid={Boolean(timeRanges.error || errors.range)}
+                        onChange={field.onChange}
+                        options={timeRangeOptions}
+                        placeholder={timeRanges.error
+                          ? t('placeholders.rangeUnavailable')
+                          : timeRanges.isLoading
+                            ? t('placeholders.rangeLoading')
+                            : t('placeholders.range')}
+                        value={field.value ?? ''}
+                      />
+                    )}
                   />
                 </FormField>
               </div>

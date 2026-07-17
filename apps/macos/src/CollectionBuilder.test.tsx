@@ -165,7 +165,7 @@ describe('collection form controls', () => {
     dataTypes: ['keyword_search'],
     regionCode: 'CN',
     keyword: '新能源汽车',
-    range: '近 30 天',
+    range: '180',
     maxRecords: 1200,
     budget: 35,
     ageRangeEnabled: false,
@@ -203,6 +203,8 @@ describe('collection form controls', () => {
 
     expect(markup).toMatch(/<button[^>]*id="platform"[^>]*aria-haspopup="listbox"/)
     expect(markup).toMatch(/<button[^>]*id="region-code"[^>]*aria-haspopup="listbox"/)
+    expect(markup).toMatch(/<button[^>]*id="range"[^>]*aria-haspopup="listbox"/)
+    expect(markup).not.toMatch(/<input[^>]*id="range"/)
     expect(markup).not.toContain('<select')
     expect(markup).not.toContain('<datalist')
     expect(regionCodes).toContain('CN')
@@ -214,6 +216,27 @@ describe('collection form controls', () => {
       meta: 'US',
     })
     expect(unitedStates?.keywords).toContain('美国 United States US')
+  })
+
+  it('时间范围只接受平台能力中的规范值，不再接受任意文本', () => {
+    for (const range of ['1', '7', '180']) {
+      expect(collectionFormSchema.safeParse({ ...baseInput, range }).success).toBe(true)
+    }
+    expect(collectionFormSchema.safeParse({
+      ...baseInput,
+      platform: 'TikTok',
+      range: '30',
+    }).success).toBe(true)
+    expect(collectionFormSchema.safeParse({ ...baseInput, range: '30' }).success).toBe(false)
+    expect(collectionFormSchema.safeParse({
+      ...baseInput,
+      platform: '抖音',
+      range: '30',
+    }).success).toBe(false)
+    expect(collectionFormSchema.safeParse({
+      ...baseInput,
+      range: '最近一个月',
+    }).success).toBe(false)
   })
 
   it('自然语言入口不预填具体任务，并在提交前去除首尾空白', () => {
