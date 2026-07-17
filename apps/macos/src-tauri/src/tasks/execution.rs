@@ -61,7 +61,6 @@ pub fn enqueue_task(root_path: impl AsRef<Path>, task_id: &str) -> AppResult<Tas
     )
     .map_err(database_error)?;
   materialize_run_steps(&transaction, &run_id, &plan_id, &now)?;
-  create_runtime_snapshot(&transaction, &run_id, &plan_id, &now)?;
   transaction
     .execute(
       "UPDATE collection_task
@@ -83,6 +82,7 @@ pub fn enqueue_task(root_path: impl AsRef<Path>, task_id: &str) -> AppResult<Tas
 }
 
 pub fn claim_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRunView>> {
+  let root_path = root_path.as_ref();
   let mut connection = open_workspace_connection(root_path)?;
   let transaction = immediate_transaction(&mut connection)?;
   loop {
@@ -136,12 +136,25 @@ pub fn claim_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRunV
 
     let now = Utc::now().to_rfc3339();
     let stage = claim_stage(queued.current_stage.as_deref());
+    create_runtime_snapshot(
+      root_path,
+      &transaction,
+      &queued.id,
+      plan_id,
+      &now,
+      stage == "执行采集",
+    )?;
     let changed = transaction
       .execute(
         "UPDATE task_run
          SET status = 'running', current_stage = ?1, error_code = NULL,
              error_message = NULL, retryable = 0, claimed_at = ?2
          WHERE id = ?3 AND status = 'queued' AND plan_id IS NOT NULL
+           AND EXISTS (
+             SELECT 1 FROM collection_runtime_snapshot AS snapshot
+             WHERE snapshot.task_run_id = task_run.id
+               AND snapshot.plan_id = task_run.plan_id
+           )
            AND EXISTS (
              SELECT 1 FROM collection_plan AS plan
              WHERE plan.id = task_run.plan_id AND plan.task_id = task_run.task_id
@@ -213,7 +226,6 @@ pub fn retry_task(
     )
     .map_err(database_error)?;
   materialize_run_steps(&transaction, &run_id, &plan_id, &now)?;
-  create_runtime_snapshot(&transaction, &run_id, &plan_id, &now)?;
   transaction
     .execute(
       "UPDATE collection_task SET status = 'queued', updated_at = ?1 WHERE id = ?2",
