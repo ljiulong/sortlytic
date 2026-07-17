@@ -10,7 +10,6 @@ pub mod domain;
 pub mod exports;
 #[cfg(target_os = "macos")]
 mod native_window;
-mod planning;
 pub mod prompts;
 pub mod providers;
 pub mod records;
