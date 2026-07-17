@@ -101,6 +101,8 @@ describe('TaskQueue', () => {
       buttonLabel: '确认删除',
     })
     expect(confirmationForTaskAction('confirm-cancel').message).toContain('保留任务与运行记录')
+    expect(confirmationForTaskAction('confirm-cancel').message).toContain('可能仍会完成并产生费用')
+    expect(confirmationForTaskAction('confirm-cancel').message).toContain('不会写入本地')
     expect(confirmationForTaskAction('confirm-delete').message).toContain('关联本地数据')
     expect(confirmationForTaskAction('confirm-delete').message).toContain('无法恢复')
   })
