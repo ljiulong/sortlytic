@@ -139,6 +139,15 @@ fn close_workspace(workspace_id: String, state: tauri::State<'_, AppState>) -> A
 }
 
 #[tauri::command]
+fn list_task_record_counts(
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<Vec<records::TaskRecordCountView>> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  records::list_task_record_counts(root_path)
+}
+
+#[tauri::command]
 fn list_supported_platforms() -> AppResult<Vec<PlatformCapabilityView>> {
   Ok(collection::list_supported_platforms())
 }
@@ -409,6 +418,7 @@ pub fn run() {
       list_tasks,
       list_latest_task_runs,
       list_task_logs,
+      list_task_record_counts,
       list_supported_platforms,
       list_platform_data_types,
       validate_collection_params,

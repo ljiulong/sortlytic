@@ -33,6 +33,24 @@ fn latest_task_run_states_are_exposed_as_a_single_batch_command() {
 }
 
 #[test]
+fn stored_record_counts_are_exposed_as_an_active_workspace_command() {
+  let source = include_str!("lib.rs");
+  let handler = source
+    .split(".invoke_handler(tauri::generate_handler![")
+    .nth(1)
+    .expect("Tauri invoke handler should exist");
+  let command = source
+    .split("fn list_task_record_counts(")
+    .nth(1)
+    .and_then(|tail| tail.split("#[tauri::command]").next())
+    .expect("record count command should exist");
+
+  assert!(handler.contains("\n      list_task_record_counts,"));
+  assert!(command.contains("resolve_workspace_root"));
+  assert!(command.contains("records::list_task_record_counts"));
+}
+
+#[test]
 fn prompt_activation_keeps_real_model_regressions_off_the_ui_thread() {
   let source = include_str!("lib.rs");
   let command = source
