@@ -37,6 +37,8 @@ mod active_run_migration;
 mod api_profile_migration;
 mod collection_pipeline_migration;
 mod collection_runtime_migration;
+#[cfg(test)]
+mod plan_review_migration;
 mod run_checkpoint_migration;
 mod schema;
 mod security;
