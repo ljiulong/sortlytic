@@ -2,6 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import {
+  CollectionBuilder,
   CollectionPlanPreview,
 } from './CollectionBuilder'
 import {
@@ -24,7 +25,37 @@ const draftPlan: RuntimeCollectionPlan = {
   missing: [],
 }
 
+function renderBuilder(activePlan?: RuntimeCollectionPlan) {
+  return renderToStaticMarkup(
+    createElement(CollectionBuilder, {
+      actionMessage: '等待生成',
+      activePlan,
+      isBusy: false,
+      onConfirmPlan: vi.fn(async () => undefined),
+      onGenerateFormPlan: vi.fn(async () => draftPlan),
+      onGenerateNaturalPlan: vi.fn(async () => draftPlan),
+    }),
+  )
+}
+
 describe('CollectionPlanPreview', () => {
+  it('计划卡按头部、事实区、成本区和稳定底栏组织', () => {
+    const markup = renderToStaticMarkup(
+      createElement(CollectionPlanPreview, {
+        actionMessage: '等待确认',
+        isBusy: false,
+        onConfirmPlan: vi.fn(),
+        plan: draftPlan,
+      }),
+    )
+
+    expect(markup).toContain('collection-plan__header')
+    expect(markup).toContain('collection-plan__facts')
+    expect(markup).toContain('collection-plan__pricing')
+    expect(markup).toContain('collection-plan__footer')
+    expect(markup).not.toContain('plan-grid')
+  })
+
   it('未生成后端计划时保留完整预览并禁用确认按钮', () => {
     const markup = renderToStaticMarkup(
       createElement(CollectionPlanPreview, {
@@ -146,6 +177,28 @@ describe('collection form controls', () => {
       maxRecords: undefined,
       budget: undefined,
     })
+  })
+
+  it('新建任务使用四个业务分组和完整计划空状态', () => {
+    const markup = renderBuilder()
+
+    expect(markup).toContain('collection-builder')
+    expect(markup).toContain('01 来源与目标')
+    expect(markup).toContain('02 采集范围')
+    expect(markup).toContain('03 数量与成本')
+    expect(markup).toContain('04 公开信息筛选')
+    expect(markup).toContain('collection-plan-empty')
+    expect(markup).toContain('尚未生成计划')
+  })
+
+  it('国家地区使用可完整浏览的标准代码选择器', () => {
+    const markup = renderBuilder()
+
+    expect(markup).toMatch(/<select[^>]*id="region-code"/)
+    expect(markup).toContain('value="CN"')
+    expect(markup).toContain('value="US"')
+    expect(markup).toContain('value="JP"')
+    expect(markup).not.toContain('<datalist')
   })
 
   it('自然语言入口不预填具体任务，并在提交前去除首尾空白', () => {
