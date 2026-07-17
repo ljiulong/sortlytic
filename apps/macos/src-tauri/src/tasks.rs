@@ -230,6 +230,14 @@ pub fn get_task(root_path: impl AsRef<Path>, task_id: &str) -> AppResult<Collect
   get_task_by_id(&connection, task_id)
 }
 
+pub fn get_latest_collection_plan(
+  root_path: impl AsRef<Path>,
+  task_id: &str,
+) -> AppResult<CollectionPlanView> {
+  let connection = open_workspace_connection(root_path)?;
+  latest_plan_for_task(&connection, task_id)
+}
+
 pub fn list_tasks(
   root_path: impl AsRef<Path>,
   status: Option<String>,

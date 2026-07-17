@@ -406,6 +406,16 @@ fn confirm_collection_plan(
 }
 
 #[tauri::command]
+fn get_latest_collection_plan(
+  task_id: String,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<CollectionPlanView> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  tasks::get_latest_collection_plan(root_path, &task_id)
+}
+
+#[tauri::command]
 fn enqueue_task(
   task_id: String,
   root_path: Option<String>,
@@ -736,6 +746,7 @@ pub fn run() {
       save_collection_plan,
       estimate_task_cost,
       confirm_collection_plan,
+      get_latest_collection_plan,
       enqueue_task,
       execute_next_task,
       cancel_task,

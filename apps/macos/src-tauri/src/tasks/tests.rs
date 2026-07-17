@@ -23,6 +23,25 @@ fn task_plan_confirm_enqueue_and_logs_round_trip() {
 }
 
 #[test]
+fn latest_persisted_plan_can_be_loaded_for_queue_actions() {
+  let root_path = unique_temp_workspace("latest-task-plan");
+  create_workspace("任务测试", &root_path).expect("workspace should be created");
+  let task = create_collection_task(&root_path, create_task_input()).expect("task created");
+  let first = save_collection_plan(&root_path, plan_input(&task.id)).expect("first plan saved");
+  let mut replacement_input = plan_input(&task.id);
+  replacement_input.plan_json["keywords"] = serde_json::json!(["第二版计划"]);
+  let replacement = save_collection_plan(&root_path, replacement_input).expect("replacement saved");
+
+  let latest = get_latest_collection_plan(&root_path, &task.id)
+    .expect("persisted latest plan should load for queue action");
+
+  assert_ne!(first.id, replacement.id);
+  assert_eq!(latest.id, replacement.id);
+  assert_eq!(latest.task_id, task.id);
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn version_three_multi_target_plan_saves_confirms_and_persists_step_limits() {
   let root_path = unique_temp_workspace("tasks-v3");
   create_workspace("v3 任务测试", &root_path).expect("workspace should be created");
