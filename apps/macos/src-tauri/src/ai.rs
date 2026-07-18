@@ -18,9 +18,10 @@ use crate::tasks::{
 };
 use crate::workspace::{open_workspace_database, DATABASE_FILE_NAME};
 
-mod collection_plan_schema;
+pub(crate) mod collection_plan_schema;
 pub(crate) mod provider_client;
 
+use collection_plan_schema::validate_collection_plan_schema;
 use provider_client::{call_model, collection_plan_request, ProviderConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -174,8 +175,13 @@ pub fn generate_collection_plan_from_text(
       return Err(error);
     }
   };
+  let schema_errors = validate_collection_plan_schema(&response.output_json);
   let generated = normalize_model_plan(response.output_json);
-  let plan_validation = validate_collection_plan_v3(&generated);
+  let mut plan_validation = validate_collection_plan_v3(&generated);
+  plan_validation.errors.extend(schema_errors);
+  plan_validation.errors.sort();
+  plan_validation.errors.dedup();
+  plan_validation.valid = plan_validation.errors.is_empty();
   let schema_valid = plan_validation.valid;
   let generated_platforms = json_string_array(generated.get("platforms"));
   let generated_data_types = json_string_array(generated.get("data_types"));

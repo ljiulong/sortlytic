@@ -179,6 +179,59 @@ fn invalid_model_plan_does_not_change_existing_task_scope() {
 }
 
 #[test]
+fn model_plan_missing_required_step_field_needs_review() {
+  let root_path = unique_temp_workspace("ai-incomplete-plan-schema");
+  create_workspace("AI 不完整计划测试", &root_path).expect("workspace should be created");
+  let mut plan = valid_keyword_plan();
+  plan["steps"][0]
+    .as_object_mut()
+    .expect("step should be an object")
+    .remove("output_selected");
+  let response = serde_json::json!({
+    "choices": [{ "message": { "content": plan.to_string() } }]
+  })
+  .to_string();
+  let (base_url, server) = serve_ai_once(200, response, |_| {});
+  configure_active_ai(&root_path, base_url);
+  let task = create_collection_task(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "拒绝不完整模型计划".to_string(),
+      source_type: "natural_language".to_string(),
+      platforms: vec!["xiaohongshu".to_string()],
+      data_types: vec!["comments".to_string()],
+    },
+  )
+  .expect("task should be created");
+
+  let result = generate_collection_plan_from_text(
+    &root_path,
+    GenerateCollectionPlanFromTextInput {
+      task_id: task.id.clone(),
+      intent_text: "生成缺少步骤输出边界的计划".to_string(),
+      provider_id: None,
+      model_id: None,
+    },
+  )
+  .expect("incomplete plan should be saved for review");
+  server.join().expect("test server should finish");
+  let updated_task = get_task(&root_path, &task.id).expect("task should reload");
+
+  assert!(!result.ai_run.schema_valid);
+  assert_eq!(result.collection_plan.validation_status, "needs_review");
+  assert_eq!(
+    updated_task.platforms_json,
+    serde_json::json!(["xiaohongshu"])
+  );
+  assert_eq!(
+    updated_task.data_types_json,
+    serde_json::json!(["comments"])
+  );
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn natural_language_plan_runs_through_tikhub_and_persists_records() {
   let root_path = unique_temp_workspace("ai-tikhub-e2e");
   create_workspace("自然语言采集端到端测试", &root_path).expect("workspace should be created");
@@ -292,7 +345,7 @@ fn prompt_regression_calls_the_active_model_with_the_candidate_content() {
 
   assert_eq!(result.provider_id, profile_id);
   assert_eq!(result.model_id, "deepseek-test");
-  assert_eq!(result.output_json, plan);
+  assert_eq!(result.output_json, normalize_model_plan(plan));
 
   std::fs::remove_dir_all(root_path).ok();
 }
@@ -362,7 +415,14 @@ fn valid_keyword_plan() -> Value {
       "endpoint_key": "tiktok.keyword_search",
       "platform": "tiktok",
       "data_type": "keyword_search",
-      "params": { "keyword": "car", "region": "US", "time_range": "7", "page_size": 50 },
+      "params": {
+        "keyword": "car",
+        "item_id": null,
+        "account_id": null,
+        "region": "US",
+        "time_range": "7",
+        "page_size": 50
+      },
       "request_limit": 1,
       "output_selected": true
     }],

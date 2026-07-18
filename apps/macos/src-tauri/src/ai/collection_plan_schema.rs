@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 pub(super) fn collection_plan_schema() -> Value {
@@ -164,6 +165,227 @@ fn output_rules_schema() -> Value {
     },
     "required": ["entity", "dedupe_key", "fallback_dedupe_key", "selected_data_types"]
   })
+}
+
+pub(crate) fn validate_collection_plan_schema(plan: &Value) -> Vec<String> {
+  let parsed = match serde_json::from_value::<strict_contract::CollectionPlanV3>(plan.clone()) {
+    Ok(parsed) => parsed,
+    Err(error) => return vec![format!("模型输出不符合 collection_plan_v3 Schema：{error}")],
+  };
+  let mut errors = Vec::new();
+  if parsed.schema_version != 3 {
+    errors.push("collection_plan_v3.schema_version 必须为 3".to_string());
+  }
+  if parsed.steps.is_empty() {
+    errors.push("collection_plan_v3.steps 至少需要一个步骤".to_string());
+  }
+  if parsed.record_limit == 0 || parsed.request_limit == 0 {
+    errors.push("collection_plan_v3 的记录数与请求数上限必须大于 0".to_string());
+  }
+  if parsed.budget_limit.amount_micros == 0 {
+    errors.push("collection_plan_v3 的预算上限必须大于 0".to_string());
+  }
+  if !(0.0..=1.0).contains(&parsed.confidence) {
+    errors.push("collection_plan_v3.confidence 必须位于 0 到 1 之间".to_string());
+  }
+  if !parsed.requires_user_confirmation {
+    errors.push("collection_plan_v3.requires_user_confirmation 必须为 true".to_string());
+  }
+  if let Some(age_range) = parsed.age_range.0 {
+    if age_range.min > age_range.max || age_range.max > 130 {
+      errors.push("collection_plan_v3.age_range 必须是 0 到 130 的有效闭区间".to_string());
+    }
+  }
+  for (index, step) in parsed.steps.iter().enumerate() {
+    if step.request_limit == 0 {
+      errors.push(format!(
+        "collection_plan_v3.steps[{index}].request_limit 必须大于 0"
+      ));
+    }
+    if step.params.page_size.0 == Some(0) {
+      errors.push(format!(
+        "collection_plan_v3.steps[{index}].params.page_size 必须大于 0"
+      ));
+    }
+  }
+  errors
+}
+
+#[allow(dead_code)]
+mod strict_contract {
+  use super::Deserialize;
+
+  #[derive(Deserialize)]
+  #[serde(deny_unknown_fields)]
+  pub(super) struct CollectionPlanV3 {
+    pub schema_version: i64,
+    pub platforms: Vec<Platform>,
+    pub data_types: Vec<DataType>,
+    pub internal_data_types: Vec<DataType>,
+    pub region: Nullable<Region>,
+    pub keywords: Vec<String>,
+    pub accounts: Vec<String>,
+    pub time_range: Nullable<String>,
+    pub age_range: Nullable<AgeRange>,
+    pub gender_filter: Nullable<Vec<Gender>>,
+    pub steps: Vec<Step>,
+    pub record_limit: u64,
+    pub request_limit: u64,
+    pub budget_limit: BudgetLimit,
+    pub output_rules: OutputRules,
+    pub missing_fields: Vec<String>,
+    pub confidence: f64,
+    pub requires_user_confirmation: bool,
+  }
+
+  #[derive(Deserialize)]
+  pub(super) struct Nullable<T>(pub Option<T>);
+
+  #[derive(Deserialize)]
+  #[serde(rename_all = "snake_case")]
+  pub(super) enum Platform {
+    Tiktok,
+    Douyin,
+    Xiaohongshu,
+  }
+
+  #[derive(Deserialize)]
+  #[serde(rename_all = "snake_case")]
+  pub(super) enum DataType {
+    KeywordSearch,
+    Comments,
+    AccountProfile,
+    AccountPosts,
+    ItemDetail,
+  }
+
+  #[derive(Deserialize)]
+  #[serde(untagged)]
+  pub(super) enum Region {
+    Value(String),
+    Verified(VerifiedRegion),
+  }
+
+  #[derive(Deserialize)]
+  #[serde(deny_unknown_fields)]
+  pub(super) struct VerifiedRegion {
+    pub value: String,
+    pub validation_status: RegionValidationStatus,
+  }
+
+  #[derive(Deserialize)]
+  #[serde(rename_all = "snake_case")]
+  pub(super) enum RegionValidationStatus {
+    Verified,
+    Unverified,
+  }
+
+  #[derive(Deserialize)]
+  #[serde(deny_unknown_fields)]
+  pub(super) struct AgeRange {
+    pub min: u64,
+    pub max: u64,
+  }
+
+  #[derive(Deserialize)]
+  #[serde(rename_all = "snake_case")]
+  pub(super) enum Gender {
+    Male,
+    Female,
+    Other,
+  }
+
+  #[derive(Deserialize)]
+  #[serde(deny_unknown_fields)]
+  pub(super) struct Step {
+    pub step_key: String,
+    pub role: StepRole,
+    pub depends_on_step_key: Nullable<String>,
+    pub input_binding: Nullable<InputBinding>,
+    pub endpoint_key: String,
+    pub platform: Platform,
+    pub data_type: DataType,
+    pub params: Params,
+    pub request_limit: u64,
+    pub output_selected: bool,
+  }
+
+  #[derive(Deserialize)]
+  #[serde(rename_all = "snake_case")]
+  pub(super) enum StepRole {
+    Entry,
+    Target,
+  }
+
+  #[derive(Deserialize)]
+  #[serde(untagged)]
+  pub(super) enum InputBinding {
+    Item(ItemBinding),
+    Account(AccountBinding),
+  }
+
+  #[derive(Deserialize)]
+  #[serde(deny_unknown_fields)]
+  pub(super) struct ItemBinding {
+    pub item_id: ItemBindingValue,
+  }
+
+  #[derive(Deserialize)]
+  pub(super) enum ItemBindingValue {
+    #[serde(rename = "item_id")]
+    ItemId,
+  }
+
+  #[derive(Deserialize)]
+  #[serde(deny_unknown_fields)]
+  pub(super) struct AccountBinding {
+    pub account_id: AccountBindingValue,
+  }
+
+  #[derive(Deserialize)]
+  pub(super) enum AccountBindingValue {
+    #[serde(rename = "account_id")]
+    AccountId,
+  }
+
+  #[derive(Deserialize)]
+  #[serde(deny_unknown_fields)]
+  pub(super) struct Params {
+    pub keyword: Nullable<String>,
+    pub item_id: Nullable<String>,
+    pub account_id: Nullable<String>,
+    pub region: Nullable<String>,
+    pub time_range: Nullable<String>,
+    pub page_size: Nullable<u64>,
+  }
+
+  #[derive(Deserialize)]
+  #[serde(deny_unknown_fields)]
+  pub(super) struct BudgetLimit {
+    pub currency: Currency,
+    pub amount_micros: u64,
+  }
+
+  #[derive(Deserialize)]
+  pub(super) enum Currency {
+    #[serde(rename = "USD")]
+    Usd,
+  }
+
+  #[derive(Deserialize)]
+  #[serde(deny_unknown_fields)]
+  pub(super) struct OutputRules {
+    pub entity: OutputEntity,
+    pub dedupe_key: Vec<String>,
+    pub fallback_dedupe_key: Vec<String>,
+    pub selected_data_types: Vec<DataType>,
+  }
+
+  #[derive(Deserialize)]
+  pub(super) enum OutputEntity {
+    #[serde(rename = "account")]
+    Account,
+  }
 }
 
 #[cfg(test)]
