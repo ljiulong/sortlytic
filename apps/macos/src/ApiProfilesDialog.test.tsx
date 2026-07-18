@@ -551,6 +551,30 @@ describe('ApiProfilesDialog 表单与状态机', () => {
     }, aiProfiles[0])).toBe(false)
   })
 
+  it('修改 API 端点 authority 后不能复用原密钥', () => {
+    const openAiDraft = createProfileDraft('ai', aiProfiles[0])
+    if (openAiDraft.kind !== 'ai') throw new Error('Expected an AI profile draft')
+
+    expect(canReuseSavedCredential({
+      ...openAiDraft,
+      baseUrl: 'https://api.openai.com/v2',
+    }, aiProfiles[0])).toBe(true)
+    expect(canReuseSavedCredential({
+      ...openAiDraft,
+      baseUrl: 'https://gateway.example.com/v1',
+    }, aiProfiles[0])).toBe(false)
+    expect(canSaveProfile({
+      ...openAiDraft,
+      baseUrl: 'https://gateway.example.com/v1',
+    }, aiProfiles[0])).toBe(false)
+
+    const tikhubDraft = createProfileDraft('tikhub', tikhubProfiles[0])
+    expect(canReuseSavedCredential({
+      ...tikhubDraft,
+      baseUrl: 'https://api.tikhub.dev',
+    }, tikhubProfiles[0])).toBe(false)
+  })
+
   it('新增、编辑、返回与删除确认都在同一个弹窗视图状态中切换', () => {
     const adding = apiProfilesDialogReducer(initialApiProfilesDialogState, {
       type: 'add',

@@ -718,15 +718,13 @@ function canSaveProfile(
   if (!draft.defaultModelId.trim()) return false
   return draft.providerType === 'ollama' || hasRequiredKey
 }
-function canReuseSavedCredential(
-  draft: ApiProfileDraft,
-  profile: ApiProfileView | null,
-) {
+function canReuseSavedCredential(draft: ApiProfileDraft, profile: ApiProfileView | null) {
   if (!profile?.hasCredential || profile.status === 'needs_rebind' || draft.kind !== profile.kind) {
     return false
   }
-  return draft.kind === 'tikhub'
-    || (profile.kind === 'ai' && draft.providerType === profile.providerType)
+  return isSupportedUrl(draft.baseUrl) && isSupportedUrl(profile.baseUrl)
+    && new URL(draft.baseUrl.trim()).origin === new URL(profile.baseUrl.trim()).origin
+    && (draft.kind === 'tikhub' || (profile.kind === 'ai' && draft.providerType === profile.providerType))
 }
 function requiresApiKey(draft: ApiProfileDraft, canKeepSavedKey: boolean) {
   return draft.kind === 'tikhub'
