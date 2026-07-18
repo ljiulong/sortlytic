@@ -110,6 +110,14 @@ describe('UpdateSettingsPanel', () => {
     expect(markup).toContain('data-update-action="update" disabled=""')
   })
 
+  it('检查失败后提供重试检查，并保持无更新时的更新按钮禁用', () => {
+    const markup = renderPanel({ error: '网络连接失败', phase: 'error' })
+
+    expect(markup).toContain('网络连接失败')
+    expect(markup).toContain('重试检查')
+    expect(markup).toContain('data-update-action="update" disabled=""')
+  })
+
   it('长更新说明只在自动打开的可访问弹窗正文中出现', async () => {
     const longNotes = `首段说明\n${'https://example.com/very-long-path/'.repeat(350)}`
     expect(renderPanel({

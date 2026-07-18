@@ -70,7 +70,9 @@ function UpdateSettingsPanel({
     ? t('actions.checking')
     : phase === 'idle'
       ? t('actions.check')
-      : t('actions.checkAgain')
+      : phase === 'error'
+        ? t('actions.retryCheck')
+        : t('actions.checkAgain')
   const updateAction = getUpdateAction({
     hasUpdate: Boolean(update),
     phase,
