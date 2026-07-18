@@ -11,6 +11,8 @@ use super::{
 
 const MIGRATION_VERSION: i64 = 9;
 const MIGRATION_NAME: &str = "plan_review_state_repair";
+const LEGACY_MIGRATION_CHECKSUM: &str =
+  "2c648aa9cd4051280553b2120a3bb74440be8b6fd4da2ca32b04aec776416541";
 
 const CLEAR_STALE_CONFIRMATIONS_SQL: &str = r#"UPDATE collection_plan AS plan
 SET confirmed_by_user = 0, updated_at = ?1
@@ -65,10 +67,20 @@ pub(super) fn validate_existing_plan_review_migration(connection: &Connection) -
 pub(super) fn apply_plan_review_migration(connection: &mut Connection) -> AppResult<()> {
   if let Some((name, checksum)) = marker(connection)? {
     validate_marker(&name, &checksum)?;
+    if checksum == LEGACY_MIGRATION_CHECKSUM {
+      return apply_plan_review_repair(connection, true);
+    }
     update_workspace_schema_version(connection, MIGRATION_VERSION)?;
     return ensure_foreign_key_integrity(connection);
   }
 
+  apply_plan_review_repair(connection, false)
+}
+
+fn apply_plan_review_repair(
+  connection: &mut Connection,
+  upgrade_legacy_marker: bool,
+) -> AppResult<()> {
   let transaction = connection
     .transaction_with_behavior(TransactionBehavior::Immediate)
     .map_err(database_error)?;
@@ -98,6 +110,7 @@ pub(super) fn apply_plan_review_migration(connection: &mut Connection) -> AppRes
           workspace_id,
           serde_json::json!({
             "migration_version": MIGRATION_VERSION,
+            "legacy_checksum_upgrade": upgrade_legacy_marker,
             "cleared_stale_confirmations": cleared_confirmations,
             "repaired_waiting_tasks": repaired_tasks,
           })
@@ -107,9 +120,34 @@ pub(super) fn apply_plan_review_migration(connection: &mut Connection) -> AppRes
       )
       .map_err(database_error)?;
   }
-  record_migration(&transaction)?;
+  if upgrade_legacy_marker {
+    update_legacy_migration_marker(&transaction)?;
+  } else {
+    record_migration(&transaction)?;
+  }
   transaction.commit().map_err(database_error)?;
   ensure_foreign_key_integrity(connection)
+}
+
+fn update_legacy_migration_marker(connection: &Connection) -> AppResult<()> {
+  let updated = connection
+    .execute(
+      "UPDATE schema_migrations SET checksum = ?1
+       WHERE version = ?2 AND name = ?3 AND checksum = ?4",
+      params![
+        migration_checksum(),
+        MIGRATION_VERSION,
+        MIGRATION_NAME,
+        LEGACY_MIGRATION_CHECKSUM,
+      ],
+    )
+    .map_err(database_error)?;
+  if updated != 1 {
+    return Err(workspace_error(
+      "数据库迁移 v9 旧版标记在升级期间发生变化，已拒绝继续",
+    ));
+  }
+  update_workspace_schema_version(connection, MIGRATION_VERSION)
 }
 
 fn record_migration(connection: &Connection) -> AppResult<()> {
@@ -129,7 +167,9 @@ fn record_migration(connection: &Connection) -> AppResult<()> {
 }
 
 fn validate_marker(name: &str, checksum: &str) -> AppResult<()> {
-  if name != MIGRATION_NAME || checksum != migration_checksum() {
+  if name != MIGRATION_NAME
+    || (checksum != migration_checksum() && checksum != LEGACY_MIGRATION_CHECKSUM)
+  {
     return Err(workspace_error(
       "数据库迁移 v9 校验失败，计划复核状态修复标记或 checksum 不一致",
     ));
@@ -343,6 +383,79 @@ mod tests {
         )
         .unwrap(),
       0
+    );
+
+    drop(connection);
+    fs::remove_dir_all(root).ok();
+  }
+
+  #[test]
+  fn upgrades_legacy_v9_marker_and_reapplies_the_repair() {
+    let root = std::env::temp_dir().join(format!("plan-review-legacy-v9-{}", Uuid::new_v4()));
+    create_workspace("旧版 v9 兼容", &root).expect("workspace should create");
+    let mut connection =
+      open_workspace_database(root.join(DATABASE_FILE_NAME)).expect("database should open");
+    let now = "2026-07-18T00:00:00Z";
+    connection
+      .execute(
+        "UPDATE schema_migrations SET checksum = ?1 WHERE version = 9",
+        ["2c648aa9cd4051280553b2120a3bb74440be8b6fd4da2ca32b04aec776416541"],
+      )
+      .expect("legacy marker should install");
+    connection
+      .execute(
+        "INSERT INTO collection_task (
+          id, name, source_type, status, platforms_json, data_types_json,
+          created_at, updated_at, confirmed_at
+        ) VALUES ('task-legacy-v9', '旧版确认态', 'form', 'waiting_confirmation',
+          '[]', '[]', ?1, ?1, ?1)",
+        [now],
+      )
+      .expect("task should insert");
+    connection
+      .execute(
+        "INSERT INTO collection_plan (
+          id, task_id, source, schema_version, plan_json, validation_status,
+          confirmed_by_user, created_at, updated_at
+        ) VALUES ('plan-legacy-v9', 'task-legacy-v9', 'form_generated', 3, '{}',
+          'needs_review', 1, ?1, ?1)",
+        [now],
+      )
+      .expect("plan should insert");
+
+    validate_existing_plan_review_migration(&connection)
+      .expect("known legacy v9 marker should remain upgradeable");
+    apply_plan_review_migration(&mut connection).expect("legacy v9 should upgrade");
+
+    assert_eq!(
+      connection
+        .query_row(
+          "SELECT status FROM collection_task WHERE id = 'task-legacy-v9'",
+          [],
+          |row| row.get::<_, String>(0),
+        )
+        .expect("task should load"),
+      "draft"
+    );
+    assert_eq!(
+      connection
+        .query_row(
+          "SELECT confirmed_by_user FROM collection_plan WHERE id = 'plan-legacy-v9'",
+          [],
+          |row| row.get::<_, i64>(0),
+        )
+        .expect("plan should load"),
+      0
+    );
+    assert_eq!(
+      connection
+        .query_row(
+          "SELECT checksum FROM schema_migrations WHERE version = 9",
+          [],
+          |row| row.get::<_, String>(0),
+        )
+        .expect("marker should load"),
+      migration_checksum()
     );
 
     drop(connection);
