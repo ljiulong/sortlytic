@@ -58,10 +58,6 @@ function UpdateSettingsPanel({
   const dialogRef = useRef<HTMLDivElement>(null)
   const returnFocusRef = useRef<HTMLElement | null>(null)
   const preparedRef = useRef(phase === 'ready')
-  const isPreparing = phase === 'preparing'
-  const isRelaunching = phase === 'relaunching'
-  const isDialogBusy = isPreparing || isRelaunching
-  const canCloseDialog = !isDialogBusy
   const statusText = getStatusText({ error, isTauriApp, phase, t, update })
   const statusTone = getStatusTone({ isTauriApp, phase })
   const checkDisabled = !isTauriApp
@@ -93,8 +89,8 @@ function UpdateSettingsPanel({
   }, [])
 
   const closeDialog = useCallback(() => {
-    if (canCloseDialog) setDialogOpen(false)
-  }, [canCloseDialog])
+    setDialogOpen(false)
+  }, [])
 
   useEffect(() => {
     if (phase === 'ready') preparedRef.current = true
@@ -104,7 +100,7 @@ function UpdateSettingsPanel({
   useEffect(() => {
     if (
       !update
-      || !['available', 'preparing', 'ready', 'error'].includes(phase)
+      || !['available', 'ready', 'error'].includes(phase)
       || automaticallyOpenedVersions.has(update.version)
     ) {
       return
@@ -128,7 +124,7 @@ function UpdateSettingsPanel({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault()
-        if (canCloseDialog) setDialogOpen(false)
+        setDialogOpen(false)
         return
       }
       if (event.key !== 'Tab') return
@@ -150,7 +146,7 @@ function UpdateSettingsPanel({
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [canCloseDialog, dialogOpen])
+  }, [dialogOpen])
 
   const handleCheck = async (trigger: HTMLButtonElement) => {
     try {
@@ -294,7 +290,6 @@ function UpdateSettingsPanel({
                 aria-label={t('actions.close')}
                 className="update-dialog__close"
                 data-update-dialog-action="close"
-                disabled={!canCloseDialog}
                 type="button"
                 onClick={closeDialog}
               >
@@ -323,7 +318,6 @@ function UpdateSettingsPanel({
             <footer className="update-dialog__footer">
               <button
                 className="ghost-button"
-                disabled={!canCloseDialog}
                 type="button"
                 onClick={closeDialog}
               >

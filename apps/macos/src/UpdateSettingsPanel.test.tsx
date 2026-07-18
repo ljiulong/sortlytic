@@ -194,19 +194,47 @@ describe('UpdateSettingsPanel', () => {
     expect(document.activeElement).toBe(viewButton)
   })
 
-  it('正在准备更新时禁用关闭并忽略 Esc', async () => {
+  it('后台自动下载进入准备阶段时不自动打开弹窗', async () => {
     const { container } = mountPanel({
       phase: 'preparing',
       update: { version: '9.9.6', body: '正在准备' },
     })
 
-    await vi.waitFor(() => expect(container.querySelector('[role="dialog"]')).not.toBeNull())
-    const closeButton = container.querySelector<HTMLButtonElement>(
+    await Promise.resolve()
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
+  })
+
+  it('用户发起下载后在准备阶段仍可关闭弹窗', async () => {
+    let finishPreparing: (() => void) | undefined
+    const prepareUpdate = vi.fn(() => new Promise<void>((resolve) => {
+      finishPreparing = resolve
+    }))
+    const update = { version: '9.9.8', body: '用户主动下载' }
+    const mounted = mountPanel({ phase: 'available', prepareUpdate, update })
+
+    await vi.waitFor(() => {
+      expect(mounted.container.querySelector('[role="dialog"]')).not.toBeNull()
+    })
+    act(() => mounted.container.querySelector<HTMLButtonElement>(
+      '[data-update-dialog-action="primary"]',
+    )?.click())
+    expect(prepareUpdate).toHaveBeenCalledTimes(1)
+
+    act(() => mounted.root.render(createElement(UpdateSettingsPanel, {
+      ...baseProps,
+      phase: 'preparing',
+      prepareUpdate,
+      update,
+    })))
+    const closeButton = mounted.container.querySelector<HTMLButtonElement>(
       '[data-update-dialog-action="close"]',
     )
-    expect(closeButton?.disabled).toBe(true)
-    act(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })))
-    expect(container.querySelector('[role="dialog"]')).not.toBeNull()
+    expect(closeButton?.disabled).toBe(false)
+    act(() => closeButton?.click())
+    expect(mounted.container.querySelector('[role="dialog"]')).toBeNull()
+    expect(prepareUpdate).toHaveBeenCalledTimes(1)
+
+    await act(async () => finishPreparing?.())
   })
 
   it('同一版本在同一会话中只自动打开一次', async () => {
