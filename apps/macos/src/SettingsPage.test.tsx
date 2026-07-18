@@ -33,7 +33,7 @@ vi.mock('./ApiProfilesDialog', () => ({
 }))
 
 vi.mock('./UpdateSettingsPanel', () => ({
-  default: () => <section>客户端版本</section>,
+  default: () => <section data-testid="about-card">关于 Sortlytic</section>,
 }))
 
 vi.mock('./backend-api', () => promptApiMocks)
@@ -200,12 +200,26 @@ describe('SettingsPage API 配置入口', () => {
     expect(markup).toContain('主数据账号 当前配置')
     expect(markup).toContain('内容整理模型 当前配置')
     expect(markup).toContain('应用身份与数据位置')
-    expect(markup).toContain('客户端版本')
+    expect(markup).toContain('关于 Sortlytic')
     expect(markup).not.toContain('旧 TikHub 内联面板')
     expect(markup).not.toContain('旧 AI 内联面板')
     expect(markup).not.toContain('tikh••••5812')
     expect(markup).not.toContain('sk-p••••C7x9')
     expect(markup).not.toContain(secret)
+  })
+
+  it('把关于卡片从本地环境分组移出，并放在设置页最底部', () => {
+    const container = document.createElement('div')
+    container.innerHTML = renderToStaticMarkup(createElement(SettingsPage, {
+      backend: backend as never,
+    }))
+    const page = container.querySelector('.settings-page')
+    const groups = Array.from(page?.querySelectorAll('.settings-page__group') ?? [])
+    const localGroup = groups[groups.length - 1]
+    const aboutCard = page?.querySelector('[data-testid="about-card"]')
+
+    expect(localGroup?.contains(aboutCard ?? null)).toBe(false)
+    expect(page?.lastElementChild).toBe(aboutCard)
   })
 
   it('两个按钮映射到各自弹窗，关闭后回到无弹窗状态', () => {

@@ -148,11 +148,12 @@ function SettingsPage({ backend }: { backend: SettingsBackend }) {
           storage={data.workspace.storage}
         />
         <LanguageSettings />
-        <UpdateSettingsPanel
-          {...backend}
-          isTauriApp={data.runtimeMode === 'backend'}
-        />
       </SettingsGroup>
+
+      <UpdateSettingsPanel
+        {...backend}
+        isTauriApp={data.runtimeMode === 'backend'}
+      />
 
       {apiDialogKind ? (
         <ApiProfilesDialog
