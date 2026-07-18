@@ -102,6 +102,10 @@ pub fn run_collection_prompt_regression(
   )?;
   let request = collection_plan_request(prompt_content, intent_text);
   let response = call_model(&profile.config, &request)?;
+  let schema_errors = validate_collection_plan_schema(&response.output_json);
+  if !schema_errors.is_empty() {
+    return Err(ai_error(schema_errors.join("；")));
+  }
 
   Ok(PromptRegressionModelOutput {
     provider_id: profile.profile_id,

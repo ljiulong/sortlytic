@@ -344,7 +344,7 @@ fn complete_builtin_contract_executes_all_cases_and_can_activate() {
     },
   )
   .expect("version should create");
-  let (base_url, server) = serve_prompt_regressions(3);
+  let (base_url, server) = serve_prompt_regressions(3, false);
   let profile_id = configure_active_ai(&root_path, base_url);
 
   let activated =
@@ -361,6 +361,49 @@ fn complete_builtin_contract_executes_all_cases_and_can_activate() {
   assert!(runs
     .iter()
     .all(|run| run.model_id.as_deref() == Some("prompt-regression-test")));
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn activation_rejects_model_output_missing_a_required_schema_field() {
+  let root_path = unique_temp_workspace("prompt-regression-schema");
+  create_workspace("提示词 Schema 回归", &root_path).expect("workspace should be created");
+  let templates = seed_builtin_prompts(&root_path).expect("builtins should seed");
+  let template = templates
+    .iter()
+    .find(|template| template.template_key == "collection_plan_from_text")
+    .expect("collection template exists");
+  let builtin = BUILTIN_PROMPTS
+    .iter()
+    .find(|builtin| builtin.key == "collection_plan_from_text")
+    .expect("builtin contract exists");
+  let version = create_prompt_version(
+    &root_path,
+    CreatePromptVersionInput {
+      template_id: template.id.clone(),
+      content: builtin.content.to_string(),
+      change_note: "拒绝不完整模型输出".to_string(),
+    },
+  )
+  .expect("version should create");
+  let (base_url, server) = serve_prompt_regressions(3, true);
+  configure_active_ai(&root_path, base_url);
+
+  let error = activate_prompt_version(&root_path, &version.id)
+    .expect_err("missing output_selected must fail prompt regression");
+  server.join().expect("regression server should finish");
+  let versions = list_prompt_versions(&root_path, &template.id).expect("versions should list");
+  let failed = versions
+    .iter()
+    .find(|candidate| candidate.id == version.id)
+    .expect("candidate version should remain");
+  let runs = list_prompt_regression_runs(&root_path, &version.id).expect("runs should list");
+
+  assert_eq!(error.code, AppErrorCode::ValidationError);
+  assert_eq!(failed.status, "failed_regression");
+  assert_eq!(runs.len(), 3);
+  assert!(runs.iter().all(|run| !run.schema_valid));
 
   std::fs::remove_dir_all(root_path).ok();
 }
@@ -407,7 +450,10 @@ fn configure_active_ai(root_path: &Path, base_url: String) -> String {
   profile_id
 }
 
-fn serve_prompt_regressions(expected_requests: usize) -> (String, thread::JoinHandle<()>) {
+fn serve_prompt_regressions(
+  expected_requests: usize,
+  omit_output_selected: bool,
+) -> (String, thread::JoinHandle<()>) {
   let listener = TcpListener::bind("127.0.0.1:0").expect("test server should bind");
   let address = listener.local_addr().expect("test address should resolve");
   let server = thread::spawn(move || {
@@ -416,13 +462,19 @@ fn serve_prompt_regressions(expected_requests: usize) -> (String, thread::JoinHa
       let request = read_http_request(&mut stream);
       assert!(request.contains("input_json.text"));
       assert!(request.contains("collection_plan_v3"));
-      let plan = if request.contains("新能源汽车") {
+      let mut plan = if request.contains("新能源汽车") {
         valid_keyword_plan("douyin", "180", None, 100, 3_000_000)
       } else if request.contains("智能汽车") {
         valid_keyword_plan("xiaohongshu", "180", None, 80, 4_000_000)
       } else {
         valid_keyword_plan("tiktok", "7", Some("US"), 50, 2_000_000)
       };
+      if omit_output_selected {
+        plan["steps"][0]
+          .as_object_mut()
+          .expect("step should be an object")
+          .remove("output_selected");
+      }
       let body = serde_json::json!({
         "choices": [{ "message": { "content": plan.to_string() } }],
         "usage": { "prompt_tokens": 40, "completion_tokens": 80 }
@@ -476,13 +528,14 @@ fn valid_keyword_plan(
   record_limit: i64,
   budget_micros: i64,
 ) -> Value {
-  let mut params = serde_json::json!({
+  let params = serde_json::json!({
     "keyword": "car",
-    "time_range": time_range
+    "item_id": null,
+    "account_id": null,
+    "region": region,
+    "time_range": time_range,
+    "page_size": null
   });
-  if let Some(region) = region {
-    params["region"] = serde_json::json!(region);
-  }
   serde_json::json!({
     "schema_version": 3,
     "platforms": [platform],
