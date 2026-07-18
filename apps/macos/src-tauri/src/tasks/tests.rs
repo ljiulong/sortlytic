@@ -23,6 +23,220 @@ fn task_plan_confirm_enqueue_and_logs_round_trip() {
 }
 
 #[test]
+fn task_diagnostic_views_expose_stable_codes_for_known_chinese_values() {
+  let root_path = unique_temp_workspace("task-diagnostic-codes");
+  create_workspace("任务诊断代码测试", &root_path).expect("workspace should be created");
+  let task = create_collection_task(&root_path, create_task_input()).expect("task created");
+  let plan = save_collection_plan(&root_path, plan_input(&task.id)).expect("plan saved");
+  confirm_collection_plan(&root_path, &task.id, &plan.id).expect("plan confirmed");
+
+  let run = enqueue_task(&root_path, &task.id).expect("task enqueued");
+  let logs = list_task_logs(&root_path, &run.id).expect("logs should list");
+
+  assert_eq!(run.current_stage.as_deref(), Some("等待执行"));
+  assert_eq!(run.current_stage_code, "WAITING_EXECUTION");
+  assert_eq!(logs[0].stage_code, "WAITING_EXECUTION");
+  assert_eq!(logs[0].message_code, "TASK_ENQUEUED");
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn task_diagnostic_codes_cover_current_runtime_and_migration_vocabulary() {
+  for (value, expected) in [
+    ("等待执行", "WAITING_EXECUTION"),
+    ("执行采集", "COLLECTING"),
+    ("持久化采集结果", "PERSISTING_RESULTS"),
+    ("已完成", "COMPLETED"),
+    ("部分成功", "PARTIAL_SUCCESS"),
+    ("执行失败", "EXECUTION_FAILED"),
+    ("用户取消", "USER_CANCELLED"),
+    ("恢复响应入库", "RECOVERY_PERSIST_RESPONSE"),
+    ("恢复重试", "RECOVERY_RETRY"),
+    ("恢复待发送", "RECOVERY_READY_TO_SEND"),
+    ("恢复续页", "RECOVERY_NEXT_PAGE"),
+    ("恢复收尾", "RECOVERY_FINALIZE"),
+    ("恢复等待", "RECOVERY_WAITING"),
+    ("请求状态不确定", "REQUEST_STATE_UNCERTAIN"),
+    ("运行快照不完整", "RUN_SNAPSHOT_INCOMPLETE"),
+    ("检查点状态冲突", "CHECKPOINT_STATE_CONFLICT"),
+    ("运行步骤状态冲突", "RUN_STEP_STATE_CONFLICT"),
+    ("检查点证据不完整", "CHECKPOINT_EVIDENCE_INCOMPLETE"),
+    ("检查点终止失败", "CHECKPOINT_TERMINAL_FAILURE"),
+    ("恢复指令冲突", "RECOVERY_INSTRUCTION_CONFLICT"),
+    ("请求证据需要人工处理", "REQUEST_EVIDENCE_REQUIRES_REVIEW"),
+    ("运行快照需要人工处理", "RUN_SNAPSHOT_REQUIRES_REVIEW"),
+    ("需要重新确认计划", "PLAN_RECONFIRMATION_REQUIRED"),
+    ("活动运行冲突", "ACTIVE_RUN_CONFLICT"),
+    ("活动运行冲突迁移", "ACTIVE_RUN_CONFLICT_MIGRATION"),
+    ("活动步骤冲突迁移", "ACTIVE_STEP_CONFLICT_MIGRATION"),
+    (
+      "请求检查点冲突迁移",
+      "REQUEST_CHECKPOINT_CONFLICT_MIGRATION",
+    ),
+  ] {
+    assert_eq!(task_stage_code(Some(value)), expected, "stage: {value}");
+  }
+  assert_eq!(task_stage_code(None), "STAGE_PENDING");
+
+  for (value, expected) in [
+    ("任务已加入本地队列", "TASK_ENQUEUED"),
+    ("本地执行器已领取任务", "TASK_CLAIMED"),
+    ("本地执行器已领取恢复任务", "RECOVERY_TASK_CLAIMED"),
+    ("失败任务已重新排队", "FAILED_TASK_REQUEUED"),
+    (
+      "任务部分目标失败，合格数据已保留",
+      "TASK_PARTIALLY_SUCCEEDED",
+    ),
+    ("全部采集目标失败", "ALL_TARGETS_FAILED"),
+    ("任务执行成功", "TASK_SUCCEEDED"),
+    ("任务已由用户取消", "TASK_CANCELLED_BY_USER"),
+    (
+      "队列中存在可能已发送的 TikHub 请求，远端副作用无法确认，禁止自动重发",
+      "QUEUED_REQUEST_UNCERTAIN",
+    ),
+    (
+      "运行步骤快照不完整，可能丢失远端请求证据，已停止自动执行",
+      "RUN_SNAPSHOT_INCOMPLETE",
+    ),
+    (
+      "任务包含状态不确定的 TikHub 请求，必须人工确认后再处理",
+      "UNCERTAIN_REQUEST_REQUIRES_REVIEW",
+    ),
+    (
+      "运行步骤快照不完整，或运行中步骤缺少检查点，禁止自动重发",
+      "RUN_SNAPSHOT_INCOMPLETE",
+    ),
+    (
+      "队列恢复指令与运行步骤及检查点证据不一致，已停止自动执行",
+      "RECOVERY_INSTRUCTION_CONFLICT",
+    ),
+    (
+      "进程在 TikHub 请求完成前中断，无法确认远端是否已计费或返回，禁止自动重发",
+      "INTERRUPTED_REQUEST_UNCERTAIN",
+    ),
+    (
+      "任务存在多个冲突的恢复前沿，无法安全判断下一执行位置",
+      "CHECKPOINT_STATE_CONFLICT",
+    ),
+    (
+      "检查点页码或游标链不连续，无法安全判断恢复位置",
+      "CHECKPOINT_CURSOR_CHAIN_INVALID",
+    ),
+    (
+      "运行步骤状态与检查点证据不相容，已停止自动恢复",
+      "RUN_STEP_STATE_CONFLICT",
+    ),
+    (
+      "已接收或已提交的检查点缺少可验证响应、提交时间或续页游标",
+      "CHECKPOINT_EVIDENCE_INCOMPLETE",
+    ),
+    (
+      "任务包含不可重试的失败检查点，已停止自动恢复",
+      "CHECKPOINT_TERMINAL_FAILURE",
+    ),
+    (
+      "TikHub 响应已保存，恢复时只继续本地入库，不重新发送请求",
+      "RECOVERY_PERSIST_SAVED_RESPONSE",
+    ),
+    (
+      "失败检查点仍在请求、记录和预算限制内，等待安全重试",
+      "RECOVERY_RETRY_SAFE",
+    ),
+    (
+      "检查点仍处于 prepared，可从尚未发送的请求继续",
+      "RECOVERY_PREPARED_REQUEST",
+    ),
+    (
+      "从已提交检查点的 next_cursor 继续下一页",
+      "RECOVERY_CONTINUE_NEXT_PAGE",
+    ),
+    (
+      "已完成步骤没有续页，继续下一个尚未发送的运行步骤",
+      "RECOVERY_CONTINUE_NEXT_STEP",
+    ),
+    (
+      "最后一个检查点已提交且没有续页，等待完成本地收尾",
+      "RECOVERY_FINALIZE_LOCAL",
+    ),
+    (
+      "运行步骤尚未发送请求，可从待执行步骤继续",
+      "RECOVERY_PENDING_STEP",
+    ),
+    (
+      "未发现已发送请求的检查点，任务已重新排队",
+      "RECOVERY_REQUEUED_WITHOUT_SENT_REQUEST",
+    ),
+    (
+      "检测到同一任务存在多个活动运行，所有活动运行已停止并要求人工复核",
+      "ACTIVE_RUN_CONFLICT_REQUIRES_REVIEW",
+    ),
+    (
+      "活动运行冲突迁移已终止未完成的运行步骤",
+      "ACTIVE_STEP_CONFLICT_MIGRATION",
+    ),
+    (
+      "活动运行冲突迁移已将 requesting 检查点转为 uncertain",
+      "REQUEST_CHECKPOINT_CONFLICT_MIGRATION",
+    ),
+    (
+      "采集计划不可执行，且运行记录包含已发送请求证据，禁止重新入队，必须人工处理：测试原因",
+      "REQUEST_EVIDENCE_REQUIRES_REVIEW",
+    ),
+    (
+      "采集计划不可执行，且运行快照无法证明请求从未发送，禁止重新入队，必须人工处理：测试原因",
+      "RUN_SNAPSHOT_REQUIRES_REVIEW",
+    ),
+    (
+      "采集计划不可执行，任务已停止，请重新确认有效的 v2 计划：测试原因",
+      "PLAN_RECONFIRMATION_REQUIRED",
+    ),
+  ] {
+    assert_eq!(task_message_code(value), expected, "message: {value}");
+  }
+}
+
+#[test]
+fn task_diagnostic_views_return_explicit_unknown_codes_for_legacy_values() {
+  let root_path = unique_temp_workspace("unknown-task-diagnostic-codes");
+  create_workspace("未知任务诊断代码测试", &root_path).expect("workspace should be created");
+  let task = create_collection_task(&root_path, create_task_input()).expect("task created");
+  let plan = save_collection_plan(&root_path, plan_input(&task.id)).expect("plan saved");
+  confirm_collection_plan(&root_path, &task.id, &plan.id).expect("plan confirmed");
+  let run = enqueue_task(&root_path, &task.id).expect("task enqueued");
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  connection
+    .execute(
+      "UPDATE task_run SET current_stage = '历史自定义阶段' WHERE id = ?1",
+      params![run.id],
+    )
+    .expect("legacy stage should update");
+  connection
+    .execute(
+      "INSERT INTO task_log (
+         id, task_run_id, stage, level, message, safe_details_json, created_at
+       ) VALUES ('legacy-log', ?1, '历史日志阶段', 'warning', '历史日志正文', '{}',
+                 '2026-07-18T00:00:00+00:00')",
+      params![run.id],
+    )
+    .expect("legacy log should insert");
+  drop(connection);
+
+  let latest_runs = list_latest_task_runs(&root_path).expect("runs should list");
+  let logs = list_task_logs(&root_path, &run.id).expect("logs should list");
+  let legacy_log = logs
+    .iter()
+    .find(|log| log.id == "legacy-log")
+    .expect("legacy log should remain readable");
+
+  assert_eq!(latest_runs[0].current_stage_code, "UNKNOWN_STAGE");
+  assert_eq!(legacy_log.stage_code, "UNKNOWN_STAGE");
+  assert_eq!(legacy_log.message_code, "UNKNOWN_MESSAGE");
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn latest_persisted_plan_can_be_loaded_for_queue_actions() {
   let root_path = unique_temp_workspace("latest-task-plan");
   create_workspace("任务测试", &root_path).expect("workspace should be created");
