@@ -245,6 +245,7 @@ const dynamicBackendMessageKeys: Array<[RegExp, string]> = [
   [/(?:HTTP|code) 429|请求过于频繁/, 'error.pricingRateLimited'],
 ]
 
+// oxlint-disable-next-line react/only-export-components
 export function localizeBackendMessage(message: string): MessageCopy {
   const exportMatch = /^(Excel|PDF) 已导出到本地工作区$/.exec(message)
   if (exportMatch) return { key: 'action.exported', options: { format: exportMatch[1] } }
