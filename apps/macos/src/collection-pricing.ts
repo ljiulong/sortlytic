@@ -1,11 +1,34 @@
 import { getApiProfileRegistry, testApiProfile } from './api-profiles'
-import { quoteTikhubConnectorPrice } from './backend-api'
+import {
+  quoteTikhubConnectorPrice,
+  type TikhubPriceQuote,
+} from './backend-api'
 
 export type CollectionPricingPlan = {
   pricingEndpoints?: string[]
   requestCountEstimate?: number
   budgetMicros?: number
 }
+
+type PricingProfileSnapshot = {
+  balance: number
+  freeCredit: number
+  availableCredit: number
+}
+
+type CacheEntry<T> = {
+  expiresAt: number
+  value: T
+}
+
+const pricingCacheTtlMs = 60_000
+const minimumQuoteIntervalMs = 250
+const profileCache = new Map<string, CacheEntry<PricingProfileSnapshot>>()
+const quoteCache = new Map<string, CacheEntry<TikhubPriceQuote>>()
+const profileRequests = new Map<string, Promise<PricingProfileSnapshot>>()
+const quoteRequests = new Map<string, Promise<TikhubPriceQuote>>()
+let quoteQueue = Promise.resolve()
+let lastQuoteStartedAt = Number.NEGATIVE_INFINITY
 
 const endpointPaths: Record<string, string[]> = {
   'tiktok.keyword_search': ['/api/v1/tiktok/app/v3/fetch_video_search_result'],
@@ -69,6 +92,41 @@ export async function preflightCollectionPlanPricing(plan: CollectionPricingPlan
     throw new Error('当前 TikHub API 配置未通过验证，无法确认运行')
   }
 
+  const profileKey = `${activeProfile.id}:${activeProfile.revision}`
+  const profileSnapshot = await cachedProfileSnapshot(profileKey, activeProfileId)
+  const quotes = []
+  for (const endpoint of endpoints) {
+    quotes.push(await cachedQuote(profileKey, endpoint))
+  }
+  const unitPrice = Math.max(...quotes.map((quote) => requiredMoney(quote.total_price, 'TikHub 实时报价')))
+  const quotedTotalMicros = Math.round(unitPrice * requestCount * 1_000_000)
+  if (quotedTotalMicros > budgetMicros) {
+    throw new Error('TikHub 实时报价超过计划预算上限')
+  }
+  if (quotedTotalMicros > Math.round(profileSnapshot.availableCredit * 1_000_000)) {
+    throw new Error('TikHub 免费额度与充值余额合计不足')
+  }
+  return { ...profileSnapshot, quotedTotalMicros }
+}
+
+async function cachedProfileSnapshot(profileKey: string, activeProfileId: string) {
+  const cached = readCache(profileCache, profileKey)
+  if (cached) return cached
+  const inFlight = profileRequests.get(profileKey)
+  if (inFlight) return inFlight
+
+  const request = loadProfileSnapshot(activeProfileId)
+    .then((snapshot) => {
+      writeCache(profileCache, profileKey, snapshot)
+      return snapshot
+    })
+    .finally(() => profileRequests.delete(profileKey))
+  profileRequests.set(profileKey, request)
+  return request
+}
+
+async function loadProfileSnapshot(activeProfileId: string): Promise<PricingProfileSnapshot> {
+
   let testResult
   try {
     testResult = await testApiProfile('tikhub', activeProfileId)
@@ -97,19 +155,68 @@ export async function preflightCollectionPlanPricing(plan: CollectionPricingPlan
   if (Math.abs(balance + freeCredit - availableCredit) > 0.000001) {
     throw new Error('TikHub 额度合计与免费额度、充值余额不一致')
   }
-  const quotes = []
-  for (const endpoint of endpoints) {
-    quotes.push(await quoteTikhubConnectorPrice(endpoint, 1))
+  return { balance, freeCredit, availableCredit }
+}
+
+async function cachedQuote(profileKey: string, endpoint: string) {
+  const cacheKey = `${profileKey}:${endpoint}:1`
+  const cached = readCache(quoteCache, cacheKey)
+  if (cached) return cached
+  const inFlight = quoteRequests.get(cacheKey)
+  if (inFlight) return inFlight
+
+  const request = scheduleQuote(() => quoteTikhubConnectorPrice(endpoint, 1))
+    .then((quote) => {
+      writeCache(quoteCache, cacheKey, quote)
+      return quote
+    })
+    .finally(() => quoteRequests.delete(cacheKey))
+  quoteRequests.set(cacheKey, request)
+  return request
+}
+
+async function scheduleQuote<T>(operation: () => Promise<T>) {
+  const previous = quoteQueue
+  let releaseQueue: () => void = () => {}
+  quoteQueue = new Promise<void>((resolve) => {
+    releaseQueue = resolve
+  })
+  await previous
+  try {
+    const waitMs = Math.max(0, lastQuoteStartedAt + minimumQuoteIntervalMs - Date.now())
+    if (waitMs > 0) await delay(waitMs)
+    lastQuoteStartedAt = Date.now()
+    return await operation()
+  } finally {
+    releaseQueue()
   }
-  const unitPrice = Math.max(...quotes.map((quote) => requiredMoney(quote.total_price, 'TikHub 实时报价')))
-  const quotedTotalMicros = Math.round(unitPrice * requestCount * 1_000_000)
-  if (quotedTotalMicros > budgetMicros) {
-    throw new Error('TikHub 实时报价超过计划预算上限')
+}
+
+function readCache<T>(cache: Map<string, CacheEntry<T>>, key: string) {
+  const entry = cache.get(key)
+  if (!entry) return undefined
+  if (entry.expiresAt <= Date.now()) {
+    cache.delete(key)
+    return undefined
   }
-  if (quotedTotalMicros > Math.round(availableCredit * 1_000_000)) {
-    throw new Error('TikHub 免费额度与充值余额合计不足')
-  }
-  return { balance, freeCredit, availableCredit, quotedTotalMicros }
+  return entry.value
+}
+
+function writeCache<T>(cache: Map<string, CacheEntry<T>>, key: string, value: T) {
+  cache.set(key, { expiresAt: Date.now() + pricingCacheTtlMs, value })
+}
+
+function delay(milliseconds: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, milliseconds))
+}
+
+export function resetCollectionPricingStateForTests() {
+  profileCache.clear()
+  quoteCache.clear()
+  profileRequests.clear()
+  quoteRequests.clear()
+  quoteQueue = Promise.resolve()
+  lastQuoteStartedAt = Number.NEGATIVE_INFINITY
 }
 
 function requiredMoney(value: number | null | undefined, label: string) {

@@ -30,7 +30,10 @@ import {
   type RuntimeCollectionPlan,
   useWorkbenchBackend,
 } from './use-workbench-backend'
-import { preflightCollectionPlanPricing } from './collection-pricing'
+import {
+  preflightCollectionPlanPricing,
+  resetCollectionPricingStateForTests,
+} from './collection-pricing'
 import { buildPlanParams } from './collection-plan-client'
 import type { ApiProfileRegistryView } from './api-profiles'
 
@@ -224,6 +227,7 @@ function renderWorkbenchHook() {
 }
 
 beforeEach(() => {
+  resetCollectionPricingStateForTests()
   vi.unstubAllGlobals()
   invokeMock.mockReset()
   invalidateQueriesMock.mockReset()
@@ -722,6 +726,170 @@ describe('计划实时计价预检', () => {
       ],
     })).resolves.toMatchObject({ quotedTotalMicros: 800_000 })
     expect(maxConcurrentQuoteRequests).toBe(1)
+  })
+
+  it('多端点串行报价仍保持最小请求间隔，避免触发时间窗口限流', async () => {
+    vi.useFakeTimers()
+    try {
+      const registry = tikhubRegistryFixture({
+        balance: 4.99,
+        freeCredit: 0.05,
+        availableCredit: 5.04,
+      })
+      let lastQuoteStartedAt: number | null = null
+      invokeMock.mockImplementation(async (command: string) => {
+        if (command === 'get_api_profile_registry') return registry
+        if (command === 'test_api_profile') {
+          return { success: true, message: 'TikHub API 配置测试成功', registry }
+        }
+        if (command === 'quote_tikhub_connector_price') {
+          const startedAt = Date.now()
+          if (lastQuoteStartedAt !== null && startedAt - lastQuoteStartedAt < 250) {
+            throw {
+              code: 'TIKHUB_RATE_LIMIT',
+              message: 'TikHub 请求失败，HTTP 429：请求过于频繁',
+              retryable: true,
+            }
+          }
+          lastQuoteStartedAt = startedAt
+          return { total_price: 0.01 }
+        }
+        throw new Error(`意外命令：${command}`)
+      })
+
+      const assertion = expect(preflightCollectionPlanPricing({
+        ...plan,
+        budgetMicros: 2_000_000,
+        requestCountEstimate: 80,
+        pricingEndpoints: [
+          '/api/v1/tiktok/app/v3/fetch_video_search_result',
+          '/api/v1/tiktok/app/v3/fetch_one_video',
+          '/api/v1/tiktok/app/v3/handler_user_profile',
+          '/api/v1/tiktok/app/v3/fetch_video_comments',
+        ],
+      })).resolves.toMatchObject({ quotedTotalMicros: 800_000 })
+
+      await vi.runAllTimersAsync()
+      await assertion
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('相同配置与计划的连续预检复用短期成功结果', async () => {
+    const registry = tikhubRegistryFixture({
+      balance: 4.99,
+      freeCredit: 0.05,
+      availableCredit: 5.04,
+    })
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'get_api_profile_registry') return registry
+      if (command === 'test_api_profile') {
+        return { success: true, message: 'TikHub API 配置测试成功', registry }
+      }
+      if (command === 'quote_tikhub_connector_price') return { total_price: 0.01 }
+      throw new Error(`意外命令：${command}`)
+    })
+    const cachePlan = {
+      ...plan,
+      budgetMicros: 2_000_000,
+      requestCountEstimate: 80,
+      pricingEndpoints: [
+        '/api/v1/douyin/search/fetch_video_search_v2',
+        '/api/v1/douyin/app/v3/fetch_one_video',
+      ],
+    }
+
+    await preflightCollectionPlanPricing(cachePlan)
+    await preflightCollectionPlanPricing(cachePlan)
+
+    expect(invokeMock.mock.calls.filter(([command]) => command === 'test_api_profile')).toHaveLength(1)
+    expect(
+      invokeMock.mock.calls.filter(([command]) => command === 'quote_tikhub_connector_price'),
+    ).toHaveLength(2)
+  })
+
+  it('相同配置与计划的并发预检合并为同一组远端请求', async () => {
+    const registry = tikhubRegistryFixture({
+      balance: 4.99,
+      freeCredit: 0.05,
+      availableCredit: 5.04,
+    })
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'get_api_profile_registry') return registry
+      if (command === 'test_api_profile') {
+        await Promise.resolve()
+        return { success: true, message: 'TikHub API 配置测试成功', registry }
+      }
+      if (command === 'quote_tikhub_connector_price') {
+        await Promise.resolve()
+        return { total_price: 0.01 }
+      }
+      throw new Error(`意外命令：${command}`)
+    })
+    const concurrentPlan = {
+      ...plan,
+      budgetMicros: 2_000_000,
+      requestCountEstimate: 80,
+      pricingEndpoints: [
+        '/api/v1/douyin/app/v3/handler_user_profile',
+        '/api/v1/douyin/app/v3/fetch_video_comments',
+      ],
+    }
+
+    await Promise.all([
+      preflightCollectionPlanPricing(concurrentPlan),
+      preflightCollectionPlanPricing(concurrentPlan),
+    ])
+
+    expect(invokeMock.mock.calls.filter(([command]) => command === 'test_api_profile')).toHaveLength(1)
+    expect(
+      invokeMock.mock.calls.filter(([command]) => command === 'quote_tikhub_connector_price'),
+    ).toHaveLength(2)
+  })
+
+  it('后段报价失败后保留前面已成功的端点报价供下次预检续用', async () => {
+    const registry = tikhubRegistryFixture({
+      balance: 4.99,
+      freeCredit: 0.05,
+      availableCredit: 5.04,
+    })
+    const quoteCalls = new Map<string, number>()
+    invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'get_api_profile_registry') return registry
+      if (command === 'test_api_profile') {
+        return { success: true, message: 'TikHub API 配置测试成功', registry }
+      }
+      if (command === 'quote_tikhub_connector_price') {
+        const endpoint = String(args?.endpoint)
+        const calls = (quoteCalls.get(endpoint) ?? 0) + 1
+        quoteCalls.set(endpoint, calls)
+        if (endpoint.endsWith('get_image_note_detail') && calls === 1) {
+          throw new Error('TikHub 临时计价失败')
+        }
+        return { total_price: 0.01 }
+      }
+      throw new Error(`意外命令：${command}`)
+    })
+    const resumePlan = {
+      ...plan,
+      budgetMicros: 2_000_000,
+      requestCountEstimate: 80,
+      pricingEndpoints: [
+        '/api/v1/xiaohongshu/app_v2/search_notes',
+        '/api/v1/xiaohongshu/app_v2/get_image_note_detail',
+        '/api/v1/xiaohongshu/app_v2/get_video_note_detail',
+      ],
+    }
+
+    await expect(preflightCollectionPlanPricing(resumePlan)).rejects.toThrow('TikHub 临时计价失败')
+    await expect(preflightCollectionPlanPricing(resumePlan)).resolves.toMatchObject({
+      quotedTotalMicros: 800_000,
+    })
+
+    expect(quoteCalls.get('/api/v1/xiaohongshu/app_v2/search_notes')).toBe(1)
+    expect(quoteCalls.get('/api/v1/xiaohongshu/app_v2/get_image_note_detail')).toBe(2)
+    expect(quoteCalls.get('/api/v1/xiaohongshu/app_v2/get_video_note_detail')).toBe(1)
   })
 
   it('免费额度与充值余额合计不足时阻止确认', async () => {
