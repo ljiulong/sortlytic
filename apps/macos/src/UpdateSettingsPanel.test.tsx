@@ -40,7 +40,7 @@ describe('UpdateSettingsPanel', () => {
     expect(markup).toContain('发现版本 0.3.0')
     expect(markup).toContain('新增真实任务导出能力')
     expect(markup).toContain('检查更新')
-    expect(markup).toContain('下载并重启')
+    expect(markup).toContain('下载并安装')
   })
 
   it('确认最新后不显示无效的下载动作', () => {
