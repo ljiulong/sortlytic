@@ -194,6 +194,27 @@ describe('CollectionPlanPreview', () => {
     expect(markup).toMatch(/<button[^>]*disabled=""/)
   })
 
+  it('实时报价超过预算时显示预算原因而不是通用校验错误', () => {
+    const markup = renderToStaticMarkup(
+      createElement(CollectionPlanPreview, {
+        actionMessage: '等待确认',
+        isBusy: false,
+        onConfirmPlan: vi.fn(),
+        plan: {
+          ...draftPlan,
+          taskId: 'task-1',
+          planId: 'plan-1',
+          validationStatus: 'valid',
+          pricingReady: false,
+          pricingBlocker: 'TikHub 实时报价超过计划预算上限',
+        },
+      }),
+    )
+
+    expect(markup).toContain('暂不能运行：实时计价超过计划预算上限，请缩小范围或提高预算')
+    expect(markup).not.toContain('计划校验未通过')
+  })
+
   it('计划和实时计价均有效时允许确认运行', () => {
     const markup = renderToStaticMarkup(
       createElement(CollectionPlanPreview, {

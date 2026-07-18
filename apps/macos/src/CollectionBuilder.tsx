@@ -681,6 +681,7 @@ const planMessageTranslationKeys: Record<string, string> = {
   '价格未知': 'message.priceUnknown',
   'TikHub 免费额度与充值余额合计不足': 'message.tikhubCreditsInsufficient',
   'TikHub 额度合计与免费额度、充值余额不一致': 'message.tikhubCreditsMismatch',
+  'TikHub 实时报价超过计划预算上限': 'message.pricingExceedsBudget',
   '未提供时间范围': 'message.rangeMissing',
   '计划校验未通过': 'message.planValidationFailed',
   '计划校验未通过，无法确认运行': 'message.planValidationFailedCannotRun',
