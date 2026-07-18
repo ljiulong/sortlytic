@@ -1,13 +1,14 @@
 // @vitest-environment happy-dom
 
-import { act, createElement } from 'react'
+import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import ExternalLink, {
+import ExternalLink from './ExternalLink'
+import {
   isAllowedExternalUrl,
   openAllowedExternalUrl,
-} from './ExternalLink'
+} from './external-link-policy'
 
 const openUrlMock = vi.fn()
 
@@ -26,11 +27,14 @@ function mountLink(onOpenError = vi.fn()) {
   const mounted = { container, root }
   mountedLinks.add(mounted)
   document.body.append(container)
-  act(() => root.render(createElement(ExternalLink, {
-    children: 'GitHub',
-    href: 'https://github.com/ljiulong/sortlytic',
-    onOpenError,
-  })))
+  act(() => root.render(
+    <ExternalLink
+      href="https://github.com/ljiulong/sortlytic"
+      onOpenError={onOpenError}
+    >
+      GitHub
+    </ExternalLink>,
+  ))
   return { ...mounted, link: container.querySelector('a') as HTMLAnchorElement }
 }
 
@@ -58,11 +62,14 @@ afterEach(() => {
 
 describe('ExternalLink', () => {
   it('保留可复制的真实 href 和标准浏览器回退属性', () => {
-    const markup = renderToStaticMarkup(createElement(ExternalLink, {
-      children: 'GitHub',
-      href: 'https://github.com/ljiulong/sortlytic',
-      onOpenError: vi.fn(),
-    }))
+    const markup = renderToStaticMarkup(
+      <ExternalLink
+        href="https://github.com/ljiulong/sortlytic"
+        onOpenError={vi.fn()}
+      >
+        GitHub
+      </ExternalLink>,
+    )
 
     expect(markup).toContain('href="https://github.com/ljiulong/sortlytic"')
     expect(markup).toContain('target="_blank"')
