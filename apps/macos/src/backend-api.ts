@@ -39,6 +39,14 @@ export type TikhubPriceQuote = {
   quote_json: Record<string, unknown>
 }
 
+export type CostEstimateView = {
+  request_count_estimate: number
+  platform_count: number
+  data_type_count: number
+  requires_confirmation: boolean
+  cost_estimate_json: Record<string, unknown>
+}
+
 export type CollectionTaskView = {
   id: string
   name: string
@@ -260,6 +268,14 @@ export function createCollectionTask(input: {
 export function getLatestCollectionPlan(taskId: string) {
   return invoke<CollectionPlanView>('get_latest_collection_plan', {
     taskId,
+    rootPath: null,
+  })
+}
+
+export function estimateTaskCost(taskId: string) {
+  return invoke<CostEstimateView>('estimate_task_cost', {
+    taskId,
+    planJson: null,
     rootPath: null,
   })
 }

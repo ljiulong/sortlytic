@@ -9,6 +9,7 @@ import {
   createExportJob,
   deleteTask,
   enqueueTask,
+  estimateTaskCost,
   ensureDefaultWorkspace,
   generateCollectionPlanFromText,
   generateFormCollectionPlan,
@@ -151,6 +152,7 @@ export const browserFallbackData = createEmptyWorkbenchData('unavailable')
 export async function confirmPersistedTask(taskId: string) {
   assertTauriRuntime()
   const plan = await getLatestCollectionPlan(taskId)
+  const estimate = await estimateTaskCost(taskId)
   const platforms = stringArrayFromJson(plan.plan_json.platforms)
   const dataTypes = stringArrayFromJson(plan.plan_json.data_types)
   const runtimePlan = planFromBackend(
@@ -165,6 +167,8 @@ export async function confirmPersistedTask(taskId: string) {
     },
     plan,
   )
+  runtimePlan.requestCountEstimate = estimate.request_count_estimate
+  runtimePlan.costEstimate = `${estimate.request_count_estimate} 次请求`
   if (runtimePlan.validationStatus !== 'valid') {
     throw new Error(runtimePlan.missing[0] ?? '计划校验未通过，无法确认运行')
   }

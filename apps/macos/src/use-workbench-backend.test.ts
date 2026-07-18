@@ -341,6 +341,9 @@ describe('任务页动作', () => {
         }
       }
       if (command === 'get_api_profile_registry') return registry
+      if (command === 'estimate_task_cost') {
+        return { request_count_estimate: 3 }
+      }
       if (command === 'test_api_profile') {
         return { success: true, message: 'TikHub API 配置测试成功', registry }
       }
@@ -358,12 +361,66 @@ describe('任务页动作', () => {
     })
     expect(invokeMock.mock.calls.map(([command]) => command)).toEqual([
       'get_latest_collection_plan',
+      'estimate_task_cost',
       'get_api_profile_registry',
       'test_api_profile',
       'quote_tikhub_connector_price',
       'confirm_collection_plan',
       'enqueue_task',
     ])
+  })
+
+  it('确认历史计划前使用后端重算请求量，不沿用低估的持久化缓存', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    const registry = tikhubRegistryFixture({
+      balance: 4.99,
+      freeCredit: 0.05,
+      availableCredit: 5.04,
+    })
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'get_latest_collection_plan') {
+        return {
+          id: 'plan-legacy-underestimated',
+          task_id: 'task-legacy-underestimated',
+          source: 'form_generated',
+          schema_version: 3,
+          plan_json: {
+            platforms: ['xiaohongshu'],
+            data_types: ['keyword_search', 'item_detail', 'account_profile', 'comments'],
+            time_range: '7',
+            record_limit: 1000,
+            request_limit: 20,
+            budget_limit: { amount_micros: 2_000_000 },
+            steps: [{ endpoint_key: 'xiaohongshu.keyword_search' }],
+          },
+          validation_status: 'valid',
+          validation_errors_json: [],
+          cost_estimate_json: { request_count_estimate: 80 },
+          confirmed_by_user: false,
+          created_at: '2026-07-18T00:00:00Z',
+          updated_at: '2026-07-18T00:00:00Z',
+        }
+      }
+      if (command === 'estimate_task_cost') {
+        return { request_count_estimate: 22_020 }
+      }
+      if (command === 'get_api_profile_registry') return registry
+      if (command === 'test_api_profile') {
+        return { success: true, message: 'TikHub API 配置测试成功', registry }
+      }
+      if (command === 'quote_tikhub_connector_price') return { total_price: 0.01 }
+      if (command === 'confirm_collection_plan') return task
+      if (command === 'enqueue_task') {
+        return { id: 'run-legacy', task_id: 'task-legacy-underestimated', status: 'queued' }
+      }
+      throw new Error(`意外命令：${command}`)
+    })
+
+    await expect(confirmPersistedTask('task-legacy-underestimated')).rejects.toThrow(
+      'TikHub 实时报价超过计划预算上限',
+    )
+    expect(invokeMock.mock.calls.map(([command]) => command)).not.toContain('confirm_collection_plan')
+    expect(invokeMock.mock.calls.map(([command]) => command)).not.toContain('enqueue_task')
   })
 
   it('单任务导出只生成用户选择的文件格式', async () => {
