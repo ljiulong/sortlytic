@@ -88,9 +88,18 @@ pub fn list_task_record_counts(root_path: impl AsRef<Path>) -> AppResult<Vec<Tas
   let connection = open_workspace_database(root_path.as_ref().join(DATABASE_FILE_NAME))?;
   let mut statement = connection
     .prepare(
-      "SELECT task.id, COUNT(record.id)
+      "SELECT task.id, COUNT(account.id)
        FROM collection_task AS task
-       LEFT JOIN normalized_record AS record ON record.task_id = task.id
+       LEFT JOIN task_run AS latest_run ON latest_run.id = (
+         SELECT candidate.id
+         FROM task_run AS candidate
+         WHERE candidate.task_id = task.id
+           AND candidate.status IN ('success', 'partial_success', 'failed', 'cancelled')
+         ORDER BY julianday(candidate.started_at) DESC, candidate.id DESC
+         LIMIT 1
+       )
+       LEFT JOIN collected_account AS account
+         ON account.task_run_id = latest_run.id AND account.output_included = 1
        GROUP BY task.id
        ORDER BY task.created_at DESC, task.id ASC",
     )

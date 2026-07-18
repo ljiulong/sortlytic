@@ -7,7 +7,7 @@ use super::*;
 use crate::workspace::{create_workspace, open_workspace_database, DATABASE_FILE_NAME};
 
 #[test]
-fn lists_normalized_record_counts_for_every_task() {
+fn lists_included_account_counts_from_each_tasks_latest_terminal_run() {
   let root = std::env::temp_dir().join(format!("record-counts-{}", Uuid::new_v4()));
   create_workspace("记录统计测试", &root).expect("workspace should create");
   let connection =
@@ -54,6 +54,40 @@ fn lists_normalized_record_counts_for_every_task() {
       )
       .expect("normalized record should insert");
   }
+  for (run_id, status, started_at) in [
+    ("run-old", "success", "2026-07-16T00:00:00Z"),
+    (
+      "run-latest-terminal",
+      "partial_success",
+      "2026-07-17T00:00:00Z",
+    ),
+    ("run-current", "running", "2026-07-18T00:00:00Z"),
+  ] {
+    connection
+      .execute(
+        "INSERT INTO task_run (id, task_id, status, started_at)
+         VALUES (?1, 'task-with-records', ?2, ?3)",
+        params![run_id, status, started_at],
+      )
+      .expect("task run should insert");
+  }
+  for (id, run_id, output_included) in [
+    ("old-included-1", "run-old", 1),
+    ("old-included-2", "run-old", 1),
+    ("latest-included", "run-latest-terminal", 1),
+    ("latest-filtered", "run-latest-terminal", 0),
+    ("current-included", "run-current", 1),
+  ] {
+    connection
+      .execute(
+        "INSERT INTO collected_account (
+          id, task_run_id, platform, identity_key, collected_at, output_included,
+          created_at, updated_at
+        ) VALUES (?1, ?2, 'tiktok', ?1, ?3, ?4, ?3, ?3)",
+        params![id, run_id, now, output_included],
+      )
+      .expect("collected account should insert");
+  }
   drop(connection);
 
   let counts = list_task_record_counts(&root).expect("record counts should list");
@@ -63,7 +97,7 @@ fn lists_normalized_record_counts_for_every_task() {
     vec![
       TaskRecordCountView {
         task_id: "task-with-records".to_string(),
-        record_count: 2,
+        record_count: 1,
       },
       TaskRecordCountView {
         task_id: "task-empty".to_string(),
