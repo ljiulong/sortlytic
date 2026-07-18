@@ -46,6 +46,37 @@ fn persists_raw_file_and_normalized_record_atomically() {
 }
 
 #[test]
+fn normalizes_xiaohongshu_app_v2_note_author_fields() {
+  let raw = serde_json::json!({
+    "id": "note-1",
+    "title": "真实同型笔记",
+    "user": {
+      "userid": "user-1",
+      "red_id": "red-1",
+      "nickname": "作者一"
+    }
+  });
+  let input = super::super::normalize_input(super::super::PersistCollectionPageInput {
+    task_id: "task-1".to_string(),
+    task_run_id: "run-1".to_string(),
+    platform: "xiaohongshu".to_string(),
+    data_type: "keyword_search".to_string(),
+    records: vec![raw.clone()],
+    collected_at: Some("2026-07-18T08:00:00+00:00".to_string()),
+  })
+  .expect("小红书采集记录输入应通过校验");
+  let prepared = prepare_record(&input, &raw).expect("小红书笔记应完成标准化");
+
+  assert_eq!(prepared.platform_record_id, "note-1");
+  assert_eq!(prepared.normalized.author_id.as_deref(), Some("user-1"));
+  assert_eq!(prepared.normalized.author_name.as_deref(), Some("作者一"));
+  assert_eq!(
+    prepared.normalized.content_text.as_deref(),
+    Some("真实同型笔记")
+  );
+}
+
+#[test]
 fn version_three_run_accepts_confirmed_internal_dependency_data_type() {
   let workspace = TestWorkspace::new("v3-internal", &["item_detail"]);
   let run_id = workspace.insert_running_task_run();
