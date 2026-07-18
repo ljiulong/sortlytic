@@ -110,7 +110,7 @@ describe('TaskRunLogPanel', () => {
       .mockResolvedValueOnce([{
         id: 'log-2',
         task_run_id: 'run-2',
-        stage: '已完成',
+        stage: 'terminal-localized-copy',
         stage_code: 'COMPLETED',
         level: 'info',
         message: '采集完成',
@@ -151,7 +151,7 @@ describe('TaskRunLogPanel', () => {
       .mockResolvedValueOnce([{
         id: 'log-2',
         task_run_id: 'run-2',
-        stage: '已完成',
+        stage: 'terminal-localized-copy',
         stage_code: 'COMPLETED',
         level: 'info',
         message: '采集完成',
@@ -218,5 +218,43 @@ describe('TaskRunLogPanel', () => {
     expect(loader).toHaveBeenCalledTimes(2)
     expect(mounted.container.textContent).toContain('最新日志')
     expect(mounted.container.textContent).not.toContain('过期日志')
+  })
+
+  it('英文模式按稳定代码翻译日志阶段和消息', async () => {
+    await i18n.changeLanguage('en-US')
+    const loader = vi.fn().mockResolvedValue([{
+      id: 'log-known',
+      task_run_id: 'run-2',
+      stage: '等待执行',
+      stage_code: 'WAITING_EXECUTION',
+      level: 'info',
+      message: '任务已加入本地队列',
+      message_code: 'TASK_ENQUEUED',
+      safe_details_json: null,
+      created_at: '2026-07-17T08:00:20Z',
+    }, {
+      id: 'log-unknown',
+      task_run_id: 'run-2',
+      stage: '历史日志阶段',
+      stage_code: 'UNKNOWN_STAGE',
+      level: 'warning',
+      message: '历史日志正文',
+      message_code: 'UNKNOWN_MESSAGE',
+      safe_details_json: null,
+      created_at: '2026-07-17T08:00:21Z',
+    }] satisfies TaskLogView[])
+    const mounted = mountPanel(loader)
+    const toggle = mounted.container.querySelector<HTMLButtonElement>('button')
+
+    await act(async () => toggle?.click())
+
+    expect(mounted.container.textContent).toContain('Waiting to run')
+    expect(mounted.container.textContent).toContain('Task entered the local queue.')
+    expect(mounted.container.textContent).toContain('Unrecognized log stage (UNKNOWN_STAGE)')
+    expect(mounted.container.textContent).toContain('Log message unavailable (UNKNOWN_MESSAGE)')
+    expect(mounted.container.textContent).not.toContain('等待执行')
+    expect(mounted.container.textContent).not.toContain('任务已加入本地队列')
+    expect(mounted.container.textContent).not.toContain('历史日志阶段')
+    expect(mounted.container.textContent).not.toContain('历史日志正文')
   })
 })

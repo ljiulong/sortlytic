@@ -16,7 +16,7 @@ const logLevelTranslationKeys: Record<string, string> = {
 }
 
 const logPollIntervalMs = 3_000
-const terminalLogStages = new Set(['已完成', '部分成功', '执行失败', '用户取消'])
+const terminalLogStageCodes = new Set(['COMPLETED', 'PARTIAL_SUCCESS', 'EXECUTION_FAILED', 'USER_CANCELLED'])
 
 function TaskRunLogPanel({ runId, loadLogs = listTaskLogs }: TaskRunLogPanelProps) {
   const { t, i18n } = useTranslation('tasks')
@@ -28,10 +28,26 @@ function TaskRunLogPanel({ runId, loadLogs = listTaskLogs }: TaskRunLogPanelProp
   const regionId = useId()
   const toggleId = `${regionId}-toggle`
   const numberLocale = i18n.resolvedLanguage ?? i18n.language
+  const showRawDiagnostics = numberLocale.toLowerCase().startsWith('zh')
   const timeFormatter = new Intl.DateTimeFormat(numberLocale, {
     dateStyle: 'medium',
     timeStyle: 'medium',
   })
+  const localizeStage = (log: TaskLogView) => {
+    const fallback = showRawDiagnostics
+      ? log.stage
+      : String(t('taskQueue.logs.unknownStage', { code: log.stage_code }))
+    return log.stage_code !== 'UNKNOWN_STAGE'
+      ? String(t(`taskQueue.diagnostics.stage.${log.stage_code}`, { defaultValue: fallback }))
+      : fallback
+  }
+  const localizeMessage = (log: TaskLogView) => {
+    if (showRawDiagnostics) return log.message
+    const fallback = String(t('taskQueue.logs.unknownMessage', { code: log.message_code }))
+    return log.message_code !== 'UNKNOWN_MESSAGE'
+      ? String(t(`taskQueue.logs.message.${log.message_code}`, { defaultValue: fallback }))
+      : fallback
+  }
 
   useEffect(() => {
     if (!isOpen) return
@@ -117,13 +133,13 @@ function TaskRunLogPanel({ runId, loadLogs = listTaskLogs }: TaskRunLogPanelProp
                   <li data-level={log.level} key={log.id}>
                     <article className="task-run-logs__entry">
                       <header>
-                        <strong>{log.stage}</strong>
+                        <strong>{localizeStage(log)}</strong>
                         <span>{levelKey ? t(levelKey) : log.level}</span>
                         <time dateTime={log.created_at}>
                           {timeFormatter.format(new Date(log.created_at))}
                         </time>
                       </header>
-                      <p>{log.message}</p>
+                      <p>{localizeMessage(log)}</p>
                       {safeDetails ? (
                         <pre aria-label={t('taskQueue.logs.safeDetails')}>{safeDetails}</pre>
                       ) : null}
@@ -142,7 +158,7 @@ function TaskRunLogPanel({ runId, loadLogs = listTaskLogs }: TaskRunLogPanelProp
 function hasTerminalLog(logs: TaskLogView[]) {
   const latestLog = logs.at(-1)
   return latestLog?.level === 'error'
-    || (latestLog ? terminalLogStages.has(latestLog.stage) : false)
+    || (latestLog ? terminalLogStageCodes.has(latestLog.stage_code) : false)
 }
 
 function formatSafeDetails(value: unknown) {
