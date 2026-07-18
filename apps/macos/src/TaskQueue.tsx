@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Ban, Download, ListTodo, Pencil, Play, Save, Trash2, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import AppSelect from './AppSelect'
+import { backendErrorMessage } from './backend-api'
 import { StatusPill } from './CollectionBuilder'
 import { i18n as appI18n } from './i18n'
 import TaskRunLogPanel from './TaskRunLogPanel'
@@ -114,6 +115,7 @@ function TaskQueue({
   const [activeMode, setActiveMode] = useState<ActiveTaskMode>()
   const [draftName, setDraftName] = useState('')
   const [exportFormats, setExportFormats] = useState<Record<string, TaskExportInput['format']>>({})
+  const [actionErrors, setActionErrors] = useState<Record<string, string>>({})
   const numberLocale = i18n.resolvedLanguage ?? i18n.language
   const showRawDiagnostics = numberLocale.toLowerCase().startsWith('zh')
   const runTimeFormatter = new Intl.DateTimeFormat(numberLocale, {
@@ -156,6 +158,7 @@ function TaskQueue({
   }
 
   const confirmAction = async (action: ConfirmationMode) => {
+    setActionErrors((errors) => ({ ...errors, [action.taskId]: '' }))
     try {
       if (action.type === 'confirm-run') {
         await onConfirmTask(action.taskId)
@@ -165,8 +168,14 @@ function TaskQueue({
         await onDeleteTask(action.taskId)
       }
       setActiveMode(undefined)
-    } catch {
-      // 后端错误会显示在工作区状态栏，保留确认态供用户检查。
+    } catch (error) {
+      if (action.type === 'confirm-run') {
+        setActionErrors((errors) => ({
+          ...errors,
+          [action.taskId]: backendErrorMessage(error),
+        }))
+      }
+      // 保留确认态，让用户看到未入队原因并可以直接重试。
     }
   }
 
@@ -213,6 +222,7 @@ function TaskQueue({
               ? taskMode
               : undefined
             const isConfirming = Boolean(confirmation)
+            const actionError = actionErrors[task.id]
             const confirmationContent = confirmation
               ? confirmationForTaskAction(confirmation.type)
               : {
@@ -475,6 +485,15 @@ function TaskQueue({
                       role="group"
                     >
                       <p>{confirmationContent.message}</p>
+                      {confirmation?.type === 'confirm-run' && actionError ? (
+                        <p className="task-card__confirmation-error" role="alert">
+                          {t('taskQueue.confirmRunFailed', {
+                            reason: showRawDiagnostics
+                              ? actionError
+                              : t('taskQueue.confirmRunFailedFallback'),
+                          })}
+                        </p>
+                      ) : null}
                       <div className="task-card__confirmation-actions">
                         <button
                           className={confirmationContent.tone === 'primary'

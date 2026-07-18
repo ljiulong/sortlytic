@@ -1,6 +1,9 @@
-import { createElement } from 'react'
+// @vitest-environment happy-dom
+
+import { act, createElement } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import TaskQueue, {
   capabilitiesForStatus,
   confirmationForTaskAction,
@@ -23,6 +26,40 @@ const waitingTask: WorkbenchRuntimeData['tasks'][number] = {
   requestCount: 3,
   dataTypeCode: 'keyword_search',
 }
+
+const mountedQueues = new Set<{ container: HTMLDivElement; root: Root }>()
+
+function mountQueue(onConfirmTask: (taskId: string) => Promise<unknown>) {
+  const container = document.createElement('div')
+  const root = createRoot(container)
+  const mounted = { container, root }
+  document.body.append(container)
+  mountedQueues.add(mounted)
+  act(() => root.render(createElement(TaskQueue, {
+    tasks: [waitingTask],
+    isBusy: false,
+    onUpdateTask: vi.fn(),
+    onCancelTask: vi.fn(),
+    onConfirmTask,
+    onDeleteTask: vi.fn(),
+    onExportTask: vi.fn(),
+  })))
+  return mounted
+}
+
+beforeEach(async () => {
+  ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
+    .IS_REACT_ACT_ENVIRONMENT = true
+  await appI18n.changeLanguage('zh-CN')
+})
+
+afterEach(() => {
+  for (const mounted of mountedQueues) {
+    act(() => mounted.root.unmount())
+    mounted.container.remove()
+  }
+  mountedQueues.clear()
+})
 
 function renderQueue(tasks: WorkbenchRuntimeData['tasks']) {
   return renderToStaticMarkup(
@@ -89,6 +126,31 @@ describe('TaskQueue', () => {
     expect(markup).toContain('title="取消任务"')
     expect(markup).toContain('title="删除任务"')
     expect(markup).toContain('确认运行')
+  })
+
+  it('两段确认只调用一次运行入口，并在预检失败时显示尚未入队原因', async () => {
+    const onConfirmTask = vi.fn(async () => {
+      throw new Error('实时计价请求过于频繁，请稍后重试')
+    })
+    const mounted = mountQueue(onConfirmTask)
+    const openConfirmation = Array.from(mounted.container.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('确认运行'))
+
+    act(() => openConfirmation?.click())
+
+    expect(onConfirmTask).not.toHaveBeenCalled()
+    expect(mounted.container.textContent).toContain('确认后任务将进入执行队列并可能产生费用')
+
+    const submitConfirmation = mounted.container.querySelector<HTMLButtonElement>(
+      '.task-card__confirmation .primary-button',
+    )
+    await act(async () => submitConfirmation?.click())
+
+    expect(onConfirmTask).toHaveBeenCalledOnce()
+    expect(onConfirmTask).toHaveBeenCalledWith(waitingTask.id)
+    expect(mounted.container.textContent).toContain(
+      '任务尚未入队：实时计价请求过于频繁，请稍后重试',
+    )
   })
 
   it('无效计划明确显示计划需修正，且不提供确认运行入口', () => {
