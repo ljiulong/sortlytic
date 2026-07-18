@@ -247,6 +247,62 @@ fn parses_records_and_next_cursor_without_treating_wrapper_as_data() {
 }
 
 #[test]
+fn unwraps_xiaohongshu_app_v2_search_envelope() {
+  let request = build_collection_request(
+    "xiaohongshu",
+    "keyword_search",
+    &params_for("keyword_search"),
+    None,
+  )
+  .expect("request should build");
+  let page = parse_collection_page(
+    &request,
+    serde_json::json!({
+      "code": 200,
+      "data": {
+        "code": 0,
+        "data": {
+          "items": [{
+            "mix_track_id": "track-1",
+            "note": {
+              "id": "note-1",
+              "title": "真实同型笔记",
+              "user": {
+                "userid": "user-1",
+                "red_id": "red-1",
+                "nickname": "作者一"
+              }
+            }
+          }]
+        },
+        "success": true,
+        "search_id": "search-1",
+        "search_session_id": "session-1",
+        "page": 1,
+        "next_page": 2
+      }
+    }),
+  )
+  .expect("App V2 nested search response should parse");
+
+  assert_eq!(page.records.len(), 1);
+  assert_eq!(page.records[0]["id"], "note-1");
+  assert_eq!(page.records[0]["user"]["userid"], "user-1");
+  assert!(page.has_more);
+  assert_eq!(
+    page.next_cursor,
+    Some(serde_json::json!({
+      "endpoint_key": "xiaohongshu.keyword_search",
+      "value": {
+        "page": 2,
+        "search_id": "search-1",
+        "search_session_id": "session-1"
+      }
+    }))
+  );
+}
+
+#[test]
 fn xiaohongshu_detail_has_video_fallback() {
   let request = build_collection_request(
     "xiaohongshu",

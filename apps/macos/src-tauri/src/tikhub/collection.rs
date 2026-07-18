@@ -390,10 +390,14 @@ pub fn parse_collection_page(
 
   let data = response.get("data").unwrap_or(&Value::Null);
   let records = extract_records(request, data)?;
-  let has_more = match data.get("has_more").or_else(|| response.get("has_more")) {
+  let has_more = match data
+    .get("has_more")
+    .or_else(|| data.get("data").and_then(|value| value.get("has_more")))
+    .or_else(|| response.get("has_more"))
+  {
     Some(value) => boolish(value)
       .ok_or_else(|| response_shape_error("invalid_has_more", "has_more 不是布尔值或 0/1"))?,
-    None => false,
+    None => xiaohongshu_search_has_more(request, data)?,
   };
   let next_cursor = if has_more {
     let raw_cursor = extract_next_cursor(request, data, &response).ok_or_else(|| {
@@ -655,6 +659,25 @@ fn extract_records(request: &TikHubCollectionRequest, data: &Value) -> AppResult
             .collect(),
         );
       }
+      if request.platform == "xiaohongshu" {
+        let search_data = data
+          .get("data")
+          .filter(|value| value.is_object())
+          .unwrap_or(data);
+        return Ok(
+          required_array_field(search_data, &["items", "notes", "item_list"])?
+            .into_iter()
+            .map(|record| {
+              record
+                .get("note")
+                .or_else(|| record.get("note_card"))
+                .filter(|value| value.is_object())
+                .cloned()
+                .unwrap_or(record)
+            })
+            .collect(),
+        );
+      }
       required_array_field(data, &["aweme_list", "items", "notes", "item_list"])
     }
     "account_posts" => required_array_field(data, &["aweme_list", "items", "notes", "item_list"]),
@@ -672,6 +695,32 @@ fn extract_records(request: &TikHubCollectionRequest, data: &Value) -> AppResult
       "请求数据类型没有对应的解析器",
     )),
   }
+}
+
+fn xiaohongshu_search_has_more(request: &TikHubCollectionRequest, data: &Value) -> AppResult<bool> {
+  if request.platform != "xiaohongshu" || request.data_type != "keyword_search" {
+    return Ok(false);
+  }
+  let Some(next_page) = data.get("next_page") else {
+    return Ok(false);
+  };
+  let next_page = next_page
+    .as_i64()
+    .filter(|value| *value > 0)
+    .ok_or_else(|| response_shape_error("invalid_continuation", "next_page 不是大于 0 的整数"))?;
+  let current_page = data
+    .get("page")
+    .and_then(Value::as_i64)
+    .or_else(|| {
+      request
+        .query
+        .iter()
+        .find(|(key, _)| key == "page")
+        .and_then(|(_, value)| value.parse().ok())
+    })
+    .filter(|value| *value > 0)
+    .ok_or_else(|| response_shape_error("invalid_continuation", "响应缺少有效的当前页码"))?;
+  Ok(next_page > current_page)
 }
 
 fn required_array_field(data: &Value, keys: &[&str]) -> AppResult<Vec<Value>> {
