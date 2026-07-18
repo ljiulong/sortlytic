@@ -76,25 +76,77 @@ pub(super) fn ai_url(provider: AiProviderType, value: &str) -> AppResult<String>
   if value.is_empty() {
     return Ok(value);
   }
-  validate_ai_url(&value)?;
+  validate_ai_url(provider, &value)?;
   Ok(value)
 }
 
-pub(super) fn validate_ai_url(value: &str) -> AppResult<()> {
+pub(super) fn validate_ai_url(provider: AiProviderType, value: &str) -> AppResult<()> {
   let url = reqwest::Url::parse(value).map_err(|_| error("AI Base URL 不是完整的 HTTP(S) 地址"))?;
-  if matches!(url.scheme(), "http" | "https")
-    && url.host_str().is_some()
-    && url.username().is_empty()
-    && url.password().is_none()
-    && url.query().is_none()
-    && url.fragment().is_none()
+  if !matches!(url.scheme(), "http" | "https")
+    || url.host_str().is_none()
+    || !url.username().is_empty()
+    || url.password().is_some()
+    || url.query().is_some()
+    || url.fragment().is_some()
   {
+    return Err(error(
+      "AI Base URL 必须包含主机且不能携带凭据、查询串或片段",
+    ));
+  }
+  let host = url.host_str().unwrap_or_default();
+  let official_url_valid = |expected_host: &str| {
+    url.scheme() == "https"
+      && host.eq_ignore_ascii_case(expected_host)
+      && url.port_or_known_default() == Some(443)
+  };
+  let valid = match provider {
+    AiProviderType::Openai => official_url_valid("api.openai.com"),
+    AiProviderType::Anthropic => official_url_valid("api.anthropic.com"),
+    AiProviderType::Gemini => official_url_valid("generativelanguage.googleapis.com"),
+    AiProviderType::CustomOpenaiCompatible => {
+      url.scheme() == "https" || cfg!(test) && url.scheme() == "http" && is_loopback_host(host)
+    }
+    AiProviderType::Ollama => {
+      url.scheme() == "https" || url.scheme() == "http" && is_loopback_host(host)
+    }
+  };
+  if valid {
     Ok(())
   } else {
-    Err(error(
-      "AI Base URL 必须包含主机且不能携带凭据、查询串或片段",
-    ))
+    Err(error(match provider {
+      AiProviderType::Openai => "OpenAI 配置只允许官方 HTTPS 端点 api.openai.com",
+      AiProviderType::Anthropic => "Anthropic 配置只允许官方 HTTPS 端点 api.anthropic.com",
+      AiProviderType::Gemini => {
+        "Gemini 配置只允许官方 HTTPS 端点 generativelanguage.googleapis.com"
+      }
+      AiProviderType::CustomOpenaiCompatible => "自定义 AI Base URL 必须使用 HTTPS",
+      AiProviderType::Ollama => {
+        "Ollama 的 HTTP Base URL 只允许本机回环地址，远程地址必须使用 HTTPS"
+      }
+    }))
   }
+}
+
+pub(super) fn same_url_authority(left: &str, right: &str) -> bool {
+  let Ok(left) = reqwest::Url::parse(left) else {
+    return false;
+  };
+  let Ok(right) = reqwest::Url::parse(right) else {
+    return false;
+  };
+  left.scheme() == right.scheme()
+    && left
+      .host_str()
+      .zip(right.host_str())
+      .is_some_and(|(left, right)| left.eq_ignore_ascii_case(right))
+    && left.port_or_known_default() == right.port_or_known_default()
+}
+
+fn is_loopback_host(host: &str) -> bool {
+  host.eq_ignore_ascii_case("localhost")
+    || host
+      .parse::<std::net::IpAddr>()
+      .is_ok_and(|address| address.is_loopback())
 }
 
 pub(super) fn required(value: &str, label: &str) -> AppResult<String> {

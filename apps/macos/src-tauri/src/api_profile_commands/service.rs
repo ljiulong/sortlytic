@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use super::validation::{
   ai_url, completeness_status, credential_type, error, key_status, next_revision, optional_id,
-  required, secret, tikhub_url, validate_ai_format, validate_ai_url,
+  required, same_url_authority, secret, tikhub_url, validate_ai_format, validate_ai_url,
 };
 pub(super) use super::ServiceTestResult;
 use super::{ApiProfileKind, SaveApiProfileInput};
@@ -174,23 +174,26 @@ fn save_ai(
   let key = secret(api_key);
   let now = Utc::now().to_rfc3339();
   if let Some(id) = optional_id(id)? {
-    let (mut credential_id, previous_provider, revision) = registry
+    let (mut credential_id, previous_provider, previous_base_url, revision) = registry
       .ai_profiles
       .get(&id)
       .map(|profile| {
         Ok((
           profile.credential_ref_id.clone(),
           profile.provider_type,
+          profile.base_url.clone(),
           next_revision(profile.revision)?,
         ))
       })
       .transpose()?
       .ok_or_else(|| error("AI 配置不存在"))?;
     let provider_changed = previous_provider != provider;
-    if provider_changed && key.is_none() && provider != AiProviderType::Ollama {
-      return Err(error("切换 AI 供应商时必须重新输入 API Key"));
+    let endpoint_changed = !same_url_authority(&previous_base_url, &base_url);
+    let credential_scope_changed = provider_changed || endpoint_changed;
+    if credential_scope_changed && key.is_none() && provider != AiProviderType::Ollama {
+      return Err(error("切换 AI 供应商或端点时必须重新输入 API Key"));
     }
-    if provider_changed && provider == AiProviderType::Ollama && key.is_none() {
+    if credential_scope_changed && provider == AiProviderType::Ollama && key.is_none() {
       if let Some(previous_credential_id) = credential_id.take() {
         registry.credentials.remove(&previous_credential_id);
       }
@@ -602,7 +605,7 @@ fn test_ai_connection(registry: &ApiProfileRegistry, profile: &AiApiProfile) -> 
   if profile.default_model_id.trim().is_empty() {
     return Err(error("AI 默认模型 ID 不能为空"));
   }
-  validate_ai_url(&profile.base_url)?;
+  validate_ai_url(profile.provider_type, &profile.base_url)?;
   let api_key = profile
     .credential_ref_id
     .as_ref()

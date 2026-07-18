@@ -347,6 +347,128 @@ fn changing_ai_provider_never_reuses_the_previous_provider_key() {
 }
 
 #[test]
+fn changing_ai_endpoint_authority_requires_reentering_the_api_key() {
+  let root = workspace("ai-endpoint-change");
+  let original = service::save_profile(
+    &root,
+    SaveApiProfileInput::Ai {
+      id: None,
+      name: "自定义 AI".to_string(),
+      provider_type: AiProviderType::CustomOpenaiCompatible,
+      api_format: AiApiFormat::OpenaiCompatible,
+      base_url: "https://first.example.test/v1".to_string(),
+      default_model_id: "model-test".to_string(),
+      api_key: Some(AI_SECRET.to_string()),
+    },
+  )
+  .unwrap();
+  let profile_id = original.ai_profiles.values().next().unwrap().id.clone();
+
+  let error = service::save_profile(
+    &root,
+    SaveApiProfileInput::Ai {
+      id: Some(profile_id.clone()),
+      name: "自定义 AI".to_string(),
+      provider_type: AiProviderType::CustomOpenaiCompatible,
+      api_format: AiApiFormat::OpenaiCompatible,
+      base_url: "https://second.example.test/v1".to_string(),
+      default_model_id: "model-test".to_string(),
+      api_key: Some(String::new()),
+    },
+  )
+  .expect_err("changing endpoint authority must require a new key");
+
+  assert!(error.message.contains("重新输入 API Key"));
+  let unchanged = service::get_registry(&root).unwrap();
+  assert_eq!(
+    unchanged.ai_profiles[&profile_id].base_url,
+    "https://first.example.test/v1"
+  );
+  assert!(unchanged
+    .credentials
+    .values()
+    .any(|credential| credential.secret == AI_SECRET));
+
+  fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn ai_urls_enforce_official_hosts_and_secure_transports() {
+  let root = workspace("ai-url-policy");
+  let rejected = [
+    (
+      AiProviderType::Openai,
+      AiApiFormat::OpenaiCompatible,
+      "https://attacker.example.test/v1",
+    ),
+    (
+      AiProviderType::Anthropic,
+      AiApiFormat::AnthropicMessages,
+      "https://attacker.example.test",
+    ),
+    (
+      AiProviderType::Gemini,
+      AiApiFormat::Gemini,
+      "https://attacker.example.test",
+    ),
+    (
+      AiProviderType::CustomOpenaiCompatible,
+      AiApiFormat::OpenaiCompatible,
+      "http://example.test/v1",
+    ),
+    (
+      AiProviderType::Ollama,
+      AiApiFormat::Ollama,
+      "http://192.0.2.10:11434",
+    ),
+  ];
+  for (provider_type, api_format, base_url) in rejected {
+    let result = service::save_profile(
+      &root,
+      SaveApiProfileInput::Ai {
+        id: None,
+        name: "不安全 AI".to_string(),
+        provider_type,
+        api_format,
+        base_url: base_url.to_string(),
+        default_model_id: "model-test".to_string(),
+        api_key: Some(AI_SECRET.to_string()),
+      },
+    );
+    assert!(result.is_err(), "{provider_type:?} must reject {base_url}");
+  }
+
+  for (provider_type, api_format, base_url) in [
+    (
+      AiProviderType::CustomOpenaiCompatible,
+      AiApiFormat::OpenaiCompatible,
+      "https://gateway.example.test/v1",
+    ),
+    (
+      AiProviderType::Ollama,
+      AiApiFormat::Ollama,
+      "http://127.0.0.1:11434",
+    ),
+  ] {
+    service::save_profile(
+      &root,
+      SaveApiProfileInput::Ai {
+        id: None,
+        name: format!("安全 AI {provider_type:?}"),
+        provider_type,
+        api_format,
+        base_url: base_url.to_string(),
+        default_model_id: "model-test".to_string(),
+        api_key: Some(AI_SECRET.to_string()),
+      },
+    )
+    .unwrap_or_else(|error| panic!("{provider_type:?} should accept {base_url}: {error:?}"));
+  }
+
+  fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn tikhub_test_persists_safe_summary_and_redacts_failures() {
   let root = workspace("tikhub");
   let registry = service::save_profile(
