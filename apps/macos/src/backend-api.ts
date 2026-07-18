@@ -413,11 +413,6 @@ export async function relaunchAfterAppUpdate(): Promise<void> {
   await relaunch()
 }
 
-export async function installAppUpdate(): Promise<void> {
-  await prepareAppUpdate()
-  await relaunchAfterAppUpdate()
-}
-
 export function backendErrorMessage(error: unknown) {
   if (typeof error === 'string') return error
   if (error && typeof error === 'object' && 'message' in error) {

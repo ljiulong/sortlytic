@@ -9,11 +9,12 @@ import {
   type CollectionTaskView,
   deleteTask,
   getLatestCollectionPlan,
-  installAppUpdate,
   listLatestTaskRuns,
   listTaskRecordCounts,
   listTaskLogs,
+  prepareAppUpdate,
   quoteTikhubConnectorPrice,
+  relaunchAfterAppUpdate,
   type TaskRunView,
   updateCollectionTask,
   type WorkspaceSummary,
@@ -509,7 +510,7 @@ describe('计划生成失败的草稿清理', () => {
 })
 
 describe('应用更新 API', () => {
-  it('检查到新版本后可下载安装并重启应用', async () => {
+  it('检查到新版本后分别准备更新和按用户操作重启', async () => {
     const update = {
       version: '0.1.4',
       date: '2026-07-15T08:00:00Z',
@@ -525,9 +526,13 @@ describe('应用更新 API', () => {
       date: update.date,
       body: update.body,
     })
-    await installAppUpdate()
+    await prepareAppUpdate()
 
     expect(updaterInstallMock).toHaveBeenCalledOnce()
+    expect(relaunchMock).not.toHaveBeenCalled()
+
+    await relaunchAfterAppUpdate()
+
     expect(relaunchMock).toHaveBeenCalledOnce()
   })
 
@@ -535,7 +540,7 @@ describe('应用更新 API', () => {
     updaterCheckMock.mockResolvedValue(null)
 
     await expect(checkForAppUpdate()).resolves.toBeNull()
-    await expect(installAppUpdate()).rejects.toThrow('请先检查更新')
+    await expect(prepareAppUpdate()).rejects.toThrow('请先检查更新')
   })
 })
 
