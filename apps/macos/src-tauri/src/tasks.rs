@@ -316,7 +316,7 @@ pub fn list_tasks(
 ) -> AppResult<Vec<CollectionTaskView>> {
   let connection = open_workspace_connection(root_path)?;
 
-  if let Some(status) = status {
+  let mut tasks = if let Some(status) = status {
     let mut statement = connection
       .prepare(
         "SELECT id, name, source_type, status, platforms_json, data_types_json,
@@ -330,7 +330,7 @@ pub fn list_tasks(
     let rows = statement
       .query_map(params![status], map_task)
       .map_err(database_error)?;
-    collect_rows(rows)
+    collect_rows(rows)?
   } else {
     let mut statement = connection
       .prepare(
@@ -342,8 +342,33 @@ pub fn list_tasks(
       )
       .map_err(database_error)?;
     let rows = statement.query_map([], map_task).map_err(database_error)?;
-    collect_rows(rows)
+    collect_rows(rows)?
+  };
+  refresh_task_cost_estimates(&connection, &mut tasks)?;
+  Ok(tasks)
+}
+
+fn refresh_task_cost_estimates(
+  connection: &Connection,
+  tasks: &mut [CollectionTaskView],
+) -> AppResult<()> {
+  for task in tasks {
+    let plan_json = connection
+      .query_row(
+        "SELECT plan_json FROM collection_plan
+         WHERE task_id = ?1
+         ORDER BY created_at DESC, id DESC LIMIT 1",
+        params![task.id],
+        |row| row.get::<_, String>(0),
+      )
+      .optional()
+      .map_err(database_error)?;
+    if let Some(plan_json) = plan_json {
+      task.cost_estimate_json =
+        validation::estimate_from_plan_json(&string_to_json(plan_json)).cost_estimate_json;
+    }
   }
+  Ok(())
 }
 
 pub fn list_task_logs(

@@ -411,10 +411,26 @@ fn persisted_cost_estimate_keeps_dependency_fanout() {
     },
   )
   .expect("plan should save");
-  let estimate = estimate_task_cost(&root_path, Some(task.id), None).expect("cost should load");
+  let estimate =
+    estimate_task_cost(&root_path, Some(task.id.clone()), None).expect("cost should load");
 
   assert_eq!(plan.cost_estimate_json["request_count_estimate"], 22_020);
   assert_eq!(estimate.request_count_estimate, 22_020);
+
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  connection
+    .execute(
+      "UPDATE collection_task SET cost_estimate_json = '{\"request_count_estimate\":80}'
+       WHERE id = ?1",
+      params![task.id],
+    )
+    .expect("legacy estimate should be simulated");
+  drop(connection);
+  let listed = list_tasks(&root_path, None).expect("tasks should list");
+  assert_eq!(
+    listed[0].cost_estimate_json["request_count_estimate"],
+    22_020
+  );
   std::fs::remove_dir_all(root_path).ok();
 }
 
