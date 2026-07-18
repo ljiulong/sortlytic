@@ -118,8 +118,10 @@ export type TaskLogView = {
   id: string
   task_run_id: string
   stage: string
+  stage_code: string
   level: string
   message: string
+  message_code: string
   safe_details_json: unknown
   created_at: string
 }
