@@ -53,6 +53,7 @@ export type WorkbenchRuntimeData = {
       attemptNumber: number
       status: string
       currentStage?: string | null
+      currentStageCode?: string
       errorCode?: string | null
       errorMessage?: string | null
       retryable: boolean
@@ -121,6 +122,7 @@ export function mapBackendData(
               attemptNumber: run.attempt_number,
               status: run.status,
               currentStage: run.current_stage,
+              currentStageCode: run.current_stage_code,
               errorCode: run.error_code,
               errorMessage: run.error_message,
               retryable: run.retryable,

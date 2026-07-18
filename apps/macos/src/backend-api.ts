@@ -107,6 +107,7 @@ export type TaskRunView = {
   started_at: string
   ended_at?: string | null
   current_stage?: string | null
+  current_stage_code: string
   error_code?: string | null
   error_message?: string | null
   retryable: boolean
