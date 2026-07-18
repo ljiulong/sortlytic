@@ -450,6 +450,31 @@ describe('SettingsPage AI 提示词卡片', () => {
     expect(mounted.container.querySelector('[data-prompt-dialog]')).toBeNull()
   })
 
+  it('提示词弹窗限制桌面与窄窗尺寸，并提供滚动、焦点和减弱动效样式', () => {
+    const css = readFileSync(resolve('src/SettingsPage.css'), 'utf8')
+
+    expect(css).toMatch(
+      /\.prompt-settings-dialog__backdrop\s*\{[^}]*position:\s*fixed;[^}]*place-items:\s*center;/su,
+    )
+    expect(css).toMatch(
+      /\.prompt-settings-dialog\s*\{[^}]*grid-template-rows:\s*auto minmax\(0, 1fr\) auto;[^}]*max-height:\s*calc\(100vh - 48px\);[^}]*overflow:\s*hidden;/su,
+    )
+    expect(css).toMatch(
+      /\.prompt-settings-dialog__body\s*\{[^}]*overflow-y:\s*auto;[^}]*overscroll-behavior:\s*contain;/su,
+    )
+    expect(css).toMatch(
+      /\.prompt-settings-dialog textarea\s*\{[^}]*width:\s*100%;[^}]*min-height:\s*240px;/su,
+    )
+    expect(css).toContain('.prompt-settings-dialog button:focus-visible')
+    expect(css).toMatch(
+      /@media \(max-width: 680px\)[\s\S]*?\.prompt-settings-card dl\s*\{[^}]*grid-template-columns:\s*1fr;/su,
+    )
+    expect(css).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.prompt-settings-dialog__backdrop,[\s\n]*\.prompt-settings-dialog\s*\{[^}]*animation:\s*none;/su,
+    )
+    expect(css).not.toMatch(/transition:\s*all/u)
+  })
+
   it('把修改保存为新版本，并在用户明确操作后激活该版本', async () => {
     const draftVersion = {
       ...activePromptVersion,
