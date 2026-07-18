@@ -12,9 +12,24 @@ use super::{
 const MIGRATION_VERSION: i64 = 9;
 const MIGRATION_NAME: &str = "plan_review_state_repair";
 
-const CLEAR_INVALID_CONFIRMATIONS_SQL: &str = r#"UPDATE collection_plan
+const CLEAR_STALE_CONFIRMATIONS_SQL: &str = r#"UPDATE collection_plan AS plan
 SET confirmed_by_user = 0, updated_at = ?1
-WHERE validation_status = 'needs_review' AND confirmed_by_user <> 0"#;
+WHERE confirmed_by_user <> 0
+  AND (
+    plan.validation_status = 'needs_review'
+    OR EXISTS (
+      SELECT 1
+      FROM collection_plan AS latest
+      WHERE latest.id = (
+        SELECT candidate.id
+        FROM collection_plan AS candidate
+        WHERE candidate.task_id = plan.task_id
+        ORDER BY candidate.created_at DESC, candidate.id DESC
+        LIMIT 1
+      )
+        AND latest.validation_status = 'needs_review'
+    )
+  )"#;
 
 const REPAIR_WAITING_TASKS_SQL: &str = r#"UPDATE collection_task AS task
 SET status = 'draft', confirmed_at = NULL, updated_at = ?1
@@ -30,13 +45,6 @@ WHERE task.status = 'waiting_confirmation'
       LIMIT 1
     )
       AND latest.validation_status = 'needs_review'
-  )
-  AND NOT EXISTS (
-    SELECT 1
-    FROM collection_plan AS valid
-    WHERE valid.task_id = task.id
-      AND valid.validation_status = 'valid'
-      AND valid.confirmed_by_user = 1
   )"#;
 
 pub(super) fn validate_existing_plan_review_migration(connection: &Connection) -> AppResult<()> {
@@ -66,7 +74,7 @@ pub(super) fn apply_plan_review_migration(connection: &mut Connection) -> AppRes
     .map_err(database_error)?;
   let now = Utc::now().to_rfc3339();
   let cleared_confirmations = transaction
-    .execute(CLEAR_INVALID_CONFIRMATIONS_SQL, [&now])
+    .execute(CLEAR_STALE_CONFIRMATIONS_SQL, [&now])
     .map_err(database_error)?;
   let repaired_tasks = transaction
     .execute(REPAIR_WAITING_TASKS_SQL, [&now])
@@ -90,7 +98,7 @@ pub(super) fn apply_plan_review_migration(connection: &mut Connection) -> AppRes
           workspace_id,
           serde_json::json!({
             "migration_version": MIGRATION_VERSION,
-            "cleared_invalid_confirmations": cleared_confirmations,
+            "cleared_stale_confirmations": cleared_confirmations,
             "repaired_waiting_tasks": repaired_tasks,
           })
           .to_string(),
@@ -131,7 +139,7 @@ fn validate_marker(name: &str, checksum: &str) -> AppResult<()> {
 
 fn migration_checksum() -> String {
   let mut hasher = Sha256::new();
-  hasher.update(CLEAR_INVALID_CONFIRMATIONS_SQL.as_bytes());
+  hasher.update(CLEAR_STALE_CONFIRMATIONS_SQL.as_bytes());
   hasher.update(REPAIR_WAITING_TASKS_SQL.as_bytes());
   format!("{:x}", hasher.finalize())
 }
@@ -269,7 +277,7 @@ mod tests {
   }
 
   #[test]
-  fn preserves_waiting_task_when_another_valid_plan_is_confirmed() {
+  fn repairs_waiting_task_when_latest_plan_needs_review_despite_older_confirmation() {
     let root = std::env::temp_dir().join(format!("plan-review-valid-{}", Uuid::new_v4()));
     create_workspace("有效计划保护", &root).expect("workspace should create");
     let mut connection =
@@ -313,12 +321,23 @@ mod tests {
           |row| row.get::<_, String>(0),
         )
         .unwrap(),
-      "waiting_confirmation"
+      "draft"
     );
     assert_eq!(
       connection
         .query_row(
           "SELECT confirmed_by_user FROM collection_plan WHERE id = 'plan-review'",
+          [],
+          |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+      0
+    );
+    assert_eq!(
+      connection
+        .query_row(
+          "SELECT COUNT(*) FROM collection_plan
+           WHERE task_id = 'task-valid' AND confirmed_by_user <> 0",
           [],
           |row| row.get::<_, i64>(0),
         )
