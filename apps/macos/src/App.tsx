@@ -238,13 +238,20 @@ const backendMessageKeys: Record<string, string> = {
   '请先检查更新': 'error.checkUpdateFirst',
   '请在打包后的 macOS 应用内使用后端能力': 'error.packagedAppRequired',
   '任务名称至少需要 2 个字符': 'error.taskNameTooShort',
+  'TikHub 实时报价超过计划预算上限': 'error.pricingExceedsBudget',
 }
 
-function localizeBackendMessage(message: string): MessageCopy {
+const dynamicBackendMessageKeys: Array<[RegExp, string]> = [
+  [/(?:HTTP|code) 429|请求过于频繁/, 'error.pricingRateLimited'],
+]
+
+export function localizeBackendMessage(message: string): MessageCopy {
   const exportMatch = /^(Excel|PDF) 已导出到本地工作区$/.exec(message)
   if (exportMatch) return { key: 'action.exported', options: { format: exportMatch[1] } }
   const key = backendMessageKeys[message]
   if (key) return { key }
+  const dynamicKey = dynamicBackendMessageKeys.find(([pattern]) => pattern.test(message))?.[1]
+  if (dynamicKey) return { key: dynamicKey }
   return /[^\p{ASCII}]/u.test(message)
     ? { key: 'error.unknown' }
     : { key: 'error.raw', options: { message } }
