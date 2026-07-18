@@ -72,6 +72,24 @@ pub(crate) fn collection_plan_request(prompt_content: &str, intent_text: &str) -
   }
 }
 
+pub(crate) fn connection_test_request() -> ModelRequest {
+  ModelRequest {
+    system_prompt:
+      r#"这是连通性测试，不执行采集任务。只返回 JSON：{"ok":true}，不得返回其他字段或文本。"#
+        .to_string(),
+    user_prompt: r#"{"ping":"sortlytic"}"#.to_string(),
+    schema_name: "sortlytic_connection_test".to_string(),
+    output_schema: json!({
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "type": "boolean", "const": true }
+      },
+      "required": ["ok"]
+    }),
+  }
+}
+
 fn authoritative_collection_contract() -> &'static str {
   r#"你必须把 input_json.text 转为 collection_plan_v3 JSON，只输出 JSON，不得输出 Markdown。
 支持平台仅为 tiktok、douyin、xiaohongshu。数据类型仅为 keyword_search、comments、account_profile、account_posts、item_detail。
@@ -518,6 +536,25 @@ mod tests {
     )
     .expect("official OpenAI request should succeed");
     server.join().expect("test server should finish");
+  }
+
+  #[test]
+  fn connection_test_request_requires_a_closed_ok_true_result() {
+    let request = connection_test_request();
+
+    assert!(request.system_prompt.contains(r#"{"ok":true}"#));
+    assert_eq!(request.schema_name, "sortlytic_connection_test");
+    assert_eq!(
+      request.output_schema,
+      json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": { "type": "boolean", "const": true }
+        },
+        "required": ["ok"]
+      })
+    );
   }
 
   #[test]

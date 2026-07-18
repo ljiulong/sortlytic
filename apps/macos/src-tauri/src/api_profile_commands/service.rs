@@ -11,7 +11,7 @@ use super::validation::{
 };
 pub(super) use super::ServiceTestResult;
 use super::{ApiProfileKind, SaveApiProfileInput};
-use crate::ai::provider_client::{call_model, ModelRequest, ProviderConfig};
+use crate::ai::provider_client::{call_model, connection_test_request, ProviderConfig};
 use crate::api_profiles::{
   load_existing_api_profile_registry, rebuild_api_profile_mirror, save_api_profile_registry,
   update_api_profile_registry, with_api_profile_mirror_lock, AiApiFormat, AiApiProfile,
@@ -623,12 +623,7 @@ fn test_ai_connection(registry: &ApiProfileRegistry, profile: &AiApiProfile) -> 
       model_id: profile.default_model_id.clone(),
       api_key,
     },
-    &ModelRequest {
-      system_prompt: "这是连通性测试。只返回符合 Schema 的 JSON，不执行采集任务。".to_string(),
-      user_prompt: r#"{"ping":"sortlytic"}"#.to_string(),
-      schema_name: "sortlytic_connection_test".to_string(),
-      output_schema: serde_json::json!({ "type": "object" }),
-    },
+    &connection_test_request(),
   )?;
   if response.output_json.get("ok").and_then(Value::as_bool) != Some(true) {
     return Err(AppError::new(
