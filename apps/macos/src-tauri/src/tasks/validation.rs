@@ -20,7 +20,8 @@ pub(super) fn estimate_from_plan_json(plan_json: &Value) -> CostEstimateView {
     .and_then(Value::as_i64)
     .unwrap_or(1)
     .max(1);
-  let request_count_estimate = step_count.saturating_mul(request_limit);
+  let request_count_estimate = crate::collection::plan_estimate::estimate_request_count(plan_json)
+    .unwrap_or_else(|| step_count.saturating_mul(request_limit));
   let requires_confirmation =
     request_count_estimate > 1 || platform_count > 1 || data_type_count > 1;
 

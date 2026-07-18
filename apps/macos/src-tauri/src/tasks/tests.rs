@@ -361,6 +361,64 @@ fn persisted_cost_estimate_counts_the_confirmed_request_limit() {
 }
 
 #[test]
+fn persisted_cost_estimate_keeps_dependency_fanout() {
+  let root_path = unique_temp_workspace("dependency-fanout-cost");
+  create_workspace("依赖扇出成本测试", &root_path).expect("workspace should be created");
+  let data_types = vec![
+    "keyword_search".to_string(),
+    "item_detail".to_string(),
+    "account_profile".to_string(),
+    "comments".to_string(),
+  ];
+  let task = create_collection_task(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "宠物园区".to_string(),
+      source_type: "form".to_string(),
+      platforms: vec!["xiaohongshu".to_string()],
+      data_types: data_types.clone(),
+    },
+  )
+  .expect("task should create");
+  let draft = crate::collection::generate_form_collection_plan(
+    crate::collection::FormCollectionPlanRequest {
+      platform: "xiaohongshu".to_string(),
+      data_type: None,
+      data_types,
+      params: serde_json::json!({
+        "keyword": "宠物园区",
+        "region": "CN",
+        "time_range": "7"
+      }),
+      age_range: None,
+      request_limit: Some(20),
+      record_limit: Some(1000),
+      budget_limit_micros: Some(2_000_000),
+    },
+  )
+  .expect("plan draft should generate");
+  assert_eq!(draft.cost_estimate_json["request_count_estimate"], 22_020);
+
+  let plan = save_collection_plan(
+    &root_path,
+    SaveCollectionPlanInput {
+      task_id: task.id.clone(),
+      source: draft.source,
+      plan_json: draft.plan_json,
+      validation_status: draft.validation_status,
+      validation_errors_json: Some(draft.validation_errors_json),
+      cost_estimate_json: Some(draft.cost_estimate_json),
+    },
+  )
+  .expect("plan should save");
+  let estimate = estimate_task_cost(&root_path, Some(task.id), None).expect("cost should load");
+
+  assert_eq!(plan.cost_estimate_json["request_count_estimate"], 22_020);
+  assert_eq!(estimate.request_count_estimate, 22_020);
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn backend_validation_overrides_client_supplied_status() {
   let root_path = unique_temp_workspace("authoritative-plan-validation");
   create_workspace("任务测试", &root_path).expect("workspace should be created");
