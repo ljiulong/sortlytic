@@ -332,7 +332,7 @@ describe('SettingsPage 语言设置卡片', () => {
 })
 
 describe('SettingsPage AI 提示词卡片', () => {
-  it('读取并展示当前自然语言采集提示词、状态和真实受控调用链路', async () => {
+  it('设置页只展示提示词摘要，并从管理入口打开完整弹窗', async () => {
     const mounted = mountSettingsPage()
     await flushPromptSettings()
 
@@ -341,6 +341,23 @@ describe('SettingsPage AI 提示词卡片', () => {
       .toHaveBeenCalledWith(promptTemplate.id)
     expect(mounted.container.textContent).toContain('AI 提示词')
     expect(mounted.container.textContent).toContain('当前启用 v3')
+    expect(mounted.container.textContent).toContain('collection_plan_v3')
+    expect(mounted.container.querySelector('[data-prompt-content]')).toBeNull()
+    expect(mounted.container.textContent).not.toContain(
+      '提示词 → AI 结构化计划 → Schema / 能力校验 → 用户确认 → TikHub 真实 API',
+    )
+
+    const manageButton = mounted.container.querySelector<HTMLButtonElement>(
+      '[data-prompt-action="manage"]',
+    )
+    expect(manageButton).not.toBeNull()
+    await act(async () => manageButton?.click())
+    await flushPromptSettings()
+
+    const dialog = mounted.container.querySelector<HTMLElement>('[data-prompt-dialog]')
+    expect(dialog?.getAttribute('role')).toBe('dialog')
+    expect(dialog?.getAttribute('aria-modal')).toBe('true')
+    expect(dialog?.textContent).toContain('管理 AI 提示词')
     expect(mounted.container.textContent).toContain(
       '提示词 → AI 结构化计划 → Schema / 能力校验 → 用户确认 → TikHub 真实 API',
     )
@@ -352,6 +369,85 @@ describe('SettingsPage AI 提示词卡片', () => {
       '[data-prompt-content]',
     )
     expect(editor?.value).toBe(activePromptVersion.content)
+  })
+
+  it('支持关闭按钮、Esc 和遮罩关闭，并在重新打开时刷新版本状态', async () => {
+    const mounted = mountSettingsPage()
+    await flushPromptSettings()
+    const openDialog = async () => {
+      const manageButton = mounted.container.querySelector<HTMLButtonElement>(
+        '[data-prompt-action="manage"]',
+      )
+      await act(async () => manageButton?.click())
+      await flushPromptSettings()
+      expect(mounted.container.querySelector('[data-prompt-dialog]')).not.toBeNull()
+    }
+
+    await openDialog()
+    const closeButton = mounted.container.querySelector<HTMLButtonElement>(
+      '[data-prompt-action="close"]',
+    )
+    act(() => closeButton?.click())
+    expect(mounted.container.querySelector('[data-prompt-dialog]')).toBeNull()
+
+    await openDialog()
+    act(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })))
+    expect(mounted.container.querySelector('[data-prompt-dialog]')).toBeNull()
+
+    await openDialog()
+    const backdrop = mounted.container.querySelector<HTMLElement>('[data-prompt-backdrop]')
+    act(() => backdrop?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })))
+    expect(mounted.container.querySelector('[data-prompt-dialog]')).toBeNull()
+    expect(promptApiMocks.listPromptVersions).toHaveBeenCalledTimes(4)
+  })
+
+  it('保存或激活进行中禁止误关弹窗', async () => {
+    let finishSave: ((value: typeof activePromptVersion) => void) | undefined
+    promptApiMocks.createPromptVersion.mockReturnValue(new Promise((resolvePromise) => {
+      finishSave = resolvePromise
+    }))
+    const mounted = mountSettingsPage()
+    await flushPromptSettings()
+    await act(async () => mounted.container.querySelector<HTMLButtonElement>(
+      '[data-prompt-action="manage"]',
+    )?.click())
+    await flushPromptSettings()
+    const note = mounted.container.querySelector<HTMLInputElement>(
+      '[data-prompt-change-note]',
+    )
+    if (note) changeControlValue(note, '验证忙碌态关闭保护')
+    const saveButton = Array.from(mounted.container.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('保存为新版本'))
+
+    await act(async () => {
+      saveButton?.click()
+      await Promise.resolve()
+    })
+    const closeButton = mounted.container.querySelector<HTMLButtonElement>(
+      '[data-prompt-action="close"]',
+    )
+    const backdrop = mounted.container.querySelector<HTMLElement>('[data-prompt-backdrop]')
+    expect(closeButton?.disabled).toBe(true)
+    act(() => {
+      closeButton?.click()
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+      backdrop?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    })
+    expect(mounted.container.querySelector('[data-prompt-dialog]')).not.toBeNull()
+
+    await act(async () => {
+      finishSave?.({
+        ...activePromptVersion,
+        id: 'prompt-version-4',
+        version: 4,
+        status: 'draft',
+      })
+      await Promise.resolve()
+    })
+    act(() => mounted.container.querySelector<HTMLButtonElement>(
+      '[data-prompt-action="close"]',
+    )?.click())
+    expect(mounted.container.querySelector('[data-prompt-dialog]')).toBeNull()
   })
 
   it('把修改保存为新版本，并在用户明确操作后激活该版本', async () => {
@@ -372,6 +468,10 @@ describe('SettingsPage AI 提示词卡片', () => {
     })
 
     const mounted = mountSettingsPage()
+    await flushPromptSettings()
+    await act(async () => mounted.container.querySelector<HTMLButtonElement>(
+      '[data-prompt-action="manage"]',
+    )?.click())
     await flushPromptSettings()
     const editor = mounted.container.querySelector<HTMLTextAreaElement>(
       '[data-prompt-content]',
@@ -420,12 +520,17 @@ describe('SettingsPage AI 提示词卡片', () => {
     }
     promptApiMocks.listPromptVersions
       .mockResolvedValueOnce([draftVersion])
+      .mockResolvedValueOnce([draftVersion])
       .mockResolvedValueOnce([activePromptVersion, failedVersion])
     promptApiMocks.activatePromptVersion.mockRejectedValue(
       new Error('提示词回归样例未通过'),
     )
 
     const mounted = mountSettingsPage()
+    await flushPromptSettings()
+    await act(async () => mounted.container.querySelector<HTMLButtonElement>(
+      '[data-prompt-action="manage"]',
+    )?.click())
     await flushPromptSettings()
     const activateButton = Array.from(mounted.container.querySelectorAll('button'))
       .find((button) => button.textContent?.includes('激活当前草稿'))
@@ -437,7 +542,7 @@ describe('SettingsPage AI 提示词卡片', () => {
 
     expect(promptApiMocks.activatePromptVersion)
       .toHaveBeenCalledWith(draftVersion.id)
-    expect(promptApiMocks.listPromptVersions).toHaveBeenCalledTimes(2)
+    expect(promptApiMocks.listPromptVersions).toHaveBeenCalledTimes(3)
     expect(mounted.container.querySelector('[data-prompt-status]')?.textContent)
       .toContain('回归失败 v4')
     expect(mounted.container.textContent).toContain(
