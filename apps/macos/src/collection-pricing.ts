@@ -97,9 +97,10 @@ export async function preflightCollectionPlanPricing(plan: CollectionPricingPlan
   if (Math.abs(balance + freeCredit - availableCredit) > 0.000001) {
     throw new Error('TikHub 额度合计与免费额度、充值余额不一致')
   }
-  const quotes = await Promise.all(
-    endpoints.map((endpoint) => quoteTikhubConnectorPrice(endpoint, 1)),
-  )
+  const quotes = []
+  for (const endpoint of endpoints) {
+    quotes.push(await quoteTikhubConnectorPrice(endpoint, 1))
+  }
   const unitPrice = Math.max(...quotes.map((quote) => requiredMoney(quote.total_price, 'TikHub 实时报价')))
   const quotedTotalMicros = Math.round(unitPrice * requestCount * 1_000_000)
   if (quotedTotalMicros > budgetMicros) {

@@ -623,6 +623,50 @@ describe('计划实时计价预检', () => {
     })
   })
 
+  it('多端点计划逐个读取实时报价，避免并发触发 TikHub 限流', async () => {
+    const registry = tikhubRegistryFixture({
+      balance: 4.99,
+      freeCredit: 0.05,
+      availableCredit: 5.04,
+    })
+    let activeQuoteRequests = 0
+    let maxConcurrentQuoteRequests = 0
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'get_api_profile_registry') return registry
+      if (command === 'test_api_profile') {
+        return { success: true, message: 'TikHub API 配置测试成功', registry }
+      }
+      if (command === 'quote_tikhub_connector_price') {
+        activeQuoteRequests += 1
+        maxConcurrentQuoteRequests = Math.max(maxConcurrentQuoteRequests, activeQuoteRequests)
+        await Promise.resolve()
+        try {
+          if (activeQuoteRequests > 1) {
+            throw new Error('TikHub 请求失败，HTTP 429：请求过于频繁')
+          }
+          return { total_price: 0.01 }
+        } finally {
+          activeQuoteRequests -= 1
+        }
+      }
+      throw new Error(`意外命令：${command}`)
+    })
+
+    await expect(preflightCollectionPlanPricing({
+      ...plan,
+      budgetMicros: 2_000_000,
+      requestCountEstimate: 80,
+      pricingEndpoints: [
+        '/api/v1/xiaohongshu/app_v2/search_notes',
+        '/api/v1/xiaohongshu/app_v2/get_image_note_detail',
+        '/api/v1/xiaohongshu/app_v2/get_video_note_detail',
+        '/api/v1/xiaohongshu/app_v2/get_user_info',
+        '/api/v1/xiaohongshu/app_v2/get_note_comments',
+      ],
+    })).resolves.toMatchObject({ quotedTotalMicros: 800_000 })
+    expect(maxConcurrentQuoteRequests).toBe(1)
+  })
+
   it('免费额度与充值余额合计不足时阻止确认', async () => {
     const registry = tikhubRegistryFixture({
       balance: 0.01,
