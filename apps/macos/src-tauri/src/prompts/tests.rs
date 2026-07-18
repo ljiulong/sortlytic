@@ -106,6 +106,73 @@ fn seeding_upgrades_a_legacy_collection_prompt_without_losing_history() {
 }
 
 #[test]
+fn builtin_upgrade_preserves_the_user_activated_prompt_version() {
+  let root_path = unique_temp_workspace("prompt-user-active-upgrade");
+  create_workspace("用户提示词升级保护", &root_path).expect("workspace should be created");
+  let templates = seed_builtin_prompts(&root_path).expect("builtins should seed");
+  let template = templates
+    .iter()
+    .find(|template| template.template_key == "collection_plan_from_text")
+    .expect("collection template exists");
+  let original = list_prompt_versions(&root_path, &template.id)
+    .expect("versions should list")
+    .remove(0);
+  let custom_id = Uuid::new_v4().to_string();
+  let custom_content = "用户显式激活的自定义提示词";
+  let now = Utc::now().to_rfc3339();
+  let connection =
+    open_workspace_database(root_path.join(DATABASE_FILE_NAME)).expect("database should open");
+  connection
+    .execute(
+      "UPDATE prompt_version
+       SET content = 'legacy builtin', content_hash = ?1, status = 'archived', activated_at = NULL
+       WHERE id = ?2",
+      params![content_hash("legacy builtin"), original.id],
+    )
+    .expect("builtin version should simulate an older release");
+  connection
+    .execute(
+      "INSERT INTO prompt_version (
+        id, template_id, version, content, change_note, status, created_at, activated_at,
+        content_hash
+      ) VALUES (?1, ?2, 2, ?3, '用户自定义', 'active', ?4, ?4, ?5)",
+      params![
+        custom_id,
+        template.id,
+        custom_content,
+        now,
+        content_hash(custom_content)
+      ],
+    )
+    .expect("custom active version should insert");
+  drop(connection);
+
+  seed_builtin_prompts(&root_path).expect("new builtin should seed without taking activation");
+  let versions = list_prompt_versions(&root_path, &template.id).expect("versions should list");
+  let custom = versions
+    .iter()
+    .find(|version| version.id == custom_id)
+    .expect("custom version should remain");
+  let current_builtin = versions
+    .iter()
+    .find(|version| version.content.contains("collection_plan_v3"))
+    .expect("current builtin should be added");
+
+  assert_eq!(custom.status, "active");
+  assert_eq!(custom.activated_at.as_deref(), Some(now.as_str()));
+  assert_eq!(current_builtin.status, "draft");
+  assert_eq!(
+    versions
+      .iter()
+      .filter(|version| version.status == "active")
+      .count(),
+    1
+  );
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn opening_legacy_workspace_deduplicates_cases_and_preserves_runs() {
   let root_path = unique_temp_workspace("prompt-case-migration");
   create_workspace("提示词测试", &root_path).expect("workspace should be created");

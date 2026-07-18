@@ -352,20 +352,43 @@ fn ensure_builtin_version(
   }
 
   let version = next_prompt_version(connection, template_id)?;
-  let transaction = connection.unchecked_transaction().map_err(database_error)?;
-  transaction
-    .execute(
-      "UPDATE prompt_version SET status = 'archived'
-       WHERE template_id = ?1 AND status = 'active'",
+  let active_change_note = connection
+    .query_row(
+      "SELECT change_note FROM prompt_version
+       WHERE template_id = ?1 AND status = 'active'
+       ORDER BY version DESC LIMIT 1",
       params![template_id],
+      |row| row.get::<_, Option<String>>(0),
     )
+    .optional()
     .map_err(database_error)?;
+  let replace_active_builtin = match active_change_note {
+    None => true,
+    Some(Some(note)) => matches!(note.as_str(), "内置初始版本" | "内置 Schema 升级"),
+    Some(None) => false,
+  };
+  let status = if replace_active_builtin {
+    "active"
+  } else {
+    "draft"
+  };
+  let activated_at = replace_active_builtin.then_some(now);
+  let transaction = connection.unchecked_transaction().map_err(database_error)?;
+  if replace_active_builtin {
+    transaction
+      .execute(
+        "UPDATE prompt_version SET status = 'archived'
+         WHERE template_id = ?1 AND status = 'active'",
+        params![template_id],
+      )
+      .map_err(database_error)?;
+  }
   transaction
     .execute(
       "INSERT INTO prompt_version (
         id, template_id, version, content, change_note, status, created_at, activated_at,
         content_hash
-      ) VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?8)",
+      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
       params![
         Uuid::new_v4().to_string(),
         template_id,
@@ -376,8 +399,9 @@ fn ensure_builtin_version(
         } else {
           "内置 Schema 升级"
         },
+        status,
         now,
-        now,
+        activated_at,
         hash
       ],
     )
