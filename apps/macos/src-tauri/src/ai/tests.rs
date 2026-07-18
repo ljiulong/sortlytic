@@ -129,6 +129,56 @@ fn text_generation_uses_active_prompt_and_real_provider_response() {
 }
 
 #[test]
+fn invalid_model_plan_does_not_change_existing_task_scope() {
+  let root_path = unique_temp_workspace("ai-invalid-plan-scope");
+  create_workspace("AI 无效计划范围测试", &root_path).expect("workspace should be created");
+  let mut plan = valid_keyword_plan();
+  plan["platforms"] = serde_json::json!(["youtube"]);
+  let response = serde_json::json!({
+    "choices": [{ "message": { "content": plan.to_string() } }]
+  })
+  .to_string();
+  let (base_url, server) = serve_ai_once(200, response, |_| {});
+  configure_active_ai(&root_path, base_url);
+  let task = create_collection_task(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "保留原任务范围".to_string(),
+      source_type: "natural_language".to_string(),
+      platforms: vec!["xiaohongshu".to_string()],
+      data_types: vec!["comments".to_string()],
+    },
+  )
+  .expect("task should be created");
+
+  let result = generate_collection_plan_from_text(
+    &root_path,
+    GenerateCollectionPlanFromTextInput {
+      task_id: task.id.clone(),
+      intent_text: "生成一个不受支持的平台计划".to_string(),
+      provider_id: None,
+      model_id: None,
+    },
+  )
+  .expect("invalid plan should be saved for review");
+  server.join().expect("test server should finish");
+  let updated_task = get_task(&root_path, &task.id).expect("task should reload");
+
+  assert!(!result.ai_run.schema_valid);
+  assert_eq!(result.collection_plan.validation_status, "needs_review");
+  assert_eq!(
+    updated_task.platforms_json,
+    serde_json::json!(["xiaohongshu"])
+  );
+  assert_eq!(
+    updated_task.data_types_json,
+    serde_json::json!(["comments"])
+  );
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn natural_language_plan_runs_through_tikhub_and_persists_records() {
   let root_path = unique_temp_workspace("ai-tikhub-e2e");
   create_workspace("自然语言采集端到端测试", &root_path).expect("workspace should be created");

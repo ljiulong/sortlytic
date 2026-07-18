@@ -175,9 +175,11 @@ pub fn generate_collection_plan_from_text(
     }
   };
   let generated = normalize_model_plan(response.output_json);
+  let plan_validation = validate_collection_plan_v3(&generated);
+  let schema_valid = plan_validation.valid;
   let generated_platforms = json_string_array(generated.get("platforms"));
   let generated_data_types = json_string_array(generated.get("data_types"));
-  if !generated_platforms.is_empty() && !generated_data_types.is_empty() {
+  if schema_valid && !generated_platforms.is_empty() && !generated_data_types.is_empty() {
     update_collection_task(
       &root_path,
       &input.task_id,
@@ -188,8 +190,6 @@ pub fn generate_collection_plan_from_text(
       },
     )?;
   }
-  let plan_validation = validate_collection_plan_v3(&generated);
-  let schema_valid = plan_validation.valid;
   let validation_status = if schema_valid {
     "valid"
   } else {
