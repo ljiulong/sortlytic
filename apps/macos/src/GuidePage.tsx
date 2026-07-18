@@ -1,13 +1,15 @@
 import type { TFunction } from 'i18next'
+import { useState } from 'react'
 import {
   BadgeCheck,
   CheckCircle2,
-  ExternalLink,
+  ExternalLink as ExternalLinkIcon,
   KeyRound,
   MonitorCheck,
   ShieldCheck,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import ExternalLink, { type AllowedExternalUrl } from './ExternalLink'
 import { i18n } from './i18n'
 import './GuidePage.css'
 
@@ -97,6 +99,8 @@ function createGuideChapters(t: TFunction<'guide'>): GuideChapter[] {
 
 function GuidePage({ onOpenSettings }: GuidePageProps) {
   const { t } = useTranslation('guide', { i18n })
+  const { t: tCommon } = useTranslation('common', { i18n })
+  const [externalLinkError, setExternalLinkError] = useState<string | null>(null)
   const guideChapters = createGuideChapters(t)
   const safetyChecks = safetyCheckKeys.map((key) => t(`safety.items.${key}`))
   const troubleshootingItems = troubleshootingKeys.map((key) => ({
@@ -232,21 +236,46 @@ function GuidePage({ onOpenSettings }: GuidePageProps) {
           </header>
           <nav aria-label={t('aria.resources')}>
             {officialResources.map((resource) => (
-              <GuideLink {...resource} key={resource.href} />
+              <GuideLink
+                {...resource}
+                key={resource.href}
+                onOpenError={() => setExternalLinkError(tCommon('unknownError'))}
+                onOpenStart={() => setExternalLinkError(null)}
+              />
             ))}
           </nav>
+          {externalLinkError ? (
+            <p className="guide-resources__error" role="status">
+              {externalLinkError}
+            </p>
+          ) : null}
         </section>
       </div>
     </section>
   )
 }
 
-function GuideLink({ href, label }: { href: string; label: string }) {
+function GuideLink({
+  href,
+  label,
+  onOpenError,
+  onOpenStart,
+}: {
+  href: AllowedExternalUrl
+  label: string
+  onOpenError: () => void
+  onOpenStart: () => void
+}) {
   return (
-    <a className="guide-resource-link" href={href} rel="noreferrer" target="_blank">
+    <ExternalLink
+      className="guide-resource-link"
+      href={href}
+      onClick={onOpenStart}
+      onOpenError={onOpenError}
+    >
       <span>{label}</span>
-      <ExternalLink size={15} aria-hidden="true" />
-    </a>
+      <ExternalLinkIcon size={15} aria-hidden="true" />
+    </ExternalLink>
   )
 }
 

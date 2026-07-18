@@ -1,11 +1,52 @@
-import { createElement } from 'react'
+// @vitest-environment happy-dom
+
+import { act, createElement } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import GuidePage from './GuidePage'
+import { i18n } from './i18n'
+
+const openUrlMock = vi.fn()
+
+vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: openUrlMock }))
+
+type MountedGuide = {
+  container: HTMLDivElement
+  root: Root
+}
+
+const mountedGuides = new Set<MountedGuide>()
+
+function mountGuide() {
+  const container = document.createElement('div')
+  const root = createRoot(container)
+  const mounted = { container, root }
+  mountedGuides.add(mounted)
+  document.body.append(container)
+  act(() => root.render(createElement(GuidePage, { onOpenSettings: vi.fn() })))
+  return mounted
+}
 
 function renderGuide() {
   return renderToStaticMarkup(createElement(GuidePage, { onOpenSettings: vi.fn() }))
 }
+
+beforeEach(async () => {
+  ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
+    .IS_REACT_ACT_ENVIRONMENT = true
+  openUrlMock.mockReset()
+  delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
+  await i18n.changeLanguage('zh-CN')
+})
+
+afterEach(() => {
+  for (const mounted of mountedGuides) {
+    act(() => mounted.root.unmount())
+    mounted.container.remove()
+  }
+  mountedGuides.clear()
+})
 
 describe('GuidePage', () => {
   it('按六个连续章节展示从配置到导出的完整工作流', () => {
@@ -62,11 +103,37 @@ describe('GuidePage', () => {
     const markup = renderGuide()
 
     expect((markup.match(/class="guide-resource-link"/g) ?? [])).toHaveLength(5)
+    expect((markup.match(/data-external-link="true"/g) ?? [])).toHaveLength(5)
+    expect(markup).toContain('href="https://user.tikhub.io/register"')
+    expect(markup).toContain('href="https://user.tikhub.io/login"')
+    expect(markup).toContain('href="https://docs.tikhub.io/"')
+    expect(markup).toContain('href="https://tikhub.io/getting-started"')
+    expect(markup).toContain('href="https://tikhub.io/pricing"')
     expect(markup).toContain('Authorization')
     expect(markup).toContain('Bearer YOUR_API_KEY')
     expect(markup).toContain('价格与免费额度')
     expect(markup).not.toContain('guide-page__sidebar')
     expect(markup).not.toContain('guide-token-block')
+  })
+
+  it('Tauri 无法打开官方资源时显示可见错误反馈', async () => {
+    ;(window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {}
+    openUrlMock.mockRejectedValue(new Error('open failed'))
+    const { container } = mountGuide()
+    const link = container.querySelector(
+      'a[href="https://docs.tikhub.io/"]',
+    ) as HTMLAnchorElement
+
+    await act(async () => {
+      link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    await vi.waitFor(() => {
+      const status = container.querySelector('[role="status"]')
+      expect(status?.textContent).toContain('发生未知错误，请稍后重试。')
+    })
   })
 
   it('如实说明工作区私有 JSON、文件权限和真实 AI 到 TikHub 的安全边界', () => {

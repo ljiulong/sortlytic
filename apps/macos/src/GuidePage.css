@@ -426,6 +426,17 @@
   border-top: 1px solid var(--border-subtle);
 }
 
+.guide-resources__error {
+  margin: 0;
+  padding: 10px 16px;
+  overflow-wrap: anywhere;
+  color: var(--danger);
+  background: var(--danger-surface);
+  border-top: 1px solid color-mix(in oklch, var(--danger) 28%, transparent);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
 .guide-resource-link {
   display: flex;
   align-items: center;
