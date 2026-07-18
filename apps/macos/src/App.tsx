@@ -118,55 +118,57 @@ function Workbench() {
           isInitializing={backend.isInitializing}
           onOpenGuide={() => setActiveNav('guide')}
         />
-        {activeNav === 'guide' ? (
-          <div className={pageLayoutClassName}>
-            <GuidePage onOpenSettings={() => setActiveNav('settings')} />
-          </div>
-        ) : activeNav === 'settings' ? (
-          <section className={pageLayoutClassName} aria-label={t('settingsSection')}>
-            <SettingsPage backend={backend} />
-          </section>
-        ) : activeNav === 'new-task' ? (
-          <section className={pageLayoutClassName} aria-label={t('newTaskSection')}>
-            <div className="main-column">
-              <CollectionBuilder
-                actionMessage={backend.actionMessage}
-                activePlan={backend.activePlan}
-                isBusy={backend.isBusy}
-                onConfirmPlan={backend.confirmActivePlan}
-                onGenerateFormPlan={backend.generateFormPlan}
-                onGenerateNaturalPlan={backend.generateNaturalPlan}
-              />
+        <div className="workspace-scroll">
+          {activeNav === 'guide' ? (
+            <div className={pageLayoutClassName}>
+              <GuidePage onOpenSettings={() => setActiveNav('settings')} />
             </div>
-          </section>
-        ) : activeNav === 'tasks' ? (
-          <section className={pageLayoutClassName} aria-label={t('tasksSection')}>
-            <div className="main-column">
-              <TaskQueue
-                isBusy={backend.isBusy}
-                tasks={data.tasks}
-                onCancelTask={backend.cancelTask}
-                onConfirmTask={backend.confirmTask}
-                onDeleteTask={backend.deleteTask}
-                onExportTask={backend.exportTask}
-                onUpdateTask={backend.updateTask}
-              />
-            </div>
-          </section>
-        ) : (
-          <Dashboard
-            connections={data.connections}
-            isBusy={backend.isBusy}
-            metrics={data.metrics}
-            promptRuns={data.promptRuns}
-            records={data.records}
-            selectedRecordId={selectedRecordId}
-            workspace={data.workspace}
-            onCreateTask={() => setActiveNav('new-task')}
-            onRefresh={backend.refresh}
-            onSelectRecord={setSelectedRecordId}
-          />
-        )}
+          ) : activeNav === 'settings' ? (
+            <section className={pageLayoutClassName} aria-label={t('settingsSection')}>
+              <SettingsPage backend={backend} />
+            </section>
+          ) : activeNav === 'new-task' ? (
+            <section className={pageLayoutClassName} aria-label={t('newTaskSection')}>
+              <div className="main-column">
+                <CollectionBuilder
+                  actionMessage={backend.actionMessage}
+                  activePlan={backend.activePlan}
+                  isBusy={backend.isBusy}
+                  onConfirmPlan={backend.confirmActivePlan}
+                  onGenerateFormPlan={backend.generateFormPlan}
+                  onGenerateNaturalPlan={backend.generateNaturalPlan}
+                />
+              </div>
+            </section>
+          ) : activeNav === 'tasks' ? (
+            <section className={pageLayoutClassName} aria-label={t('tasksSection')}>
+              <div className="main-column">
+                <TaskQueue
+                  isBusy={backend.isBusy}
+                  tasks={data.tasks}
+                  onCancelTask={backend.cancelTask}
+                  onConfirmTask={backend.confirmTask}
+                  onDeleteTask={backend.deleteTask}
+                  onExportTask={backend.exportTask}
+                  onUpdateTask={backend.updateTask}
+                />
+              </div>
+            </section>
+          ) : (
+            <Dashboard
+              connections={data.connections}
+              isBusy={backend.isBusy}
+              metrics={data.metrics}
+              promptRuns={data.promptRuns}
+              records={data.records}
+              selectedRecordId={selectedRecordId}
+              workspace={data.workspace}
+              onCreateTask={() => setActiveNav('new-task')}
+              onRefresh={backend.refresh}
+              onSelectRecord={setSelectedRecordId}
+            />
+          )}
+        </div>
       </main>
     </div>
   )

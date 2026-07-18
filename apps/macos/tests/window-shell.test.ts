@@ -5,6 +5,8 @@ const windowConfig = JSON.parse(
   readFileSync(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8'),
 )
 const globalStyles = readFileSync(new URL('../src/index.css', import.meta.url), 'utf8')
+const appStyles = readFileSync(new URL('../src/App.css', import.meta.url), 'utf8')
+const frontendAppSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
 const nativeWindowSource = readFileSync(
   new URL('../src-tauri/src/native_window.rs', import.meta.url),
   'utf8',
@@ -41,5 +43,30 @@ describe('macOS 应用外壳', () => {
       'if let Err(error) = native_window::apply_native_window_corner_radius(&main_window)',
     )
     expect(appSource).not.toContain('.map_err(std::io::Error::other)?')
+  })
+
+  it('固定公共顶栏并只让页面正文滚动', () => {
+    expect(frontendAppSource).toContain('<div className="workspace-scroll">')
+
+    const workspaceRule = appStyles.match(/\.workspace\s*\{([^}]*)\}/)?.[1]
+    const topbarRule = appStyles.match(/\.topbar\s*\{([^}]*)\}/)?.[1]
+    const scrollRule = appStyles.match(/\.workspace-scroll\s*\{([^}]*)\}/)?.[1]
+
+    expect(workspaceRule).toBeDefined()
+    expect(workspaceRule).toMatch(/display:\s*flex\s*;/)
+    expect(workspaceRule).toMatch(/flex-direction:\s*column\s*;/)
+    expect(workspaceRule).toMatch(/overflow:\s*hidden\s*;/)
+    expect(topbarRule).toMatch(/flex:\s*0\s+0\s+auto\s*;/)
+    expect(scrollRule).toMatch(/flex:\s*1\s+1\s+auto\s*;/)
+    expect(scrollRule).toMatch(/min-height:\s*0\s*;/)
+    expect(scrollRule).toMatch(/overflow-y:\s*auto\s*;/)
+  })
+
+  it('让正式 Logo 直接显示在当前主题的侧栏表面', () => {
+    const brandMarkRule = appStyles.match(/\.brand-mark\s*\{([^}]*)\}/)?.[1]
+
+    expect(brandMarkRule).toBeDefined()
+    expect(brandMarkRule).toMatch(/background:\s*transparent\s*;/)
+    expect(brandMarkRule).not.toMatch(/background:\s*var\(--primary\)\s*;/)
   })
 })
