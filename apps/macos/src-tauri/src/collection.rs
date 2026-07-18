@@ -6,6 +6,7 @@ use crate::tasks::CostEstimateView;
 
 mod capabilities;
 mod form_plan;
+pub(crate) mod plan_estimate;
 mod plan_validation;
 
 use capabilities::{endpoint_for, find_endpoint};
