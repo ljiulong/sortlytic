@@ -141,7 +141,7 @@ describe.sequential('useAppUpdater', () => {
     expect(result).toEqual({ version: '0.3.2' })
     expect(mounted.current.currentVersion).toBe('0.3.0')
     expect(mounted.current.phase).toBe('available')
-    expect(mounted.current.hasCheckedForUpdate).toBe(true)
+    expect(mounted.current.update).not.toBeUndefined()
     expect(mounted.current.update).toEqual({ version: '0.3.2' })
   })
 
@@ -167,7 +167,7 @@ describe.sequential('useAppUpdater', () => {
     expect(mounted.current.phase).toBe('latest')
   })
 
-  it('prepares an update once without relaunching and keeps the compatibility action', async () => {
+  it('prepares concurrent update requests once without relaunching', async () => {
     backendMocks.checkForAppUpdate.mockResolvedValue({ version: '0.3.2' })
     const prepareDeferred = createDeferred<void>()
     backendMocks.prepareAppUpdate.mockReturnValue(prepareDeferred.promise)
@@ -180,7 +180,7 @@ describe.sequential('useAppUpdater', () => {
     let first!: Promise<void>
     let second!: Promise<void>
     act(() => {
-      first = mounted.current.installUpdate()
+      first = mounted.current.prepareUpdate()
       second = mounted.current.prepareUpdate()
     })
 

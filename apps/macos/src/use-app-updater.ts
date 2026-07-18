@@ -219,8 +219,9 @@ export function useAppUpdater() {
     void runCheck(true).catch(() => undefined)
   }, [currentVersion, hasLoadedCurrentVersion, preferences.autoCheck, runCheck])
 
-  const isCheckingForUpdate = phase === 'checking'
-  const isInstallingUpdate = phase === 'preparing' || phase === 'relaunching'
+  const isUpdateBusy = phase === 'checking'
+    || phase === 'preparing'
+    || phase === 'relaunching'
 
   return {
     currentVersion,
@@ -228,16 +229,11 @@ export function useAppUpdater() {
     phase,
     preferences,
     error,
-    hasCheckedForUpdate: update !== undefined,
-    updateError: error,
-    isCheckingForUpdate,
-    isInstallingUpdate,
-    isUpdateBusy: isCheckingForUpdate || isInstallingUpdate,
+    isUpdateBusy,
     setAutoCheck,
     setAutoDownload,
     checkForUpdate,
     prepareUpdate,
     relaunchToUpdate,
-    installUpdate: prepareUpdate,
   }
 }
