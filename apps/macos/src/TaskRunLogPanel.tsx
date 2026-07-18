@@ -1,5 +1,5 @@
 import { ChevronDown, RotateCcw } from 'lucide-react'
-import { useId, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { listTaskLogs, type TaskLogView } from './backend-api'
 
@@ -15,12 +15,16 @@ const logLevelTranslationKeys: Record<string, string> = {
   warning: 'taskQueue.logs.level.warning',
 }
 
+const logPollIntervalMs = 3_000
+const terminalLogStages = new Set(['已完成', '部分成功', '执行失败', '用户取消'])
+
 function TaskRunLogPanel({ runId, loadLogs = listTaskLogs }: TaskRunLogPanelProps) {
   const { t, i18n } = useTranslation('tasks')
   const [isOpen, setIsOpen] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [loadError, setLoadError] = useState(false)
   const [logs, setLogs] = useState<TaskLogView[] | null>(null)
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const regionId = useId()
   const toggleId = `${regionId}-toggle`
   const numberLocale = i18n.resolvedLanguage ?? i18n.language
@@ -29,24 +33,42 @@ function TaskRunLogPanel({ runId, loadLogs = listTaskLogs }: TaskRunLogPanelProp
     timeStyle: 'medium',
   })
 
-  const load = async () => {
-    setIsLoading(true)
-    setLoadError(false)
-    try {
-      setLogs(await loadLogs(runId))
-    } catch {
-      setLoadError(true)
-    } finally {
-      setIsLoading(false)
+  useEffect(() => {
+    if (!isOpen) return
+
+    let isCurrent = true
+    let pollTimer: ReturnType<typeof setTimeout> | undefined
+    let isInitialLoad = true
+
+    const load = async () => {
+      if (!isCurrent) return
+      if (isInitialLoad) setIsLoading(true)
+      setLoadError(false)
+      try {
+        const nextLogs = await loadLogs(runId)
+        if (!isCurrent) return
+
+        setLogs(nextLogs)
+        isInitialLoad = false
+        if (!hasTerminalLog(nextLogs)) {
+          pollTimer = setTimeout(() => void load(), logPollIntervalMs)
+        }
+      } catch {
+        if (isCurrent) setLoadError(true)
+      } finally {
+        if (isCurrent) setIsLoading(false)
+      }
     }
-  }
+
+    void load()
+    return () => {
+      isCurrent = false
+      if (pollTimer) clearTimeout(pollTimer)
+    }
+  }, [isOpen, loadAttempt, loadLogs, runId])
 
   const toggle = () => {
-    const nextOpen = !isOpen
-    setIsOpen(nextOpen)
-    if (nextOpen && logs === null && !isLoading) {
-      void load()
-    }
+    setIsOpen((open) => !open)
   }
 
   return (
@@ -75,7 +97,11 @@ function TaskRunLogPanel({ runId, loadLogs = listTaskLogs }: TaskRunLogPanelProp
           ) : loadError ? (
             <div className="task-run-logs__state task-run-logs__state--error" role="alert">
               <p>{t('taskQueue.logs.error')}</p>
-              <button className="ghost-button" type="button" onClick={() => void load()}>
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+              >
                 <RotateCcw aria-hidden="true" size={14} />
                 {t('taskQueue.logs.retry')}
               </button>
@@ -111,6 +137,12 @@ function TaskRunLogPanel({ runId, loadLogs = listTaskLogs }: TaskRunLogPanelProp
       ) : null}
     </div>
   )
+}
+
+function hasTerminalLog(logs: TaskLogView[]) {
+  const latestLog = logs.at(-1)
+  return latestLog?.level === 'error'
+    || (latestLog ? terminalLogStages.has(latestLog.stage) : false)
 }
 
 function formatSafeDetails(value: unknown) {

@@ -40,6 +40,7 @@ afterEach(() => {
     act(() => mounted.root.unmount())
     mounted.container.remove()
   }
+  vi.useRealTimers()
 })
 
 describe('TaskRunLogPanel', () => {
@@ -89,5 +90,119 @@ describe('TaskRunLogPanel', () => {
 
     expect(loader).toHaveBeenCalledTimes(2)
     expect(mounted.container.textContent).toContain('这次运行还没有日志')
+  })
+
+  it('折叠后再次展开时重新加载当前运行的日志', async () => {
+    const loader = vi.fn()
+      .mockResolvedValueOnce([{
+        id: 'log-1',
+        task_run_id: 'run-2',
+        stage: 'fetching',
+        level: 'info',
+        message: '开始采集',
+        safe_details_json: null,
+        created_at: '2026-07-17T08:00:20Z',
+      } satisfies TaskLogView])
+      .mockResolvedValueOnce([{
+        id: 'log-2',
+        task_run_id: 'run-2',
+        stage: '已完成',
+        level: 'info',
+        message: '采集完成',
+        safe_details_json: null,
+        created_at: '2026-07-17T08:01:20Z',
+      } satisfies TaskLogView])
+    const mounted = mountPanel(loader)
+    const toggle = mounted.container.querySelector<HTMLButtonElement>('button')
+
+    await act(async () => toggle?.click())
+
+    expect(mounted.container.textContent).toContain('开始采集')
+
+    await act(async () => toggle?.click())
+    await act(async () => toggle?.click())
+
+    expect(loader).toHaveBeenCalledTimes(2)
+    expect(loader).toHaveBeenLastCalledWith('run-2')
+    expect(mounted.container.textContent).toContain('采集完成')
+    expect(mounted.container.textContent).not.toContain('开始采集')
+  })
+
+  it('展开运行日志时定期刷新并在读取到终态日志后停止', async () => {
+    vi.useFakeTimers()
+    const loader = vi.fn()
+      .mockResolvedValueOnce([{
+        id: 'log-1',
+        task_run_id: 'run-2',
+        stage: '执行采集',
+        level: 'info',
+        message: '正在采集',
+        safe_details_json: null,
+        created_at: '2026-07-17T08:00:20Z',
+      } satisfies TaskLogView])
+      .mockResolvedValueOnce([{
+        id: 'log-2',
+        task_run_id: 'run-2',
+        stage: '已完成',
+        level: 'info',
+        message: '采集完成',
+        safe_details_json: null,
+        created_at: '2026-07-17T08:01:20Z',
+      } satisfies TaskLogView])
+    const mounted = mountPanel(loader)
+    const toggle = mounted.container.querySelector<HTMLButtonElement>('button')
+
+    await act(async () => toggle?.click())
+    expect(loader).toHaveBeenCalledTimes(1)
+
+    await act(async () => vi.advanceTimersByTimeAsync(3_000))
+    expect(loader).toHaveBeenCalledTimes(2)
+    expect(mounted.container.textContent).toContain('采集完成')
+
+    await act(async () => vi.advanceTimersByTimeAsync(9_000))
+    expect(loader).toHaveBeenCalledTimes(2)
+  })
+
+  it('忽略折叠前发起但在重新展开后才返回的过期请求', async () => {
+    let resolveFirst!: (logs: TaskLogView[]) => void
+    let resolveSecond!: (logs: TaskLogView[]) => void
+    const firstRequest = new Promise<TaskLogView[]>((resolve) => {
+      resolveFirst = resolve
+    })
+    const secondRequest = new Promise<TaskLogView[]>((resolve) => {
+      resolveSecond = resolve
+    })
+    const loader = vi.fn()
+      .mockReturnValueOnce(firstRequest)
+      .mockReturnValueOnce(secondRequest)
+    const mounted = mountPanel(loader)
+    const toggle = mounted.container.querySelector<HTMLButtonElement>('button')
+
+    act(() => toggle?.click())
+    act(() => toggle?.click())
+    act(() => toggle?.click())
+
+    await act(async () => resolveSecond([{
+      id: 'log-current',
+      task_run_id: 'run-2',
+      stage: '已完成',
+      level: 'info',
+      message: '最新日志',
+      safe_details_json: null,
+      created_at: '2026-07-17T08:01:20Z',
+    }]))
+    await act(async () => resolveFirst([{
+      id: 'log-stale',
+      task_run_id: 'run-2',
+      stage: '执行采集',
+      level: 'info',
+      message: '过期日志',
+      safe_details_json: null,
+      created_at: '2026-07-17T08:00:20Z',
+    }]))
+
+    expect(loader).toHaveBeenCalledTimes(2)
+    expect(mounted.container.textContent).toContain('最新日志')
+    expect(mounted.container.textContent).not.toContain('过期日志')
   })
 })
