@@ -167,6 +167,8 @@ const collection: TranslationBundle = {
     'message.regionNotVerified': '国家/地区尚未验证',
     'message.timeRangeRequired': '时间范围不能为空',
     'message.timeRangeCapabilityUnavailable': '无法读取当前平台的时间范围，请检查后端连接后重试',
+    'message.pricingRateLimited': '实时计价请求过于频繁，请稍后重试',
+    'message.pricingFailed': '实时计价或额度预检未完成，请重试',
     'message.unknown': '计划校验未通过，请检查参数后重试。',
   },
   'en-US': {
@@ -335,6 +337,8 @@ const collection: TranslationBundle = {
     'message.regionNotVerified': 'The country or region has not been verified',
     'message.timeRangeRequired': 'The time range is required',
     'message.timeRangeCapabilityUnavailable': 'Could not load this platform’s time ranges. Check the backend connection and try again.',
+    'message.pricingRateLimited': 'Live pricing is rate-limited. Try again shortly.',
+    'message.pricingFailed': 'Live pricing or the quota preflight did not complete. Try again.',
     'message.unknown': 'Plan validation failed. Check the parameters and try again.',
   },
 }

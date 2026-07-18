@@ -707,6 +707,10 @@ const dynamicPlanMessageTranslationKeys: Array<[RegExp, string]> = [
   [/^time_range 不能为空$/, 'message.timeRangeRequired'],
 ]
 
+const dynamicPricingMessageTranslationKeys: Array<[RegExp, string]> = [
+  [/(?:HTTP|code) 429|请求过于频繁/, 'message.pricingRateLimited'],
+]
+
 function localizedPlanStatus(t: CollectionTranslator, status: RuntimeCollectionPlan['status']) {
   return t(planStatusTranslationKeys[status] ?? 'status.unknown', { defaultValue: status })
 }
@@ -718,6 +722,15 @@ function localizePlanMessage(t: CollectionTranslator, message: string | undefine
   const dynamicKey = dynamicPlanMessageTranslationKeys.find(([pattern]) => pattern.test(message))?.[1]
   if (dynamicKey) return t(dynamicKey)
   return /[^\p{ASCII}]/u.test(message) ? t('message.unknown') : message
+}
+
+function localizePricingMessage(t: CollectionTranslator, message: string | undefined) {
+  if (!message) return ''
+  const key = planMessageTranslationKeys[message]
+  if (key) return t(key)
+  const dynamicKey = dynamicPricingMessageTranslationKeys
+    .find(([pattern]) => pattern.test(message))?.[1]
+  return dynamicKey ? t(dynamicKey) : t('message.pricingFailed')
 }
 
 function localizeActionMessage(t: CollectionTranslator, message: string) {
@@ -765,7 +778,7 @@ function confirmationBlocker(
     return localizePlanMessage(t, plan.missing[0]) || t('blocker.validationFailed')
   }
   if (plan.pricingReady !== true) {
-    return localizePlanMessage(t, plan.pricingBlocker) || t('blocker.pricingNotReady')
+    return localizePricingMessage(t, plan.pricingBlocker) || t('blocker.pricingNotReady')
   }
   if (plan.status === '已排队' || plan.status === '运行中') return undefined
   if (plan.status !== '等待确认') {

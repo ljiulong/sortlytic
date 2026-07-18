@@ -172,6 +172,28 @@ describe('CollectionPlanPreview', () => {
     expect(markup).toMatch(/<button[^>]*disabled=""/)
   })
 
+  it('实时计价被限流时不得误报成计划校验未通过', () => {
+    const markup = renderToStaticMarkup(
+      createElement(CollectionPlanPreview, {
+        actionMessage: '等待确认',
+        isBusy: false,
+        onConfirmPlan: vi.fn(),
+        plan: {
+          ...draftPlan,
+          taskId: 'task-1',
+          planId: 'plan-1',
+          validationStatus: 'valid',
+          pricingReady: false,
+          pricingBlocker: 'TikHub 请求失败，HTTP 429：请求过于频繁',
+        },
+      }),
+    )
+
+    expect(markup).toContain('暂不能运行：实时计价请求过于频繁，请稍后重试')
+    expect(markup).not.toContain('计划校验未通过')
+    expect(markup).toMatch(/<button[^>]*disabled=""/)
+  })
+
   it('计划和实时计价均有效时允许确认运行', () => {
     const markup = renderToStaticMarkup(
       createElement(CollectionPlanPreview, {
