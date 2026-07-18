@@ -58,7 +58,7 @@ Use **Run workflow** and set `rebuild_tag` only to an existing `app-vX.Y.Z` tag.
 
 ### In-app updater steps and signing boundary
 
-In a packaged Sortlytic app, open **Settings → Automatic Updates**, choose **Check for Updates**, review the version and Release notes, then choose **Download and Restart**. The Tauri updater checks the configured signed manifest, downloads and installs the signed artifact, and relaunches the app. Browser preview does not have updater permission.
+In a packaged Sortlytic app, open **Settings → About Sortlytic**, choose **Check for Updates**, and review the version and Release notes. Choose **Download and install** to verify and prepare the signed artifact. When it is ready, choose **Restart and update**; the updater never restarts the app automatically. Browser preview does not have updater permission.
 
 The current workflow configures Tauri updater signing but does not configure an Apple Developer ID certificate or notarization credentials. Updater signatures authenticate update artifacts; they do not replace Apple code signing or notarization, so Gatekeeper may still warn about a browser-downloaded app. Use only the official Sortlytic Release and the DMG matching the Mac architecture. If macOS blocks the verified app, follow the targeted quarantine-removal guidance in the root README; do not disable Gatekeeper system-wide.
 

@@ -43,7 +43,7 @@ English · <a href="README-zh.md">中文</a>
 |---|---|
 | Multi-platform collection | Combines keyword search, item details, account profiles, account posts, and comments across TikTok, Douyin, and Xiaohongshu. |
 | Controlled task execution | Checks live endpoint quotes, free credit, paid balance, request limits, record limits, and the task budget before and during collection. |
-| Natural-language planning | Converts Chinese research intent into a validated collection plan through the current local rule parser and records its runtime snapshot. |
+| Natural-language planning | Sends Chinese research intent through the active, tested model profile and prompt version, then validates the returned `collection_plan_v3` Schema and business rules before saving the plan and runtime snapshot. |
 | Prompt governance | Stores prompt templates and versions, binds output schemas, and blocks activation when built-in regression cases fail. |
 | Local-first security | Keeps workspace data in local SQLite storage and stores TikHub and AI API profiles in a workspace-private JSON registry. |
 | Auditable delivery | Builds report snapshots, validates export integrity, and writes structured Excel workbooks and PDF reports with hashes and job history. |
@@ -132,9 +132,9 @@ Start the first collection with 10–50 records. This makes it easier to verify 
 
 ### Configure a model provider (optional)
 
-Open **Settings → Configure AI API** to store OpenAI, Anthropic, Gemini, custom OpenAI-compatible, or Ollama profiles. Select the API format, fill in the Base URL when required, enter the default model ID and API key, then choose **Save and Test**. Ollama may be saved without a key. The dialog supports multiple profiles, including multiple accounts or endpoints for the same provider, and lets you switch the current profile. Keys are stored in the same workspace-private JSON registry and can be retained by leaving the key field empty while editing.
+Open **Settings → Configure AI API** to store OpenAI, Anthropic, Gemini, custom OpenAI-compatible, or Ollama profiles. Select the API format, fill in the Base URL when required, enter the default model ID and API key, then choose **Save and Test**. The test sends a minimal real model request and requires the closed structured result `{"ok":true}` before the profile can become current. Ollama may be saved without a key. Official provider types use their official HTTPS hosts; third-party OpenAI-compatible gateways must use the custom provider type and HTTPS. Local Ollama may use HTTP only on a loopback address. A saved key can be retained while editing other fields, but changing the provider or URL authority requires entering the key again.
 
-This configuration is optional in the current MVP. AI profile testing validates only the protocol, address, model, and key requirements; it does not call the model provider. Natural-language planning still uses `local-rule-engine/rule-parser-v1`; provider-backed plan generation and real model inference are not connected yet.
+AI configuration is optional for form-based planning and required for natural-language planning and prompt regression. The active prompt content, version, output Schema, and evidence constraints are sent to the selected model and recorded in the runtime snapshot. Sortlytic validates the raw model JSON against the closed `collection_plan_v3` contract locally, applies business and endpoint rules, and keeps invalid output in review state instead of changing the task scope or allowing execution.
 
 ### Create and confirm a collection plan
 
@@ -143,7 +143,7 @@ Open **Workbench → Collection Builder** and choose an entry method:
 | Method | When to use it | Required review |
 |---|---|---|
 | Form | You already know the platform, data types, country or region, keyword, optional audience filters, record limit, and budget. | Confirm every field before generating the plan. |
-| Natural language | You want to describe the research goal in Chinese and let the local parser structure it. | Check inferred platforms, data types, filters, missing conditions, record limits, and budget. |
+| Natural language | You want to describe the research goal in Chinese and let the active model and prompt version structure it. | Check inferred platforms, data types, filters, missing conditions, record limits, budget, and model evidence. |
 
 The form supports TikTok, Douyin, and Xiaohongshu. Select one or more output types: keyword-search accounts, item or note authors, public account profiles, accounts owning collected posts, and comment users. Sortlytic uses the keyword as the entry point and adds the required downstream steps automatically; dependency-only search rows do not count toward the output limit.
 
@@ -192,11 +192,12 @@ The current PDF writer produces a short summary that points readers to the workb
 
 ### Update the app
 
-Packaged releases can update from **Settings → Automatic Updates**:
+Packaged releases can update from **Settings → About Sortlytic**:
 
 1. Select **Check for Updates**.
 2. Review the version number and release notes.
-3. Select **Download and Restart**. Sortlytic verifies the Tauri updater artifact signature, installs the update, and relaunches.
+3. Select **Download and install**. Sortlytic verifies the Tauri updater artifact signature and prepares the installed update without restarting the app.
+4. When the update is ready, select **Restart and update**. Sortlytic never restarts automatically.
 
 Browser preview does not have update permission. Apple Developer ID signing and notarization are separate from updater signature verification and still need to be added to the release workflow.
 
@@ -393,7 +394,7 @@ If `semantic-release` finds no release-worthy commit, the build matrix is skippe
 
 #### Updater verification and in-app installation
 
-The Tauri updater uses the public key and `latest.json` endpoint configured in `apps/macos/src-tauri/tauri.conf.json`. The release finalization check requires a non-empty signature for every platform entry. In a packaged Sortlytic app, open **Settings → Automatic Updates**, select **Check for Updates**, review the version and Release notes, then select **Download and Restart**. The updater downloads and installs the signed artifact and relaunches the app. Browser preview does not have the updater permission; Apple Developer ID signing and notarization are a separate macOS distribution concern.
+The Tauri updater uses the public key and `latest.json` endpoint configured in `apps/macos/src-tauri/tauri.conf.json`. The release finalization check requires a non-empty signature for every platform entry. In a packaged Sortlytic app, open **Settings → About Sortlytic**, select **Check for Updates**, and review the version and Release notes. Select **Download and install** to verify and prepare the signed artifact, then select **Restart and update** when it is ready. The updater never restarts the app automatically. Browser preview does not have updater permission; Apple Developer ID signing and notarization are a separate macOS distribution concern.
 
 #### Recovery rebuilds with `rebuild_tag`
 
