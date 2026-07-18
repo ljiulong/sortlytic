@@ -1,6 +1,8 @@
 use std::path::Path;
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
+use reqwest::header::{HeaderMap, RETRY_AFTER};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -10,6 +12,10 @@ use super::{
 };
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 use crate::secrets::read_secret_for_backend;
+
+const PRICE_MAX_ATTEMPTS: usize = 3;
+const PRICE_RETRY_BASE_DELAY_MS: u64 = 1_000;
+const PRICE_RETRY_MAX_DELAY_MS: u64 = 5_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TikhubPriceQuote {
@@ -120,25 +126,81 @@ fn calculate_tikhub_price(
     .query_pairs_mut()
     .append_pair("endpoint", endpoint)
     .append_pair("request_per_day", &request_per_day.to_string());
-  let response = client
-    .get(url)
-    .bearer_auth(token)
-    .send()
-    .map_err(reqwest_request_error)?;
-  let status = response.status();
-  let body = read_limited_response_body(response)?;
-  if !status.is_success() {
-    return Err(error_for_status(status, safe_body_summary(&body)));
+  for attempt in 0..PRICE_MAX_ATTEMPTS {
+    let response = client
+      .get(url.clone())
+      .bearer_auth(token)
+      .send()
+      .map_err(reqwest_request_error)?;
+    let status = response.status();
+    let retry_after = retry_after_delay(response.headers());
+    let body = read_limited_response_body(response)?;
+    if !status.is_success() {
+      let error = error_for_status(status, safe_body_summary(&body));
+      if should_retry_rate_limit(&error, attempt) {
+        std::thread::sleep(price_retry_delay(attempt, retry_after));
+        continue;
+      }
+      return Err(with_retry_attempts(error, attempt + 1));
+    }
+    let response = serde_json::from_str(&body).map_err(|error| {
+      AppError::new(
+        AppErrorCode::TikhubRequestError,
+        format!("TikHub 计价响应不是合法 JSON：{error}"),
+        AppErrorStage::Collection,
+        false,
+      )
+    })?;
+    match parse_price_quote(endpoint, request_per_day, response) {
+      Ok(quote) => return Ok(quote),
+      Err(error) if should_retry_rate_limit(&error, attempt) => {
+        std::thread::sleep(price_retry_delay(attempt, retry_after));
+      }
+      Err(error) => return Err(with_retry_attempts(error, attempt + 1)),
+    }
   }
-  let response = serde_json::from_str(&body).map_err(|error| {
-    AppError::new(
-      AppErrorCode::TikhubRequestError,
-      format!("TikHub 计价响应不是合法 JSON：{error}"),
-      AppErrorStage::Collection,
-      false,
+  unreachable!("price retry loop always returns on its final attempt")
+}
+
+fn should_retry_rate_limit(error: &AppError, attempt: usize) -> bool {
+  error.code == AppErrorCode::TikhubRateLimit && attempt + 1 < PRICE_MAX_ATTEMPTS
+}
+
+fn price_retry_delay(attempt: usize, retry_after: Option<Duration>) -> Duration {
+  retry_after.unwrap_or_else(|| {
+    let multiplier = 1_u64 << attempt.min(8);
+    Duration::from_millis(
+      PRICE_RETRY_BASE_DELAY_MS
+        .saturating_mul(multiplier)
+        .min(PRICE_RETRY_MAX_DELAY_MS),
     )
-  })?;
-  parse_price_quote(endpoint, request_per_day, response)
+  })
+}
+
+fn retry_after_delay(headers: &HeaderMap) -> Option<Duration> {
+  let value = headers.get(RETRY_AFTER)?.to_str().ok()?.trim();
+  if let Ok(seconds) = value.parse::<u64>() {
+    return Some(Duration::from_millis(
+      seconds.saturating_mul(1_000).min(PRICE_RETRY_MAX_DELAY_MS),
+    ));
+  }
+  let retry_at = DateTime::parse_from_rfc2822(value)
+    .ok()?
+    .with_timezone(&Utc);
+  let milliseconds = retry_at
+    .signed_duration_since(Utc::now())
+    .num_milliseconds()
+    .max(0) as u64;
+  Some(Duration::from_millis(
+    milliseconds.min(PRICE_RETRY_MAX_DELAY_MS),
+  ))
+}
+
+fn with_retry_attempts(error: AppError, attempts: usize) -> AppError {
+  if error.code == AppErrorCode::TikhubRateLimit {
+    return error.with_safe_detail("retry_attempts", attempts.to_string());
+  }
+  error
 }
 
 pub(super) fn parse_account_quota(user_info: &Value) -> AccountQuota {
@@ -261,7 +323,40 @@ fn business_response_error(code: i64) -> AppError {
 
 #[cfg(test)]
 mod tests {
+  use std::io::{Read, Write};
+  use std::net::TcpListener;
+  use std::thread;
+
   use super::*;
+
+  fn price_server(
+    responses: Vec<(&'static str, &'static str, &'static str)>,
+  ) -> (String, thread::JoinHandle<usize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("test server should bind");
+    let address = listener
+      .local_addr()
+      .expect("test server address should resolve");
+    let server = thread::spawn(move || {
+      let mut request_count = 0;
+      for (status, retry_after, body) in responses {
+        let (mut stream, _) = listener.accept().expect("test server should accept");
+        let mut request = [0_u8; 4096];
+        let bytes_read = stream
+          .read(&mut request)
+          .expect("request should be readable");
+        assert!(bytes_read > 0, "request should not be empty");
+        request_count += 1;
+        write!(
+          stream,
+          "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{retry_after}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+          body.len(),
+        )
+        .expect("response should be writable");
+      }
+      request_count
+    });
+    (format!("http://{address}"), server)
+  }
 
   #[test]
   fn account_quota_includes_recharge_free_and_available_credit() {
@@ -331,5 +426,89 @@ mod tests {
     )
     .expect_err("未知价格不得被当作零成本");
     assert_eq!(error.code, AppErrorCode::CostLimitError);
+  }
+
+  #[test]
+  fn realtime_price_quote_retries_http_429_then_returns_success() {
+    let (base_url, server) = price_server(vec![
+      (
+        "429 Too Many Requests",
+        "Retry-After: 0\r\n",
+        r#"{"code":429}"#,
+      ),
+      (
+        "200 OK",
+        "",
+        r#"{"code":200,"data":{"total_price":0.01,"currency":"USD"}}"#,
+      ),
+    ]);
+    let _override =
+      super::super::test_support::override_tikhub_base_url_for_current_test(base_url.clone());
+
+    let quote = calculate_tikhub_price(
+      &base_url,
+      "tk-retry-test-token",
+      "/api/v1/tiktok/app/v3/fetch_video_comments",
+      1,
+    )
+    .expect("HTTP 429 should retry and recover");
+
+    assert_eq!(quote.total_price, 0.01);
+    assert_eq!(server.join().expect("test server should finish"), 2);
+  }
+
+  #[test]
+  fn realtime_price_quote_stops_after_bounded_rate_limit_retries() {
+    let limited_response = (
+      "429 Too Many Requests",
+      "Retry-After: 0\r\n",
+      r#"{"code":429}"#,
+    );
+    let (base_url, server) = price_server(vec![limited_response; PRICE_MAX_ATTEMPTS]);
+    let _override =
+      super::super::test_support::override_tikhub_base_url_for_current_test(base_url.clone());
+
+    let error = calculate_tikhub_price(
+      &base_url,
+      "tk-bounded-retry-test-token",
+      "/api/v1/tiktok/app/v3/fetch_video_comments",
+      1,
+    )
+    .expect_err("persistent HTTP 429 must remain a bounded failure");
+
+    assert_eq!(error.code, AppErrorCode::TikhubRateLimit);
+    assert_eq!(
+      error.safe_details.get("retry_attempts").map(String::as_str),
+      Some("3")
+    );
+    assert_eq!(
+      server.join().expect("test server should finish"),
+      PRICE_MAX_ATTEMPTS
+    );
+  }
+
+  #[test]
+  fn realtime_price_quote_retries_business_429_then_returns_success() {
+    let (base_url, server) = price_server(vec![
+      ("200 OK", "Retry-After: 0\r\n", r#"{"code":429}"#),
+      (
+        "200 OK",
+        "",
+        r#"{"code":200,"data":{"total_price":0.01,"currency":"USD"}}"#,
+      ),
+    ]);
+    let _override =
+      super::super::test_support::override_tikhub_base_url_for_current_test(base_url.clone());
+
+    let quote = calculate_tikhub_price(
+      &base_url,
+      "tk-business-retry-test-token",
+      "/api/v1/tiktok/app/v3/fetch_video_comments",
+      1,
+    )
+    .expect("business code 429 should retry and recover");
+
+    assert_eq!(quote.total_price, 0.01);
+    assert_eq!(server.join().expect("test server should finish"), 2);
   }
 }
