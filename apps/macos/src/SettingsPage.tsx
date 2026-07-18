@@ -194,7 +194,7 @@ const promptSettingsCopy = {
     saved: '草稿 v{{version}} 已保存，确认内容后再激活。',
     activated: 'v{{version}} 已通过回归校验并激活。',
     saveError: '新版本保存失败，请检查正文和版本说明。',
-    activateError: '激活失败，提示词回归样例可能未通过。',
+    activateError: '激活失败，已同步回归结果。请修改内容并保存为新版本后再试。',
     status: {
       active: '已启用',
       draft: '草稿',
@@ -227,7 +227,7 @@ const promptSettingsCopy = {
     saved: 'Draft v{{version}} was saved. Review it before activation.',
     activated: 'v{{version}} passed regression checks and is now active.',
     saveError: 'The new version could not be saved. Check the content and version note.',
-    activateError: 'Activation failed. Prompt regression cases may not have passed.',
+    activateError: 'Activation failed and regression results were refreshed. Edit the prompt and save a new version before trying again.',
     status: {
       active: 'Active',
       draft: 'Draft',
@@ -367,7 +367,7 @@ function PromptSettings() {
   }
 
   async function activateVersion() {
-    if (!selectedVersion || selectedVersion.status === 'active' || isActivating) return
+    if (!template || !selectedVersion || selectedVersion.status !== 'draft' || isActivating) return
     setIsActivating(true)
     setFeedback('')
     try {
@@ -380,6 +380,19 @@ function PromptSettings() {
       setContent(activated.content)
       setFeedback(interpolate(copy.activated, { version: activated.version }))
     } catch {
+      try {
+        const promptVersions = await listPromptVersions(template.id)
+        const refreshedSelection = promptVersions.find(
+          (version) => version.id === selectedVersion.id,
+        ) ?? promptVersions.find((version) => version.status === 'active')
+          ?? promptVersions[0]
+        setVersions(promptVersions)
+        setSelectedVersionId(refreshedSelection?.id ?? '')
+        setContent(refreshedSelection?.content ?? '')
+        setPhase(promptVersions.length > 0 ? 'ready' : 'empty')
+      } catch {
+        // 保留当前页面数据，激活失败反馈仍需对用户可见。
+      }
       setFeedback(copy.activateError)
     } finally {
       setIsActivating(false)
@@ -474,7 +487,7 @@ function PromptSettings() {
               <button
                 className="primary-button"
                 type="button"
-                disabled={isActivating || !selectedVersion || selectedVersion.status === 'active'}
+                disabled={isActivating || !selectedVersion || selectedVersion.status !== 'draft'}
                 onClick={() => void activateVersion()}
               >
                 {isActivating ? copy.activating : copy.activate}

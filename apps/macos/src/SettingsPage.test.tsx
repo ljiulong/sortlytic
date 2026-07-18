@@ -405,4 +405,47 @@ describe('SettingsPage AI 提示词卡片', () => {
       .toHaveBeenCalledWith(draftVersion.id)
     expect(mounted.container.textContent).toContain('当前启用 v4')
   })
+
+  it('激活回归失败后同步后端状态，并禁止原版本无修改重复激活', async () => {
+    const draftVersion = {
+      ...activePromptVersion,
+      id: 'prompt-version-4',
+      version: 4,
+      status: 'draft',
+      activated_at: null,
+    }
+    const failedVersion = {
+      ...draftVersion,
+      status: 'failed_regression',
+    }
+    promptApiMocks.listPromptVersions
+      .mockResolvedValueOnce([draftVersion])
+      .mockResolvedValueOnce([activePromptVersion, failedVersion])
+    promptApiMocks.activatePromptVersion.mockRejectedValue(
+      new Error('提示词回归样例未通过'),
+    )
+
+    const mounted = mountSettingsPage()
+    await flushPromptSettings()
+    const activateButton = Array.from(mounted.container.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('激活当前草稿'))
+    expect(activateButton).toBeDefined()
+    expect(activateButton?.disabled).toBe(false)
+
+    await act(async () => activateButton?.click())
+    await flushPromptSettings()
+
+    expect(promptApiMocks.activatePromptVersion)
+      .toHaveBeenCalledWith(draftVersion.id)
+    expect(promptApiMocks.listPromptVersions).toHaveBeenCalledTimes(2)
+    expect(mounted.container.querySelector('[data-prompt-status]')?.textContent)
+      .toContain('回归失败 v4')
+    expect(mounted.container.textContent).toContain(
+      '请修改内容并保存为新版本后再试',
+    )
+    expect(activateButton?.disabled).toBe(true)
+
+    act(() => activateButton?.click())
+    expect(promptApiMocks.activatePromptVersion).toHaveBeenCalledTimes(1)
+  })
 })
