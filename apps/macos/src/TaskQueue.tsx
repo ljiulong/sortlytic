@@ -115,10 +115,26 @@ function TaskQueue({
   const [draftName, setDraftName] = useState('')
   const [exportFormats, setExportFormats] = useState<Record<string, TaskExportInput['format']>>({})
   const numberLocale = i18n.resolvedLanguage ?? i18n.language
+  const showRawDiagnostics = numberLocale.toLowerCase().startsWith('zh')
   const runTimeFormatter = new Intl.DateTimeFormat(numberLocale, {
     dateStyle: 'medium',
     timeStyle: 'medium',
   })
+  const localizeRunStage = (code?: string, raw?: string | null) => {
+    const fallback = showRawDiagnostics && raw
+      ? raw
+      : String(t('taskQueue.diagnostics.unknownStage', { code: code ?? 'UNKNOWN_STAGE' }))
+    return code && code !== 'UNKNOWN_STAGE'
+      ? String(t(`taskQueue.diagnostics.stage.${code}`, { defaultValue: fallback }))
+      : fallback
+  }
+  const localizeRunError = (code: string | null | undefined, raw: string) => {
+    if (showRawDiagnostics) return raw
+    const fallback = String(t('taskQueue.diagnostics.unknownError', { code: code ?? 'UNKNOWN_ERROR' }))
+    return code
+      ? String(t(`taskQueue.diagnostics.error.${code}`, { defaultValue: fallback }))
+      : fallback
+  }
 
   const beginEditing = (task: TaskRow) => {
     setActiveMode({ taskId: task.id, type: 'edit' })
@@ -316,7 +332,10 @@ function TaskQueue({
                     <dl className="task-card__run-facts">
                       <div>
                         <dt>{t('taskQueue.currentStage')}</dt>
-                        <dd>{task.latestRun.currentStage ?? t('taskQueue.stagePending')}</dd>
+                        <dd>{localizeRunStage(
+                          task.latestRun.currentStageCode,
+                          task.latestRun.currentStage,
+                        )}</dd>
                       </div>
                       <div>
                         <dt>{t('taskQueue.startedAt')}</dt>
@@ -345,7 +364,10 @@ function TaskQueue({
                       {task.latestRun.errorMessage ? (
                         <div className="task-card__run-fact--error">
                           <dt>{t('taskQueue.errorMessage')}</dt>
-                          <dd>{task.latestRun.errorMessage}</dd>
+                          <dd>{localizeRunError(
+                            task.latestRun.errorCode,
+                            task.latestRun.errorMessage,
+                          )}</dd>
                         </div>
                       ) : null}
                       <div>

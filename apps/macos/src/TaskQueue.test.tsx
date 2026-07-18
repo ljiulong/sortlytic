@@ -144,6 +144,7 @@ describe('TaskQueue', () => {
         attemptNumber: 2,
         status: 'failed',
         currentStage: '持久化采集结果',
+        currentStageCode: 'PERSISTING_RESULTS',
         errorCode: 'TIKHUB_REQUEST_ERROR',
         errorMessage: 'TikHub 请求超时',
         retryable: true,
@@ -182,6 +183,54 @@ describe('TaskQueue', () => {
     expect(markup).not.toContain('自然语言')
     expect(markup).not.toContain('预计 3 次请求')
     expect(markup).not.toContain('搜索结果账号')
+
+    await appI18n.changeLanguage('zh-CN')
+  })
+
+  it('英文模式使用稳定代码翻译运行阶段和安全错误', async () => {
+    await appI18n.changeLanguage('en-US')
+    const markup = renderQueue([{
+      ...waitingTask,
+      name: 'Failed task',
+      status: '失败',
+      latestRun: {
+        id: 'run-english',
+        attemptNumber: 1,
+        status: 'failed',
+        currentStage: '持久化采集结果',
+        currentStageCode: 'PERSISTING_RESULTS',
+        errorCode: 'TIKHUB_REQUEST_ERROR',
+        errorMessage: 'TikHub 请求超时',
+        retryable: true,
+        startedAt: '2026-07-17T08:00:00Z',
+        endedAt: '2026-07-17T08:00:30Z',
+      },
+    }])
+
+    expect(markup).toContain('Saving collected results')
+    expect(markup).toContain('The TikHub request failed before completion.')
+    expect(markup).not.toContain('持久化采集结果')
+    expect(markup).not.toContain('TikHub 请求超时')
+
+    const unknownMarkup = renderQueue([{
+      ...waitingTask,
+      status: '失败',
+      latestRun: {
+        id: 'run-unknown',
+        attemptNumber: 1,
+        status: 'failed',
+        currentStage: '历史自定义阶段',
+        currentStageCode: 'UNKNOWN_STAGE',
+        errorCode: 'CUSTOM_FAILURE',
+        errorMessage: '历史中文错误',
+        retryable: false,
+        startedAt: '2026-07-17T08:00:00Z',
+      },
+    }])
+    expect(unknownMarkup).toContain('Unrecognized run stage (UNKNOWN_STAGE)')
+    expect(unknownMarkup).toContain('Use error code CUSTOM_FAILURE for diagnosis.')
+    expect(unknownMarkup).not.toContain('历史自定义阶段')
+    expect(unknownMarkup).not.toContain('历史中文错误')
 
     await appI18n.changeLanguage('zh-CN')
   })
