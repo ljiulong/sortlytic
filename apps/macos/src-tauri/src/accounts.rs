@@ -129,11 +129,14 @@ pub fn normalize_account(
       "/platform_user_id",
       "/sec_user_id",
       "/user_id",
+      "/userid",
       "/uid",
       "/author/sec_user_id",
       "/author/user_id",
+      "/author/userid",
       "/user/sec_user_id",
       "/user/user_id",
+      "/user/userid",
     ],
   );
   let account = first_text(
@@ -142,10 +145,13 @@ pub fn normalize_account(
       "/unique_id",
       "/account",
       "/username",
+      "/red_id",
       "/author/unique_id",
       "/author/username",
+      "/author/red_id",
       "/user/unique_id",
       "/user/username",
+      "/user/red_id",
     ],
   );
   let identity_key = platform_user_id

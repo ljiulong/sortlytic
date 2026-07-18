@@ -82,6 +82,28 @@ fn identity_prefers_platform_user_id_then_normalized_account() {
 }
 
 #[test]
+fn normalizes_xiaohongshu_app_v2_user_identity_fields() {
+  let account = normalize_account(
+    "xiaohongshu",
+    SourceKind::ContentAuthor,
+    &json!({
+      "id": "note-1",
+      "user": {
+        "userid": "user-1",
+        "red_id": "red-1",
+        "nickname": "作者一"
+      }
+    }),
+  )
+  .expect("小红书 App V2 的用户字段应归一化");
+
+  assert_eq!(account.identity_key, "id:user-1");
+  assert_eq!(account.platform_user_id.as_deref(), Some("user-1"));
+  assert_eq!(account.account.as_deref(), Some("red-1"));
+  assert_eq!(account.username.as_deref(), Some("作者一"));
+}
+
+#[test]
 fn explicit_gender_values_are_normalized_without_inference() {
   for (value, expected) in [
     (json!("男"), "male"),
