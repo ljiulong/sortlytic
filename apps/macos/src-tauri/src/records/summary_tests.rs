@@ -146,6 +146,23 @@ fn lists_paginated_results_from_the_latest_successful_run_only() {
       )
       .expect("task run should insert");
   }
+  connection
+    .execute(
+      "INSERT INTO collection_plan (
+        id, task_id, source, schema_version, plan_json, validation_status,
+        confirmed_by_user, created_at, updated_at
+      ) VALUES ('plan-latest', 'task-results', 'form_generated', 3,
+        '{\"age_range\":{\"min\":18,\"max\":35},\"gender_filter\":null}',
+        'valid', 1, ?1, ?1)",
+      params![now],
+    )
+    .expect("collection plan should insert");
+  connection
+    .execute(
+      "UPDATE task_run SET plan_id = 'plan-latest' WHERE id = 'run-latest'",
+      [],
+    )
+    .expect("latest run should reference its plan");
   for (id, run_id, username, output_included, created_at) in [
     ("old", "run-old", "旧运行", 1, "2026-07-17T01:00:00Z"),
     (
@@ -200,6 +217,8 @@ fn lists_paginated_results_from_the_latest_successful_run_only() {
   assert_eq!(page.total_count, 3);
   assert_eq!(page.offset, 1);
   assert_eq!(page.limit, 2);
+  assert!(page.age_filter_configured);
+  assert!(!page.gender_filter_configured);
   assert_eq!(
     page
       .items

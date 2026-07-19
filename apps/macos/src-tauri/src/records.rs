@@ -95,6 +95,8 @@ pub struct TaskResultsPageView {
   pub task_id: String,
   pub task_run_id: String,
   pub run_status: String,
+  pub age_filter_configured: bool,
+  pub gender_filter_configured: bool,
   pub total_count: i64,
   pub offset: i64,
   pub limit: i64,
@@ -168,13 +170,25 @@ pub fn list_task_results(
   let connection = open_workspace_database(root_path.as_ref().join(DATABASE_FILE_NAME))?;
   let latest_run = connection
     .query_row(
-      "SELECT run.id, run.status
+      "SELECT run.id, run.status,
+              CASE WHEN json_type(plan.plan_json, '$.age_range') = 'object' THEN 1 ELSE 0 END,
+              CASE WHEN json_type(plan.plan_json, '$.gender_filter') = 'array'
+                     AND json_array_length(plan.plan_json, '$.gender_filter') > 0
+                   THEN 1 ELSE 0 END
        FROM task_run AS run
+       LEFT JOIN collection_plan AS plan ON plan.id = run.plan_id
        WHERE run.task_id = ?1 AND run.status IN ('success', 'partial_success')
        ORDER BY COALESCE(run.ended_at, run.started_at) DESC, run.id DESC
        LIMIT 1",
       params![task_id],
-      |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+      |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, String>(1)?,
+          row.get::<_, i64>(2)? != 0,
+          row.get::<_, i64>(3)? != 0,
+        ))
+      },
     )
     .optional()
     .map_err(database_error)?
@@ -231,6 +245,8 @@ pub fn list_task_results(
     task_id,
     task_run_id: latest_run.0,
     run_status: latest_run.1,
+    age_filter_configured: latest_run.2,
+    gender_filter_configured: latest_run.3,
     total_count,
     offset,
     limit,
