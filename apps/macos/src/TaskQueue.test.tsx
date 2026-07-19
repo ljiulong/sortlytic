@@ -38,6 +38,7 @@ function mountQueue(
   onConfirmTask: (taskId: string) => Promise<unknown>,
   tasks: WorkbenchRuntimeData['tasks'] = [waitingTask],
   onExportTask: (input: TaskExportInput) => Promise<ExportJobView> = vi.fn(),
+  onDeleteTask: (taskId: string) => Promise<unknown> = vi.fn(),
 ) {
   const container = document.createElement('div')
   const root = createRoot(container)
@@ -50,7 +51,7 @@ function mountQueue(
     onUpdateTask: vi.fn(),
     onCancelTask: vi.fn(),
     onConfirmTask,
-    onDeleteTask: vi.fn(),
+    onDeleteTask,
     onExportTask,
   })))
   return mounted
@@ -216,6 +217,124 @@ describe('TaskQueue', () => {
     expect(confirmationForTaskAction('confirm-cancel').message).toContain('不会写入本地')
     expect(confirmationForTaskAction('confirm-delete').message).toContain('关联本地数据')
     expect(confirmationForTaskAction('confirm-delete').message).toContain('无法恢复')
+  })
+
+  it('全选只选择可删除任务，批量删除经过统一二次确认', async () => {
+    const deletableSuccess = {
+      ...waitingTask,
+      id: 'task-success',
+      name: '成功任务',
+      status: '成功' as const,
+      progress: 100,
+    }
+    const deletableCancelled = {
+      ...waitingTask,
+      id: 'task-cancelled',
+      name: '已取消任务',
+      status: '已取消' as const,
+    }
+    const queuedTask = {
+      ...waitingTask,
+      id: 'task-queued',
+      name: '已排队任务',
+      status: '已排队' as const,
+    }
+    const runningTask = {
+      ...waitingTask,
+      id: 'task-running',
+      name: '运行中任务',
+      status: '运行中' as const,
+    }
+    const onDeleteTask = vi.fn(async () => undefined)
+    const mounted = mountQueue(
+      vi.fn(async () => undefined),
+      [deletableSuccess, deletableCancelled, queuedTask, runningTask],
+      vi.fn(),
+      onDeleteTask,
+    )
+    const selectAll = mounted.container.querySelector<HTMLInputElement>(
+      'input[aria-label="选择全部可删除任务"]',
+    )
+
+    expect(selectAll).toBeTruthy()
+    act(() => selectAll?.click())
+
+    expect(mounted.container.querySelector<HTMLInputElement>(
+      'input[aria-label="选择任务 成功任务"]',
+    )?.checked).toBe(true)
+    expect(mounted.container.querySelector<HTMLInputElement>(
+      'input[aria-label="选择任务 已取消任务"]',
+    )?.checked).toBe(true)
+    expect(mounted.container.querySelector<HTMLInputElement>(
+      'input[aria-label="选择任务 已排队任务"]',
+    )?.disabled).toBe(true)
+    expect(mounted.container.querySelector<HTMLInputElement>(
+      'input[aria-label="选择任务 运行中任务"]',
+    )?.disabled).toBe(true)
+    expect(mounted.container.textContent).toContain('已选择 2 条任务')
+
+    const bulkDelete = mounted.container.querySelector<HTMLButtonElement>(
+      'button[aria-label="批量删除"]',
+    )
+    act(() => bulkDelete?.click())
+
+    expect(onDeleteTask).not.toHaveBeenCalled()
+    expect(mounted.container.textContent).toContain('将永久删除选中的 2 条任务及关联本地数据')
+
+    const confirmBulkDelete = mounted.container.querySelector<HTMLButtonElement>(
+      'button[aria-label="确认批量删除"]',
+    )
+    await act(async () => confirmBulkDelete?.click())
+
+    expect(onDeleteTask.mock.calls).toEqual([
+      [deletableSuccess.id],
+      [deletableCancelled.id],
+    ])
+    expect(onDeleteTask).not.toHaveBeenCalledWith(queuedTask.id)
+    expect(onDeleteTask).not.toHaveBeenCalledWith(runningTask.id)
+  })
+
+  it('批量删除部分失败时只保留失败任务并显示原因', async () => {
+    const successTask = {
+      ...waitingTask,
+      id: 'task-delete-success',
+      name: '可成功删除任务',
+      status: '成功' as const,
+    }
+    const failedTask = {
+      ...waitingTask,
+      id: 'task-delete-failed',
+      name: '删除失败任务',
+      status: '失败' as const,
+    }
+    const onDeleteTask = vi.fn(async (taskId: string) => {
+      if (taskId === failedTask.id) throw new Error('本地文件仍被占用')
+    })
+    const mounted = mountQueue(
+      vi.fn(async () => undefined),
+      [successTask, failedTask],
+      vi.fn(),
+      onDeleteTask,
+    )
+
+    act(() => mounted.container.querySelector<HTMLInputElement>(
+      'input[aria-label="选择全部可删除任务"]',
+    )?.click())
+    act(() => mounted.container.querySelector<HTMLButtonElement>(
+      'button[aria-label="批量删除"]',
+    )?.click())
+    await act(async () => mounted.container.querySelector<HTMLButtonElement>(
+      'button[aria-label="确认批量删除"]',
+    )?.click())
+
+    expect(mounted.container.querySelector('[role="alert"]')?.textContent)
+      .toContain('1 / 2 条失败：本地文件仍被占用')
+    expect(mounted.container.querySelector<HTMLInputElement>(
+      'input[aria-label="选择任务 可成功删除任务"]',
+    )?.checked).toBe(false)
+    expect(mounted.container.querySelector<HTMLInputElement>(
+      'input[aria-label="选择任务 删除失败任务"]',
+    )?.checked).toBe(true)
   })
 
   it('每条任务可选择 Excel 或 PDF，未完成任务不允许提前导出', () => {

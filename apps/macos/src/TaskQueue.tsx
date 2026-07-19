@@ -22,6 +22,11 @@ type TaskExportFeedback = {
   errorType?: 'export' | 'missing-path' | 'open'
   filePath?: string
 }
+type BulkDeleteFailure = {
+  failedCount: number
+  reason: string
+  totalCount: number
+}
 
 type TaskQueueProps = {
   tasks: TaskRow[]
@@ -123,10 +128,23 @@ function TaskQueue({
   const [exportFormats, setExportFormats] = useState<Record<string, TaskExportInput['format']>>({})
   const [exportFeedback, setExportFeedback] = useState<Record<string, TaskExportFeedback>>({})
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({})
+  const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([])
+  const [bulkDeleteConfirmationOpen, setBulkDeleteConfirmationOpen] = useState(false)
+  const [bulkDeleteFailure, setBulkDeleteFailure] = useState<BulkDeleteFailure>()
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false)
   const previewTask = previewTaskId
     ? tasks.find((task) => task.id === previewTaskId)
     : undefined
   const visibleTasks = previewTask ? [previewTask] : tasks
+  const deletableTaskIds = tasks
+    .filter((task) => capabilitiesForStatus(task.status).canDelete)
+    .map((task) => task.id)
+  const deletableTaskIdSet = new Set(deletableTaskIds)
+  const validSelectedTaskIds = selectedTaskIds.filter((taskId) => deletableTaskIdSet.has(taskId))
+  const allDeletableTasksSelected = deletableTaskIds.length > 0
+    && validSelectedTaskIds.length === deletableTaskIds.length
+  const someDeletableTasksSelected = validSelectedTaskIds.length > 0
+    && !allDeletableTasksSelected
   const numberLocale = i18n.resolvedLanguage ?? i18n.language
   const showRawDiagnostics = numberLocale.toLowerCase().startsWith('zh')
   const runTimeFormatter = new Intl.DateTimeFormat(numberLocale, {
@@ -178,6 +196,7 @@ function TaskQueue({
         await onCancelTask(action.taskId)
       } else {
         await onDeleteTask(action.taskId)
+        setSelectedTaskIds((taskIds) => taskIds.filter((taskId) => taskId !== action.taskId))
       }
       setActiveMode(undefined)
     } catch (error) {
@@ -239,6 +258,50 @@ function TaskQueue({
     }
   }
 
+  const toggleTaskSelection = (taskId: string) => {
+    setBulkDeleteFailure(undefined)
+    setSelectedTaskIds((taskIds) => taskIds.includes(taskId)
+      ? taskIds.filter((selectedTaskId) => selectedTaskId !== taskId)
+      : [...taskIds, taskId])
+  }
+
+  const toggleAllDeletableTasks = () => {
+    setBulkDeleteFailure(undefined)
+    setSelectedTaskIds(allDeletableTasksSelected ? [] : deletableTaskIds)
+  }
+
+  const confirmBulkDelete = async () => {
+    const taskIds = [...validSelectedTaskIds]
+    if (taskIds.length === 0) {
+      setBulkDeleteConfirmationOpen(false)
+      return
+    }
+
+    setIsBulkDeleting(true)
+    setBulkDeleteFailure(undefined)
+    const failedTaskIds: string[] = []
+    let firstFailureReason = ''
+    for (const taskId of taskIds) {
+      try {
+        await onDeleteTask(taskId)
+      } catch (error) {
+        failedTaskIds.push(taskId)
+        firstFailureReason ||= backendErrorMessage(error)
+      }
+    }
+    setSelectedTaskIds(failedTaskIds)
+    if (failedTaskIds.length > 0) {
+      setBulkDeleteFailure({
+        failedCount: failedTaskIds.length,
+        reason: firstFailureReason,
+        totalCount: taskIds.length,
+      })
+    } else {
+      setBulkDeleteConfirmationOpen(false)
+    }
+    setIsBulkDeleting(false)
+  }
+
   return (
     <section className="task-queue" aria-labelledby="task-queue-heading">
       <header className="task-queue__heading">
@@ -265,6 +328,79 @@ function TaskQueue({
           </span>
         )}
       </header>
+
+      {tasks.length > 0 && !previewTask ? (
+        <div
+          aria-label={t('taskQueue.bulkToolbarAriaLabel')}
+          className="task-queue__bulk-toolbar"
+          role="toolbar"
+        >
+          {bulkDeleteConfirmationOpen ? (
+            <div className="task-queue__bulk-confirmation" role="group">
+              <p>{t('taskQueue.bulkDeleteConfirmation', {
+                count: validSelectedTaskIds.length,
+              })}</p>
+              {bulkDeleteFailure ? (
+                <p className="task-card__confirmation-error" role="alert">
+                  {t('taskQueue.bulkDeleteFailed', bulkDeleteFailure)}
+                </p>
+              ) : null}
+              <div>
+                <button
+                  aria-label={t('taskQueue.confirmBulkDelete')}
+                  className="task-card__confirm-danger"
+                  disabled={isBusy || isBulkDeleting || validSelectedTaskIds.length === 0}
+                  type="button"
+                  onClick={() => void confirmBulkDelete()}
+                >
+                  {t('taskQueue.confirmBulkDelete')}
+                </button>
+                <button
+                  aria-label={t('taskQueue.back')}
+                  className="ghost-button"
+                  disabled={isBusy || isBulkDeleting}
+                  type="button"
+                  onClick={() => {
+                    setBulkDeleteConfirmationOpen(false)
+                    setBulkDeleteFailure(undefined)
+                  }}
+                >
+                  {t('taskQueue.back')}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <label>
+                <input
+                  aria-checked={someDeletableTasksSelected ? 'mixed' : allDeletableTasksSelected}
+                  aria-label={t('taskQueue.selectAllDeletable')}
+                  checked={allDeletableTasksSelected}
+                  disabled={isBusy || isBulkDeleting || deletableTaskIds.length === 0}
+                  type="checkbox"
+                  onChange={toggleAllDeletableTasks}
+                />
+                <span>{t('taskQueue.selectAllDeletable')}</span>
+              </label>
+              <span>{t('taskQueue.selectionCount', { count: validSelectedTaskIds.length })}</span>
+              <button
+                aria-label={t('taskQueue.bulkDelete')}
+                className="ghost-button task-card__danger-button"
+                disabled={isBusy || isBulkDeleting || validSelectedTaskIds.length === 0}
+                type="button"
+                onClick={() => {
+                  setActiveMode(undefined)
+                  setBulkDeleteFailure(undefined)
+                  setBulkDeleteConfirmationOpen(true)
+                }}
+              >
+                <Trash2 size={15} aria-hidden="true" />
+                {t('taskQueue.bulkDelete')}
+              </button>
+            </>
+          )}
+        </div>
+      ) : null}
 
       {tasks.length === 0 ? (
         <div className="task-queue__empty" role="status">
@@ -329,6 +465,22 @@ function TaskQueue({
                 role="listitem"
               >
                 <header className="task-card__header">
+                  {!previewTask ? (
+                    <label
+                      className="task-card__selection"
+                      title={capabilities.canDelete
+                        ? t('taskQueue.selectTask', { taskName: task.name })
+                        : t('taskQueue.selectTaskDisabled')}
+                    >
+                      <input
+                        aria-label={t('taskQueue.selectTask', { taskName: task.name })}
+                        checked={validSelectedTaskIds.includes(task.id)}
+                        disabled={isBusy || isBulkDeleting || !capabilities.canDelete}
+                        type="checkbox"
+                        onChange={() => toggleTaskSelection(task.id)}
+                      />
+                    </label>
+                  ) : null}
                   <div className="task-card__identity">
                     {isEditing ? (
                       <div className="task-card__edit-form" role="group" aria-label={t('taskQueue.editFormAriaLabel')}>
