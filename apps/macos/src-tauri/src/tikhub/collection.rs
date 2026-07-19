@@ -659,6 +659,29 @@ fn extract_records(request: &TikHubCollectionRequest, data: &Value) -> AppResult
             .collect(),
         );
       }
+      if request.platform == "tiktok" {
+        return Ok(
+          required_array_field(
+            data,
+            &[
+              "search_item_list",
+              "aweme_list",
+              "items",
+              "notes",
+              "item_list",
+            ],
+          )?
+          .into_iter()
+          .map(|record| {
+            record
+              .get("aweme_info")
+              .filter(|value| value.is_object())
+              .cloned()
+              .unwrap_or(record)
+          })
+          .collect(),
+        );
+      }
       if request.platform == "xiaohongshu" {
         let search_data = data
           .get("data")

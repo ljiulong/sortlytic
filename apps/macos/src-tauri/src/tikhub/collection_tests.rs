@@ -247,6 +247,39 @@ fn parses_records_and_next_cursor_without_treating_wrapper_as_data() {
 }
 
 #[test]
+fn prioritizes_tiktok_search_items_over_empty_compatibility_array() {
+  let request = build_collection_request(
+    "tiktok",
+    "keyword_search",
+    &params_for("keyword_search"),
+    None,
+  )
+  .expect("TikTok search request should build");
+  let page = parse_collection_page(
+    &request,
+    serde_json::json!({
+      "code": 200,
+      "data": {
+        "aweme_list": [],
+        "search_item_list": [{
+          "aweme_info": {
+            "aweme_id": "video-from-search-items",
+            "author": { "uid": "author-1" }
+          }
+        }],
+        "cursor": 20,
+        "has_more": 0
+      }
+    }),
+  )
+  .expect("real TikTok search response should parse");
+
+  assert_eq!(page.records.len(), 1);
+  assert_eq!(page.records[0]["aweme_id"], "video-from-search-items");
+  assert_eq!(page.records[0]["author"]["uid"], "author-1");
+}
+
+#[test]
 fn unwraps_xiaohongshu_app_v2_search_envelope() {
   let request = build_collection_request(
     "xiaohongshu",
