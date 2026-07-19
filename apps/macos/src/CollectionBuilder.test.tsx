@@ -4,6 +4,17 @@ import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const backendApiMocks = vi.hoisted(() => ({
+  getAccountCollectionCapabilities: vi.fn(),
+  listPlatformDataTypes: vi.fn(),
+}))
+
+vi.mock('./backend-api', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./backend-api')>(),
+  ...backendApiMocks,
+}))
+
 import {
   CollectionBuilder,
   CollectionPlanPreview,
@@ -42,8 +53,10 @@ type MountedBuilder = {
 const mountedBuilders = new Set<MountedBuilder>()
 
 function mountBuilder({
+  onGenerateFormPlan = vi.fn(async () => draftPlan),
   onGenerateNaturalPlan,
 }: {
+  onGenerateFormPlan?: (values: unknown) => Promise<RuntimeCollectionPlan>
   onGenerateNaturalPlan: (intentText: string) => Promise<RuntimeCollectionPlan>
 }) {
   const container = document.createElement('div')
@@ -56,7 +69,7 @@ function mountBuilder({
     actionMessage: '等待生成',
     isBusy: false,
     onConfirmPlan: vi.fn(async () => undefined),
-    onGenerateFormPlan: vi.fn(async () => draftPlan),
+    onGenerateFormPlan,
     onGenerateNaturalPlan,
   })))
 
@@ -72,6 +85,36 @@ beforeEach(async () => {
   ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
     .IS_REACT_ACT_ENVIRONMENT = true
   await i18n.changeLanguage('zh-CN')
+  backendApiMocks.getAccountCollectionCapabilities.mockResolvedValue({
+    catalog_version: 1,
+    platform: 'tiktok',
+    display_name: 'TikTok',
+    account_sources: [{
+      key: 'user_search',
+      display_name: '搜索用户',
+      description: '按关键词搜索公开账号。',
+      input_kind: 'keyword',
+      endpoint_key: 'tiktok.user_search',
+      pagination_mode: 'cursor',
+      max_page_size: 20,
+      max_request_count: 100,
+    }],
+    field_groups: [{ key: 'profile', display_name: '账号资料' }],
+    fields: [{
+      key: 'avatar_url',
+      group: 'profile',
+      display_name: '头像',
+      description: '账号公开头像地址。',
+      value_type: 'text',
+      availability: 'direct',
+      default_selected: true,
+      required_operation_keys: [],
+    }],
+  })
+  backendApiMocks.listPlatformDataTypes.mockResolvedValue([{
+    data_type: 'keyword_search',
+    provider_time_ranges: ['1', '7', '30', '180'],
+  }])
 })
 
 afterEach(() => {
@@ -272,7 +315,9 @@ describe('collection form controls', () => {
 
   it('新建表单不把示例任务参数作为实际默认值', () => {
     expect(newCollectionFormDefaults).toMatchObject({
+      accountSource: undefined,
       dataTypes: [],
+      selectedFields: [],
       regionCode: '',
       keyword: '',
       range: '',
@@ -299,6 +344,7 @@ describe('collection form controls', () => {
     const unitedStates = countryRegionSelectOptions.find(({ value }) => value === 'US')
 
     expect(markup).toMatch(/<button[^>]*id="platform"[^>]*aria-haspopup="listbox"/)
+    expect(markup).toMatch(/<button[^>]*id="account-source"[^>]*aria-haspopup="listbox"/)
     expect(markup).toMatch(/<button[^>]*id="region-code"[^>]*aria-haspopup="listbox"/)
     expect(markup).toMatch(/<button[^>]*id="range"[^>]*aria-haspopup="listbox"/)
     expect(markup).not.toMatch(/<input[^>]*id="range"/)
@@ -313,6 +359,65 @@ describe('collection form controls', () => {
       meta: 'US',
     })
     expect(unitedStates?.keywords).toContain('美国 United States US')
+  })
+
+  it('来源区域使用单一账号来源和紧凑字段摘要，不再渲染旧数据类型列表', () => {
+    const markup = renderBuilder()
+
+    expect(markup).toContain('账号来源')
+    expect(markup).toContain('结果字段')
+    expect(markup).toContain('6 个基础字段 + 0 个扩展字段')
+    expect(markup).not.toContain('collection-builder__option-list')
+    expect(markup).not.toContain('搜索结果中的账号')
+    expect(markup).not.toContain('账号作品所属账号')
+  })
+
+  it('表单提交单一账号来源、字段集合和兼容数据类型映射', async () => {
+    const onGenerateFormPlan = vi.fn(async () => draftPlan)
+    const mounted = mountBuilder({
+      onGenerateFormPlan,
+      onGenerateNaturalPlan: vi.fn(async () => draftPlan),
+    })
+    const choose = async (selectId: string, optionId: string) => {
+      await act(async () => mounted.container.querySelector<HTMLButtonElement>(`#${selectId}`)?.click())
+      await act(async () => mounted.container.querySelector<HTMLButtonElement>(`#${optionId}`)?.click())
+    }
+    const enter = async (selector: string, value: string) => {
+      const input = mounted.container.querySelector<HTMLInputElement>(selector)
+      await act(async () => {
+        const nativeSetter = Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          'value',
+        )?.set
+        nativeSetter?.call(input, value)
+        input?.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+    }
+
+    await choose('platform', 'platform-option-TikTok')
+    await act(async () => undefined)
+    expect(mounted.container.querySelector<HTMLButtonElement>('#account-source')?.disabled).toBe(false)
+    await choose('account-source', 'account-source-option-user_search')
+    expect(mounted.container.querySelector('#source-input')).not.toBeNull()
+    await enter('#source-input', '新能源汽车')
+    await choose('range', 'range-option-7')
+    await enter('#max-records', '20')
+    await enter('#budget', '1')
+    await act(async () => {
+      mounted.container.querySelector<HTMLFormElement>('form')?.dispatchEvent(
+        new Event('submit', { bubbles: true, cancelable: true }),
+      )
+      await Promise.resolve()
+    })
+
+    expect([...mounted.container.querySelectorAll('.form-error')].map((node) => node.textContent)).toEqual([])
+    expect(onGenerateFormPlan).toHaveBeenCalledTimes(1)
+    expect(onGenerateFormPlan).toHaveBeenCalledWith(expect.objectContaining({
+      accountSource: 'user_search',
+      dataType: '搜索结果账号',
+      dataTypes: ['keyword_search'],
+      selectedFields: ['avatar_url'],
+    }))
   })
 
   it('时间范围只接受平台能力中的规范值，不再接受任意文本', () => {

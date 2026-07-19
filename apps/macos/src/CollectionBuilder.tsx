@@ -10,9 +10,10 @@ import {
   Sparkles,
   Wrench,
 } from 'lucide-react'
-import { Controller, useForm } from 'react-hook-form'
+import { Controller, useController, useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import type { z } from 'zod'
+import AccountSourceFields from './AccountSourceFields'
 import AppSelect from './AppSelect'
 import './CollectionBuilder.css'
 import {
@@ -20,9 +21,9 @@ import {
   collectionFormSchema,
   countryRegionOptions,
   createCollectionFormSchema,
-  getCollectionDataTypeOptions,
   getGenderFilterOptions,
   supportsRegionSelection,
+  type AccountSourceKey,
   type CollectionTranslator,
   type CollectionDataType,
 } from './collection-options'
@@ -34,7 +35,6 @@ import {
 import { PlanFact, StatusPill } from './CollectionBuilderPrimitives'
 import {
   countryRegionSelectOptions,
-  platformSelectOptions,
 } from './collection-select-options'
 import { useCollectionTimeRanges } from './collection-time-ranges'
 import { i18n } from './i18n'
@@ -46,12 +46,18 @@ export { StatusPill }
 export type CollectionFormInput = z.input<typeof collectionFormSchema>
 export type CollectionFormValues = z.output<typeof collectionFormSchema>
 
-const dataTypeLabels: Record<CollectionDataType, DataType> = {
-  keyword_search: '搜索结果账号',
-  item_detail: '作品/笔记作者',
-  account_profile: '账号公开信息',
-  account_posts: '账号作品所属账号',
-  comments: '评论用户',
+const legacySourceTypes: Record<AccountSourceKey, {
+  dataType: DataType
+  dataTypeCode: CollectionDataType
+}> = {
+  user_search: { dataType: '搜索结果账号', dataTypeCode: 'keyword_search' },
+  content_search_authors: { dataType: '搜索结果账号', dataTypeCode: 'keyword_search' },
+  direct_account: { dataType: '账号公开信息', dataTypeCode: 'account_profile' },
+  item_author: { dataType: '作品/笔记作者', dataTypeCode: 'item_detail' },
+  comment_authors: { dataType: '评论用户', dataTypeCode: 'comments' },
+  followers: { dataType: '账号公开信息', dataTypeCode: 'account_profile' },
+  followings: { dataType: '账号公开信息', dataTypeCode: 'account_profile' },
+  similar_accounts: { dataType: '账号公开信息', dataTypeCode: 'account_profile' },
 }
 
 export function CollectionBuilder({
@@ -73,7 +79,6 @@ export function CollectionBuilder({
   const [naturalText, setNaturalText] = useState(naturalIntentDefault)
   const planSubmissionInFlightRef = useRef(false)
   const formSchema = useMemo(() => createCollectionFormSchema(t), [t])
-  const localizedDataTypeOptions = useMemo(() => getCollectionDataTypeOptions(t), [t])
   const localizedGenderFilterOptions = useMemo(() => getGenderFilterOptions(t), [t])
   const {
     control,
@@ -86,9 +91,13 @@ export function CollectionBuilder({
     resolver: zodResolver(formSchema),
     defaultValues: newCollectionFormDefaults,
   })
-  const selectedPlatform = watch('platform')
-  const selectedDataTypes = watch('dataTypes') ?? []
-  const primaryDataType = selectedDataTypes[0]
+  const { field: platformField } = useController({ control, name: 'platform' })
+  const { field: accountSourceField } = useController({ control, name: 'accountSource' })
+  const { field: selectedFieldsField } = useController({ control, name: 'selectedFields' })
+  const { field: dataTypeField } = useController({ control, name: 'dataType' })
+  const { field: dataTypesField } = useController({ control, name: 'dataTypes' })
+  const selectedPlatform = platformField.value
+  const selectedDataTypes = dataTypesField.value ?? []
   const selectedRange = watch('range')
   const ageRangeEnabled = watch('ageRangeEnabled')
   const genderFilterEnabled = watch('genderFilterEnabled')
@@ -101,10 +110,6 @@ export function CollectionBuilder({
   const regionEnabled = selectedPlatform
     ? supportsRegionSelection(selectedPlatform, selectedDataTypes)
     : false
-
-  useEffect(() => {
-    if (primaryDataType) setValue('dataType', dataTypeLabels[primaryDataType])
-  }, [primaryDataType, setValue])
 
   useEffect(() => {
     if (!regionEnabled) setValue('regionCode', '')
@@ -128,6 +133,13 @@ export function CollectionBuilder({
 
   const submitForm = async (values: CollectionFormValues) => {
     await submitPlanOnce(() => onGenerateFormPlan(values))
+  }
+
+  const setAccountSource = (source?: AccountSourceKey) => {
+    accountSourceField.onChange(source)
+    const legacy = source ? legacySourceTypes[source] : undefined
+    dataTypeField.onChange(legacy?.dataType)
+    dataTypesField.onChange(legacy ? [legacy.dataTypeCode] : [])
   }
 
   const submitNaturalText = async () => {
@@ -169,51 +181,20 @@ export function CollectionBuilder({
               title={t('groups.source.title')}
               description={t('groups.source.description')}
             >
-              <div className="collection-builder__source-fields">
-                <FormField
-                  error={errors.platform?.message}
-                  errorId="platform-error"
-                  htmlFor="platform"
-                  label={t('fields.platform')}
-                >
-                  <Controller
-                    control={control}
-                    name="platform"
-                    render={({ field }) => (
-                      <AppSelect
-                        id="platform"
-                        ariaDescribedBy={errors.platform ? 'platform-error' : undefined}
-                        invalid={Boolean(errors.platform)}
-                        onChange={field.onChange}
-                        options={platformSelectOptions}
-                        placeholder={t('placeholders.platform')}
-                        value={field.value ?? ''}
-                      />
-                    )}
-                  />
-                </FormField>
-
-                <fieldset className="collection-builder__choice-fieldset">
-                  <legend>{t('fields.dataTypes')}</legend>
-                  <input type="hidden" {...register('dataType')} />
-                  <div className="collection-builder__option-list">
-                    {localizedDataTypeOptions.map((item) => (
-                      <label
-                        className="collection-builder__option-row"
-                        data-selected={selectedDataTypes.includes(item.value)}
-                        key={item.value}
-                      >
-                        <input type="checkbox" value={item.value} {...register('dataTypes')} />
-                        <span>
-                          <strong>{item.label}</strong>
-                          <small>{item.description}</small>
-                        </span>
-                      </label>
-                    ))}
-                  </div>
-                  <FormError id="data-types-error" message={errors.dataTypes?.message} />
-                </fieldset>
-              </div>
+              <AccountSourceFields
+                accountSource={accountSourceField.value}
+                errors={{
+                  accountSource: errors.accountSource?.message,
+                  platform: errors.platform?.message,
+                  sourceInput: errors.keyword?.message,
+                }}
+                onAccountSourceChange={setAccountSource}
+                onPlatformChange={platformField.onChange}
+                onSelectedFieldsChange={selectedFieldsField.onChange}
+                platform={selectedPlatform}
+                selectedFields={selectedFieldsField.value ?? []}
+                sourceInputRegistration={register('keyword')}
+              />
             </FormGroup>
 
             <FormGroup
@@ -222,20 +203,6 @@ export function CollectionBuilder({
               description={t('groups.scope.description')}
             >
               <div className="collection-builder__range-fields">
-                <FormField
-                  error={errors.keyword?.message}
-                  errorId="keyword-error"
-                  htmlFor="keyword"
-                  label={t('fields.keyword')}
-                >
-                  <input
-                    id="keyword"
-                    aria-describedby={errors.keyword ? 'keyword-error' : undefined}
-                    aria-invalid={Boolean(errors.keyword)}
-                    placeholder={t('placeholders.keyword')}
-                    {...register('keyword')}
-                  />
-                </FormField>
                 <FormField
                   error={errors.regionCode?.message}
                   errorId="region-code-error"
