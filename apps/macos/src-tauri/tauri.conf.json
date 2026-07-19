@@ -63,6 +63,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": {
+      "assets/fonts/OFL.txt": "licenses/NotoSansSC-OFL.txt"
+    },
     "android": {
       "debugApplicationIdSuffix": ".debug"
     }

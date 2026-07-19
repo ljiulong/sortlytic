@@ -95,6 +95,20 @@ fn packaged_app_can_open_a_completed_export_path() {
 }
 
 #[test]
+fn packaged_app_includes_the_noto_sans_sc_license() {
+  let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+    .expect("Tauri config must be valid JSON");
+
+  assert_eq!(
+    config
+      .pointer("/bundle/resources/assets~1fonts~1OFL.txt")
+      .and_then(serde_json::Value::as_str),
+    Some("licenses/NotoSansSC-OFL.txt"),
+    "the packaged app must carry the Noto Sans SC copyright and OFL text"
+  );
+}
+
+#[test]
 fn prompt_activation_keeps_real_model_regressions_off_the_ui_thread() {
   let source = include_str!("lib.rs");
   let command = source
