@@ -244,7 +244,7 @@ fn account_sources(platform: &str) -> Vec<AccountSourceCapabilityView> {
       platform,
       "keyword_search",
       PaginationMode::Cursor,
-      50,
+      20,
       100,
     ),
     source(
@@ -277,7 +277,7 @@ fn account_sources(platform: &str) -> Vec<AccountSourceCapabilityView> {
       platform,
       "comments",
       PaginationMode::Cursor,
-      100,
+      20,
       200,
     ),
   ];
@@ -565,6 +565,16 @@ mod tests {
       .account_sources
       .iter()
       .any(|source| source.key == "followers"));
+    for capability in [&tiktok, &douyin, &xiaohongshu] {
+      for source_key in ["user_search", "content_search_authors", "comment_authors"] {
+        let source = capability
+          .account_sources
+          .iter()
+          .find(|source| source.key == source_key)
+          .unwrap();
+        assert_eq!(source.max_page_size, 20, "{}.{}", capability.platform, source_key);
+      }
+    }
   }
 
   #[test]

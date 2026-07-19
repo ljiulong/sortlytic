@@ -48,9 +48,9 @@ fn materializes_discovery_minimal_enrichment_and_cost_breakdown() {
     plan.plan_json["steps"][3]["operation_key"],
     "enrich.account_posts"
   );
-  assert_eq!(plan.cost_estimate_json["discovery_request_count"], 1);
+  assert_eq!(plan.cost_estimate_json["discovery_request_count"], 2);
   assert_eq!(plan.cost_estimate_json["enrichment_request_count"], 120);
-  assert_eq!(plan.cost_estimate_json["request_count_estimate"], 121);
+  assert_eq!(plan.cost_estimate_json["request_count_estimate"], 122);
 }
 
 #[test]
