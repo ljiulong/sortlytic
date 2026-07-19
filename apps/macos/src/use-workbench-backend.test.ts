@@ -479,14 +479,16 @@ describe('任务页动作', () => {
     expect(commands).not.toContain('quote_tikhub_connector_price')
   })
 
-  it('单任务导出只生成用户选择的文件格式', async () => {
+  it('Excel 使用摘要模型，PDF 使用分析模型且只生成所选格式', async () => {
     vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
     invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
-      if (command === 'build_report_model') return { id: 'report-1' }
+      if (command === 'build_report_model') {
+        return { id: args?.reportType === 'analysis' ? 'report-analysis' : 'report-summary' }
+      }
       if (command === 'create_export_job') {
         return {
           id: 'export-1',
-          report_id: 'report-1',
+          report_id: args?.reportId,
           export_type: args?.exportType,
           status: 'success',
         }
@@ -495,18 +497,29 @@ describe('任务页动作', () => {
     })
 
     await expect(exportTaskArtifact({ taskId: 'task-1', format: 'pdf' })).resolves.toMatchObject({
+      report_id: 'report-analysis',
       export_type: 'pdf',
     })
+    await expect(exportTaskArtifact({ taskId: 'task-1', format: 'xlsx' })).resolves.toMatchObject({
+      report_id: 'report-summary',
+      export_type: 'xlsx',
+    })
+    expect(invokeMock).toHaveBeenCalledWith('build_report_model', {
+      taskId: 'task-1',
+      reportType: 'analysis',
+      rootPath: null,
+    })
+    expect(invokeMock).toHaveBeenCalledWith('build_report_model', {
+      taskId: 'task-1',
+      reportType: 'summary',
+      rootPath: null,
+    })
     expect(invokeMock).toHaveBeenCalledWith('create_export_job', {
-      reportId: 'report-1',
+      reportId: 'report-analysis',
       exportType: 'pdf',
       targetPath: null,
       rootPath: null,
     })
-    expect(invokeMock).not.toHaveBeenCalledWith(
-      'create_export_job',
-      expect.objectContaining({ exportType: 'xlsx' }),
-    )
   })
 })
 

@@ -178,7 +178,7 @@ export async function confirmPersistedTask(taskId: string) {
 
 export async function exportTaskArtifact({ taskId, format }: TaskExportInput) {
   assertTauriRuntime()
-  const report = await buildReportModel(taskId)
+  const report = await buildReportModel(taskId, format === 'pdf' ? 'analysis' : 'summary')
   return createExportJob(report.id, format)
 }
 
