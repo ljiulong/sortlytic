@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use rusqlite::Connection;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use super::*;
 
@@ -478,6 +478,85 @@ fn persisted_stable_id_consolidates_a_fallback_account_identity() {
   assert_eq!(account.2.as_deref(), Some("公开资料昵称"));
 }
 
+#[test]
+fn persisted_account_fields_keep_zero_and_latest_field_evidence() {
+  let connection = account_connection();
+  for (data_type, follower_count, collected_at) in [
+    ("comments", 9, "2026-07-20T08:00:00+08:00"),
+    ("account_profile", 0, "2026-07-20T08:01:00+08:00"),
+  ] {
+    persist_account_observations(
+      &connection,
+      AccountObservationInput {
+        task_run_id: "run-evidence".to_string(),
+        platform: "tiktok".to_string(),
+        data_type: data_type.to_string(),
+        records: vec![json!({
+          "user_id": "user-evidence",
+          "follower_count": follower_count
+        })],
+        output_selected: true,
+        age_range: None,
+        record_limit: 10,
+        collected_at: collected_at.to_string(),
+      },
+    )
+    .unwrap();
+  }
+
+  let (fields, evidence) = connection
+    .query_row(
+      "SELECT account_fields_json, field_evidence_json
+       FROM collected_account WHERE task_run_id = 'run-evidence'",
+      [],
+      |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    )
+    .unwrap();
+  let fields: Value = serde_json::from_str(&fields).unwrap();
+  let evidence: Value = serde_json::from_str(&evidence).unwrap();
+  assert_eq!(fields["followers_count"], 0);
+  assert_eq!(
+    evidence["followers_count"]["endpoint_key"],
+    "tiktok.account_profile"
+  );
+  assert_eq!(
+    evidence["followers_count"]["collected_at"],
+    "2026-07-20T08:01:00+08:00"
+  );
+}
+
+#[test]
+fn persisted_user_search_is_a_supported_account_observation() {
+  let connection = account_connection();
+  let result = persist_account_observations(
+    &connection,
+    AccountObservationInput {
+      task_run_id: "run-user-search".to_string(),
+      platform: "douyin".to_string(),
+      data_type: "user_search".to_string(),
+      records: vec![json!({ "uid": "user-search-1", "gender": 0 })],
+      output_selected: true,
+      age_range: None,
+      record_limit: 10,
+      collected_at: "2026-07-20T08:00:00+08:00".to_string(),
+    },
+  )
+  .unwrap();
+
+  assert_eq!(result.observed_count, 1);
+  assert_eq!(result.output_count, 1);
+  assert_eq!(
+    connection
+      .query_row(
+        "SELECT gender FROM collected_account WHERE task_run_id = 'run-user-search'",
+        [],
+        |row| row.get::<_, Option<String>>(0),
+      )
+      .unwrap(),
+    None
+  );
+}
+
 fn account_connection() -> Connection {
   let connection = Connection::open_in_memory().expect("内存数据库应创建");
   connection
@@ -505,6 +584,8 @@ fn account_connection() -> Connection {
         notes TEXT,
         merged_record_json TEXT NOT NULL,
         source_priority_json TEXT NOT NULL,
+        account_fields_json TEXT NOT NULL DEFAULT '{}',
+        field_evidence_json TEXT NOT NULL DEFAULT '{}',
         output_included INTEGER NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,

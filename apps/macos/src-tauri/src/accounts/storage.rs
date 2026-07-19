@@ -5,7 +5,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
 use uuid::Uuid;
 
-use super::{normalize_account, AccountRecord, AgeRange, SourceKind};
+use super::{normalize_account_with_evidence, AccountRecord, AgeRange, SourceKind};
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 
 #[derive(Debug, Clone)]
@@ -58,7 +58,14 @@ pub fn persist_account_observations(
   let mut skipped_count = 0;
 
   for value in &input.records {
-    let incoming = match normalize_account(&input.platform, source_kind, value) {
+    let endpoint_key = format!("{}.{}", input.platform, input.data_type);
+    let incoming = match normalize_account_with_evidence(
+      &input.platform,
+      source_kind,
+      &endpoint_key,
+      &input.collected_at,
+      value,
+    ) {
       Ok(account) => account,
       Err(error) if error.message.contains("缺少平台用户 ID") => {
         skipped_count += 1;
@@ -83,7 +90,12 @@ fn source_kind(data_type: &str) -> AppResult<SourceKind> {
   match data_type {
     "comments" => Ok(SourceKind::CommentAuthor),
     "account_profile" => Ok(SourceKind::AccountProfile),
-    "keyword_search" | "item_detail" | "account_posts" => Ok(SourceKind::ContentAuthor),
+    "keyword_search" | "item_detail" => Ok(SourceKind::ContentAuthor),
+    "user_search" => Ok(SourceKind::UserSearch),
+    "followers" | "followings" | "similar_accounts" => Ok(SourceKind::Relationship),
+    "account_posts" | "extended_demographics" | "account_country" => {
+      Ok(SourceKind::FieldEnrichment)
+    }
     _ => Err(validation_error("账号观测数据类型不受支持")),
   }
 }
@@ -157,6 +169,8 @@ fn persist_account(
     "data_types": data_types
   });
   let merged_json = serde_json::to_string(&merged).map_err(json_error)?;
+  let account_fields_json = serde_json::to_string(&merged.account_fields).map_err(json_error)?;
+  let field_evidence_json = serde_json::to_string(&merged.field_evidence).map_err(json_error)?;
   let data_source = format!(
     "TikHub API ({})",
     data_types.into_iter().collect::<Vec<_>>().join(", ")
@@ -170,11 +184,11 @@ fn persist_account(
          id, task_run_id, platform, identity_key, username, account, platform_user_id,
          profile_text, country_region, region_source, region_confidence, gender, age,
          followers_count, posts_count, last_posted_at, profile_url, data_source,
-         collected_at, notes, merged_record_json, source_priority_json, output_included,
-         created_at, updated_at
+         collected_at, notes, merged_record_json, source_priority_json, account_fields_json,
+         field_evidence_json, output_included, created_at, updated_at
        ) VALUES (
          ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-         ?14, ?15, ?16, ?17, ?18, ?19, NULL, ?20, ?21, ?22, ?23, ?23
+         ?14, ?15, ?16, ?17, ?18, ?19, NULL, ?20, ?21, ?22, ?23, ?24, ?25, ?25
        )
        ON CONFLICT(id) DO UPDATE SET
          identity_key = excluded.identity_key, username = excluded.username,
@@ -187,6 +201,8 @@ fn persist_account(
          data_source = excluded.data_source, collected_at = excluded.collected_at,
          merged_record_json = excluded.merged_record_json,
          source_priority_json = excluded.source_priority_json,
+         account_fields_json = excluded.account_fields_json,
+         field_evidence_json = excluded.field_evidence_json,
          output_included = excluded.output_included, updated_at = excluded.updated_at",
       params![
         survivor_id,
@@ -210,6 +226,8 @@ fn persist_account(
         input.collected_at,
         merged_json,
         priority_json.to_string(),
+        account_fields_json,
+        field_evidence_json,
         i64::from(output_included),
         now
       ],
