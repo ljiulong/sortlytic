@@ -285,10 +285,11 @@ fn validate_running_scope(connection: &Connection, input: &NormalizedInput) -> A
   if !json_array_contains(&state.2, &input.platform)? {
     return Err(validation_error("采集平台不在任务确认范围内"));
   }
-  let confirmed_internal_type = state.4 == Some(3)
-    && state.5.as_deref().is_some_and(|plan_json| {
-      plan_array_contains(plan_json, "internal_data_types", &input.data_type)
-    });
+  let confirmed_internal_type = state.5.as_deref().is_some_and(|plan_json| match state.4 {
+    Some(3) => plan_array_contains(plan_json, "internal_data_types", &input.data_type),
+    Some(4) => plan_steps_contain_data_type(plan_json, &input.data_type),
+    _ => false,
+  });
   if !json_array_contains(&state.3, &input.data_type)? && !confirmed_internal_type {
     return Err(validation_error("数据类型不在任务确认范围内"));
   }
@@ -334,6 +335,17 @@ fn plan_array_contains(plan_json: &str, field: &str, expected: &str) -> bool {
     .ok()
     .and_then(|plan| plan.get(field).and_then(Value::as_array).cloned())
     .is_some_and(|values| values.iter().any(|value| value.as_str() == Some(expected)))
+}
+
+fn plan_steps_contain_data_type(plan_json: &str, expected: &str) -> bool {
+  serde_json::from_str::<Value>(plan_json)
+    .ok()
+    .and_then(|plan| plan.get("steps").and_then(Value::as_array).cloned())
+    .is_some_and(|steps| {
+      steps
+        .iter()
+        .any(|step| step.get("data_type").and_then(Value::as_str) == Some(expected))
+    })
 }
 
 fn insert_normalized_record(
