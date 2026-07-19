@@ -54,6 +54,8 @@ export type CollectionTaskView = {
   status: string
   platforms_json: unknown
   data_types_json: unknown
+  account_source?: string | null
+  selected_fields_json?: unknown
   created_at: string
   updated_at: string
   confirmed_at?: string | null
@@ -89,6 +91,47 @@ export type CollectionDataTypeCapabilityView = {
   provider_time_ranges: string[]
   max_page_size: number
   max_request_count: number
+}
+
+export type AccountSourceInputKind = 'keyword' | 'account' | 'item'
+export type AccountFieldAvailability = 'direct' | 'enrichment' | 'conditional' | 'unsupported'
+export type AccountFieldValueType = 'text' | 'integer' | 'boolean' | 'text_list' | 'timestamp'
+
+export type AccountSourceCapabilityView = {
+  key: string
+  display_name: string
+  description: string
+  input_kind: AccountSourceInputKind
+  endpoint_key: string
+  pagination_mode: 'single' | 'cursor'
+  max_page_size: number
+  max_request_count: number
+}
+
+export type AccountFieldGroupView = {
+  key: string
+  display_name: string
+}
+
+export type AccountFieldCapabilityView = {
+  key: string
+  group: string
+  display_name: string
+  description: string
+  value_type: AccountFieldValueType
+  availability: AccountFieldAvailability
+  default_selected: boolean
+  required_operation_keys: string[]
+  missing_reason?: string | null
+}
+
+export type AccountCollectionCapabilityView = {
+  catalog_version: number
+  platform: string
+  display_name: string
+  account_sources: AccountSourceCapabilityView[]
+  field_groups: AccountFieldGroupView[]
+  fields: AccountFieldCapabilityView[]
 }
 
 export type CollectionPlanView = {
@@ -239,6 +282,19 @@ export type GenerateFormPlanInput = {
   budget_limit_micros?: number
 }
 
+export type GenerateAccountPlanInput = {
+  platform: string
+  account_source: string
+  selected_fields: string[]
+  enrichment_policy: 'auto_costed'
+  params: Record<string, unknown>
+  age_range?: { min: number; max: number } | null
+  gender_filter?: Array<'male' | 'female' | 'other'> | null
+  request_limit?: number
+  record_limit?: number
+  budget_limit_micros?: number
+}
+
 export type SavePlanInput = {
   task_id: string
   source: string
@@ -346,6 +402,14 @@ export function deleteTask(taskId: string) {
 
 export function generateFormCollectionPlan(request: GenerateFormPlanInput) {
   return invoke<CollectionPlanDraftView>('generate_form_collection_plan', { request })
+}
+
+export function generateAccountCollectionPlan(request: GenerateAccountPlanInput) {
+  return invoke<CollectionPlanDraftView>('generate_account_collection_plan', { request })
+}
+
+export function getAccountCollectionCapabilities(platform: string) {
+  return invoke<AccountCollectionCapabilityView>('get_account_collection_capabilities', { platform })
 }
 
 export function listPlatformDataTypes(platform: string) {
