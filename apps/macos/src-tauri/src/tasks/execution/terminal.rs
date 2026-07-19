@@ -186,7 +186,7 @@ fn require_run_completion_evidence(
       .as_deref()
       .ok_or_else(|| task_error("运行步骤快照缺少计划步骤，不能标记成功"))?;
     let valid_stop_reason = step.stop_reason.is_none()
-      || (step.schema_version == 3
+      || (step.schema_version >= 3
         && step.stop_reason.as_deref().is_some_and(|reason| {
           matches!(
             reason,
@@ -215,7 +215,7 @@ fn require_run_completion_evidence(
         step.order + 1
       )));
     }
-    if step.schema_version == 3
+    if step.schema_version >= 3
       && (!pipeline_requests_match_targets(connection, &run.id, step, totals.request_count)?
         || !partial::failure_evidence_matches(
           connection,
@@ -246,7 +246,7 @@ fn require_run_completion_evidence(
   if limits.schema_version == 2 && persisted_records > limits.record_limit {
     return Err(task_error("完成证据的持久化记录数超过确认上限"));
   }
-  let output_records = if limits.schema_version == 3 {
+  let output_records = if limits.schema_version >= 3 {
     let output_count = connection
       .query_row(
         "SELECT COUNT(*) FROM collected_account
@@ -406,7 +406,7 @@ fn completion_chain_totals(
   checkpoints: &[CompletionCheckpoint],
 ) -> Option<CompletionTotals> {
   if checkpoints.is_empty() {
-    return (step.schema_version == 3 && step.stop_reason.as_deref() == Some("provider_exhausted"))
+    return (step.schema_version >= 3 && step.stop_reason.as_deref() == Some("provider_exhausted"))
       .then_some(CompletionTotals {
         request_count: 0,
         persisted_records: 0,
@@ -428,7 +428,7 @@ fn completion_chain_totals(
   let mut previous: Option<&CompletionCheckpoint> = None;
   let mut previous_committed_at: Option<DateTime<FixedOffset>> = None;
   for (index, checkpoint) in checkpoints.iter().enumerate() {
-    let is_target_failure = step.schema_version == 3 && checkpoint.status == "failed";
+    let is_target_failure = step.schema_version >= 3 && checkpoint.status == "failed";
     let has_valid_evidence = if is_target_failure {
       partial::failed_checkpoint_is_complete(checkpoint)
     } else {

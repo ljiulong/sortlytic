@@ -204,7 +204,7 @@ where
   G: Fn(&TikHubCollectionRequest) -> AppResult<()>,
   F: Fn(&TikHubCollectionRequest) -> AppResult<CollectionPage>,
 {
-  if step.schema_version == 3 {
+  if step.schema_version >= 3 {
     return pipeline::execute_pipeline_step(root_path, step, guard_request, fetch_page);
   }
   let connection = open_workspace_connection(root_path)?;

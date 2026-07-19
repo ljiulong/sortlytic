@@ -5,7 +5,9 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBe
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::collection::{validate_collection_plan_v2, validate_collection_plan_v3};
+use crate::collection::{
+  validate_collection_plan_v2, validate_collection_plan_v3, validate_collection_plan_v4,
+};
 use crate::domain::{redact_sensitive_text, AppErrorCode, AppResult};
 
 use super::recovery::{
@@ -158,7 +160,7 @@ pub fn claim_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRunV
            AND EXISTS (
              SELECT 1 FROM collection_plan AS plan
              WHERE plan.id = task_run.plan_id AND plan.task_id = task_run.task_id
-               AND plan.schema_version IN (2, 3) AND plan.validation_status = 'valid'
+               AND plan.schema_version IN (2, 3, 4) AND plan.validation_status = 'valid'
            )",
         params![stage, now, queued.id],
       )
@@ -363,9 +365,9 @@ pub(super) fn require_executable_plan(
   if plan.0 != task_id {
     return Err(task_error("任务运行绑定了其他任务的采集计划"));
   }
-  if !matches!(plan.1, 2 | 3) {
+  if !matches!(plan.1, 2..=4) {
     return Err(task_error(format!(
-      "schema_version={} 的采集计划不能执行，必须重新确认有效的 v2/v3 计划",
+      "schema_version={} 的采集计划不能执行，必须重新确认有效的 v2/v3/v4 计划",
       plan.1
     )));
   }
@@ -378,6 +380,7 @@ pub(super) fn require_executable_plan(
   let task = get_task_by_id(connection, task_id)?;
   let mut validation_errors = validate_plan_for_task(&task, &plan_json);
   validation_errors.extend(match plan.1 {
+    4 => validate_collection_plan_v4(&plan_json).errors,
     3 => validate_collection_plan_v3(&plan_json).errors,
     _ => validate_collection_plan_v2(&plan_json).errors,
   });
@@ -448,7 +451,7 @@ fn require_persisted_steps_match_plan(
     let expected = expected
       .as_object()
       .ok_or_else(|| task_error(format!("采集计划 v{schema_version} 包含无效步骤，不能执行")))?;
-    let expected_request_limit = if schema_version == 3 {
+    let expected_request_limit = if schema_version >= 3 {
       expected
         .get("request_limit")
         .and_then(Value::as_i64)
