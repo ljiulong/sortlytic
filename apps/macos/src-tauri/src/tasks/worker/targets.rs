@@ -14,6 +14,7 @@ pub(super) struct TargetStepInput {
   pub platform: String,
   pub data_type: String,
   pub params: Value,
+  pub target_limit: i64,
   pub output_selected: bool,
   pub depends_on_step_key: Option<String>,
   pub input_binding: Option<String>,
@@ -129,6 +130,10 @@ fn dependency_values(
   input: &TargetStepInput,
   target_field: &str,
 ) -> AppResult<BTreeSet<String>> {
+  let target_limit = usize::try_from(input.target_limit)
+    .ok()
+    .filter(|limit| *limit > 0)
+    .ok_or_else(|| validation_error("依赖步骤账号目标上限必须大于 0"))?;
   let binding = input.input_binding.as_deref().unwrap_or(target_field);
   let value_column = match binding {
     "item_id" => "raw.platform_record_id",
@@ -165,6 +170,7 @@ fn dependency_values(
       .into_iter()
       .map(|value| value.trim().to_string())
       .filter(|value| !value.is_empty())
+      .take(target_limit)
       .collect(),
   )
 }
@@ -245,6 +251,7 @@ mod tests {
         platform: "tiktok".to_string(),
         data_type: "comments".to_string(),
         params: json!({ "item_id": "$steps.keyword_search.items[].item_id" }),
+        target_limit: 10,
         output_selected: true,
         depends_on_step_key: Some("keyword_search".to_string()),
         input_binding: None,
@@ -256,6 +263,7 @@ mod tests {
         platform: "tiktok".to_string(),
         data_type: "account_profile".to_string(),
         params: json!({ "account_id": "$steps.keyword_search.items[].account_id" }),
+        target_limit: 10,
         output_selected: true,
         depends_on_step_key: Some("keyword_search".to_string()),
         input_binding: None,
@@ -324,6 +332,7 @@ mod tests {
         platform: "tiktok".to_string(),
         data_type: "account_country".to_string(),
         params: json!({ "account_id": "$steps.discover.accounts[].account_handle" }),
+        target_limit: 10,
         output_selected: true,
         depends_on_step_key: Some("discover".to_string()),
         input_binding: Some("account_handle".to_string()),

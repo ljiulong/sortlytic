@@ -60,16 +60,20 @@ fn version_four_worker_enriches_discovered_account_country_by_handle() {
   execute_claimed_run_with_fetcher(&root, &run, |request| {
     if request.source_params().get("keyword").is_some() {
       calls.borrow_mut().push("discover".to_string());
-      let record = json!({
-        "uid": "user-1",
-        "unique_id": "account-handle-1",
-        "nickname": "账号一"
-      });
+      let records = (1..=20)
+        .map(|index| {
+          json!({
+            "uid": format!("user-{index:02}"),
+            "unique_id": format!("account-handle-{index:02}"),
+            "nickname": format!("账号 {index:02}")
+          })
+        })
+        .collect::<Vec<_>>();
       return Ok(CollectionPage {
-        records: vec![record.clone()],
+        records: records.clone(),
         next_cursor: None,
         has_more: false,
-        raw_response: json!({"code": 200, "data": {"user_list": [record]}}),
+        raw_response: json!({"code": 200, "data": {"user_list": records}}),
       });
     }
     let account_id = request
@@ -79,7 +83,7 @@ fn version_four_worker_enriches_discovered_account_country_by_handle() {
       .expect("country enrichment should receive account_id");
     calls.borrow_mut().push(format!("country:{account_id}"));
     let record = json!({
-      "uid": "user-1",
+      "uid": "user-01",
       "unique_id": account_id,
       "country": "US"
     });
@@ -97,7 +101,7 @@ fn version_four_worker_enriches_discovered_account_country_by_handle() {
   assert_eq!(completed.status, "success");
   assert_eq!(
     calls.into_inner(),
-    vec!["discover", "country:account-handle-1"]
+    vec!["discover", "country:account-handle-01"]
   );
   let connection = super::open_workspace_connection(&root).expect("database should open");
   let persisted = connection

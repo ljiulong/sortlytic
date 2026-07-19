@@ -46,6 +46,7 @@ where
       platform: step.platform.clone(),
       data_type: step.data_type.clone(),
       params: step.params.clone(),
+      target_limit: step.record_limit,
       output_selected: step.output_selected,
       depends_on_step_key: step.depends_on_step_key.clone(),
       input_binding: step.input_binding.clone(),
