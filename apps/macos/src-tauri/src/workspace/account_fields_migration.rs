@@ -167,12 +167,17 @@ pub(super) fn apply_account_fields_migration(connection: &mut Connection) -> App
   let requires_table_rebuild = !record_schema_is_current(connection)?
     || !target_schema_is_current(connection)?;
   if requires_table_rebuild {
-    if declared_schema_version(connection)? != Some(9) {
-      return Err(workspace_error(
-        "账号字段迁移需要重建本地表，但工作区未明确声明为 v9，已拒绝继续",
-      ));
+    match declared_schema_version(connection)? {
+      Some(9) => {
+        create_consistent_migration_backup(connection, 9, 10)?;
+      }
+      None if workspace_count(connection)? == 0 => {}
+      _ => {
+        return Err(workspace_error(
+          "账号字段迁移需要重建本地表，但工作区未明确声明为 v9，已拒绝继续",
+        ));
+      }
     }
-    create_consistent_migration_backup(connection, 9, 10)?;
   }
   connection
     .execute_batch("PRAGMA foreign_keys = OFF;")
@@ -227,6 +232,12 @@ fn validate_marker_and_schema(
     ));
   }
   Ok(())
+}
+
+fn workspace_count(connection: &Connection) -> AppResult<i64> {
+  connection
+    .query_row("SELECT COUNT(*) FROM workspace", [], |row| row.get(0))
+    .map_err(database_error)
 }
 
 fn schema_is_current(connection: &Connection) -> AppResult<bool> {
