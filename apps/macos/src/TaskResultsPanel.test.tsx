@@ -82,7 +82,13 @@ describe('TaskResultsPanel', () => {
           followers_count: 1234,
           posts_count: 56,
         },
-        field_evidence_json: {},
+        field_evidence_json: {
+          bio: {
+            endpoint_key: 'tiktok.account_profile',
+            raw_path: 'user.signature',
+            collected_at: '2026-07-19T14:32:17Z',
+          },
+        },
       }],
     })
     const mounted = mountPanel()
@@ -96,6 +102,17 @@ describe('TaskResultsPanel', () => {
     expect(mounted.container.textContent).toContain('US')
     expect(mounted.container.textContent).toContain('1,234')
     expect(mounted.container.textContent).toContain('公开账号简介')
+
+    const detailButton = [...mounted.container.querySelectorAll('button')]
+      .find((button) => button.textContent?.includes('查看已选字段'))
+    expect(detailButton?.getAttribute('aria-expanded')).toBe('false')
+    await act(async () => detailButton?.click())
+    const details = mounted.container.querySelector('.task-results__details')
+    expect(detailButton?.getAttribute('aria-expanded')).toBe('true')
+    expect(details?.textContent).toContain('个人简介')
+    expect(details?.textContent).toContain('bio')
+    expect(details?.textContent).toContain('tiktok.account_profile')
+    expect(details?.textContent).toContain('user.signature')
   })
 
   it('区分空结果和读取失败，并允许重试失败请求', async () => {
@@ -162,6 +179,14 @@ describe('TaskResultsPanel', () => {
     expect(mounted.container.textContent).toContain('未采集到')
     expect(mounted.container.textContent).toContain('0')
     expect(mounted.container.textContent).not.toContain('未提供')
+
+    await act(async () => [...mounted.container.querySelectorAll('button')]
+      .find((button) => button.textContent?.includes('查看已选字段'))?.click())
+    const details = mounted.container.querySelector('.task-results__details')
+    expect(details?.textContent).toContain('作品数')
+    expect(details?.textContent).toContain('0')
+    expect(details?.textContent).toContain('个人简介')
+    expect(details?.textContent).toContain('未采集到')
   })
 
   it('已设置性别和年龄条件但接口缺值时显示未采集到', async () => {
