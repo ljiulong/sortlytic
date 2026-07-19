@@ -34,6 +34,7 @@ import {
 } from './use-workbench-backend'
 import {
   preflightCollectionPlanPricing,
+  pricingEndpointsForPlan,
   resetCollectionPricingStateForTests,
 } from './collection-pricing'
 import { buildPlanParams } from './collection-plan-client'
@@ -1321,6 +1322,36 @@ describe('mapBackendData', () => {
 })
 
 describe('planFromBackend', () => {
+  it('账号 Schema v4 的发现、关系与补全步骤全部进入实时计价端点', () => {
+    const endpoints = pricingEndpointsForPlan({
+      steps: [
+        { endpoint_key: 'tiktok.user_search' },
+        { endpoint_key: 'tiktok.followers' },
+        { endpoint_key: 'tiktok.followings' },
+        { endpoint_key: 'tiktok.similar_accounts' },
+        { endpoint_key: 'tiktok.account_country' },
+        { endpoint_key: 'douyin.user_search' },
+        { endpoint_key: 'douyin.followers' },
+        { endpoint_key: 'douyin.followings' },
+        { endpoint_key: 'douyin.extended_demographics' },
+        { endpoint_key: 'xiaohongshu.user_search' },
+      ],
+    })
+
+    expect(endpoints).toEqual([
+      '/api/v1/tiktok/app/v3/fetch_user_search_result',
+      '/api/v1/tiktok/app/v3/fetch_user_follower_list',
+      '/api/v1/tiktok/app/v3/fetch_user_following_list',
+      '/api/v1/tiktok/app/v3/fetch_similar_user_recommendations',
+      '/api/v1/tiktok/app/v3/fetch_user_country_by_username',
+      '/api/v1/douyin/search/fetch_user_search',
+      '/api/v1/douyin/web/fetch_user_fans_list',
+      '/api/v1/douyin/web/fetch_user_following_list',
+      '/api/v1/douyin/web/handler_user_profile_v4',
+      '/api/v1/xiaohongshu/app_v2/search_users',
+    ])
+  })
+
   it('恢复运行前实时计价所需的端点、请求上限和微美元预算', () => {
     const plan: CollectionPlanView = {
       id: 'plan-price',
