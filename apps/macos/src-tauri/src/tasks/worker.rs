@@ -44,6 +44,8 @@ pub(super) struct RunStep {
   pub(super) age_range: Option<AgeRange>,
   pub(super) step_key: String,
   pub(super) depends_on_step_key: Option<String>,
+  pub(super) input_binding: Option<String>,
+  pub(super) dependency_data_type: Option<String>,
 }
 
 pub fn execute_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRunView>> {
@@ -155,6 +157,19 @@ fn load_run_steps(connection: &rusqlite::Connection, run: &TaskRunView) -> AppRe
               json_extract(
                 plan.plan_json,
                 '$.steps[' || api_step.step_order || '].depends_on_step_key'
+              ),
+              json_extract(
+                plan.plan_json,
+                '$.steps[' || api_step.step_order || '].input_binding.account_id'
+              ),
+              (
+                SELECT json_extract(dependency.value, '$.data_type')
+                FROM json_each(plan.plan_json, '$.steps') AS dependency
+                WHERE json_extract(dependency.value, '$.step_key') = json_extract(
+                  plan.plan_json,
+                  '$.steps[' || api_step.step_order || '].depends_on_step_key'
+                )
+                LIMIT 1
               )
        FROM task_run_step AS run_step
        JOIN task_run ON task_run.id = run_step.task_run_id
@@ -186,6 +201,8 @@ fn load_run_steps(connection: &rusqlite::Connection, run: &TaskRunView) -> AppRe
           .map(|(min, max)| AgeRange { min, max }),
         step_key: row.get(12)?,
         depends_on_step_key: row.get(13)?,
+        input_binding: row.get(14)?,
+        dependency_data_type: row.get(15)?,
       })
     })
     .map_err(database_error)?;

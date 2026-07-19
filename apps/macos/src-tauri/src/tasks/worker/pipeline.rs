@@ -48,6 +48,8 @@ where
       params: step.params.clone(),
       output_selected: step.output_selected,
       depends_on_step_key: step.depends_on_step_key.clone(),
+      input_binding: step.input_binding.clone(),
+      dependency_data_type: step.dependency_data_type.clone(),
     },
   )?;
   mark_step_running(&connection, &step.id)?;

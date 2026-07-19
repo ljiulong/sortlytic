@@ -16,6 +16,8 @@ pub(super) struct TargetStepInput {
   pub params: Value,
   pub output_selected: bool,
   pub depends_on_step_key: Option<String>,
+  pub input_binding: Option<String>,
+  pub dependency_data_type: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -127,24 +129,34 @@ fn dependency_values(
   input: &TargetStepInput,
   target_field: &str,
 ) -> AppResult<BTreeSet<String>> {
-  let value_column = match target_field {
+  let binding = input.input_binding.as_deref().unwrap_or(target_field);
+  let value_column = match binding {
     "item_id" => "raw.platform_record_id",
-    "account_id" => "normalized.author_id",
-    _ => return Err(validation_error("关键词入口不支持当前目标绑定")),
+    "account_id" | "platform_user_id" => {
+      "COALESCE(json_extract(normalized.account_fields_json, '$.platform_user_id'), normalized.author_id)"
+    }
+    "account_handle" => "json_extract(normalized.account_fields_json, '$.account_handle')",
+    "secure_user_id" => "json_extract(normalized.account_fields_json, '$.secure_user_id')",
+    _ => return Err(validation_error("依赖步骤使用了不受支持的账号目标绑定")),
   };
+  let dependency_data_type = input
+    .dependency_data_type
+    .as_deref()
+    .ok_or_else(|| validation_error("依赖步骤缺少来源数据类型"))?;
   let sql = format!(
     "SELECT {value_column}
      FROM raw_record AS raw
      LEFT JOIN normalized_record AS normalized ON normalized.raw_record_id = raw.id
      WHERE raw.task_run_id = ?1 AND raw.platform = ?2
-       AND raw.data_type = 'keyword_search' AND {value_column} IS NOT NULL
+       AND raw.data_type = ?3 AND {value_column} IS NOT NULL
      ORDER BY raw.collected_at, raw.id"
   );
   let mut statement = connection.prepare(&sql).map_err(database_error)?;
   let values = statement
-    .query_map(params![input.task_run_id, input.platform], |row| {
-      row.get::<_, String>(0)
-    })
+    .query_map(
+      params![input.task_run_id, input.platform, dependency_data_type],
+      |row| row.get::<_, String>(0),
+    )
     .map_err(database_error)?
     .collect::<rusqlite::Result<BTreeSet<_>>>()
     .map_err(database_error)?;
@@ -180,9 +192,15 @@ fn validate_materialized_targets(targets: &[PipelineTarget]) -> AppResult<()> {
 
 fn target_field(data_type: &str) -> AppResult<&'static str> {
   match data_type {
-    "keyword_search" => Ok("keyword"),
+    "keyword_search" | "user_search" => Ok("keyword"),
     "item_detail" | "comments" => Ok("item_id"),
-    "account_profile" | "account_posts" => Ok("account_id"),
+    "account_profile"
+    | "account_posts"
+    | "followers"
+    | "followings"
+    | "similar_accounts"
+    | "extended_demographics"
+    | "account_country" => Ok("account_id"),
     _ => Err(validation_error("采集目标数据类型不受支持")),
   }
 }
@@ -229,6 +247,8 @@ mod tests {
         params: json!({ "item_id": "$steps.keyword_search.items[].item_id" }),
         output_selected: true,
         depends_on_step_key: Some("keyword_search".to_string()),
+        input_binding: None,
+        dependency_data_type: Some("keyword_search".to_string()),
       },
       TargetStepInput {
         task_run_id: "run-1".to_string(),
@@ -238,6 +258,8 @@ mod tests {
         params: json!({ "account_id": "$steps.keyword_search.items[].account_id" }),
         output_selected: true,
         depends_on_step_key: Some("keyword_search".to_string()),
+        input_binding: None,
+        dependency_data_type: Some("keyword_search".to_string()),
       },
     ] {
       materialize_targets(&connection, &input).expect("依赖目标应物化");
@@ -265,6 +287,56 @@ mod tests {
     assert!(targets[2].2.contains("video-a") || targets[3].2.contains("video-a"));
   }
 
+  #[test]
+  fn version_four_enrichment_uses_declared_account_binding_from_discovery_records() {
+    let connection = target_connection();
+    connection
+      .execute(
+        "INSERT INTO raw_record (
+           id, task_run_id, platform, data_type, platform_record_id
+         ) VALUES ('raw-v4', 'run-v4', 'tiktok', 'user_search', 'search-result-1')",
+        [],
+      )
+      .expect("v4 发现原始记录应插入");
+    connection
+      .execute(
+        "INSERT INTO normalized_record (
+           raw_record_id, author_id, account_fields_json
+         ) VALUES (?1, ?2, ?3)",
+        params![
+          "raw-v4",
+          "platform-user-1",
+          json!({
+            "platform_user_id": "platform-user-1",
+            "account_handle": "account-handle-1",
+            "secure_user_id": "secure-user-1"
+          })
+          .to_string()
+        ],
+      )
+      .expect("v4 发现归一化记录应插入");
+
+    let targets = materialize_targets(
+      &connection,
+      &TargetStepInput {
+        task_run_id: "run-v4".to_string(),
+        step_key: "enrich_country".to_string(),
+        platform: "tiktok".to_string(),
+        data_type: "account_country".to_string(),
+        params: json!({ "account_id": "$steps.discover.accounts[].account_handle" }),
+        output_selected: true,
+        depends_on_step_key: Some("discover".to_string()),
+        input_binding: Some("account_handle".to_string()),
+        dependency_data_type: Some("user_search".to_string()),
+      },
+    )
+    .expect("v4 账号名补全目标应物化");
+
+    assert_eq!(targets.len(), 1);
+    assert_eq!(targets[0].target_key, "account-handle-1");
+    assert_eq!(targets[0].params["account_id"], "account-handle-1");
+  }
+
   fn target_connection() -> Connection {
     let connection = Connection::open_in_memory().expect("内存数据库应创建");
     connection
@@ -274,7 +346,9 @@ mod tests {
            data_type TEXT, platform_record_id TEXT,
            collected_at TEXT DEFAULT '2026-07-16T08:00:00+00:00'
          );
-         CREATE TABLE normalized_record (raw_record_id TEXT, author_id TEXT);
+         CREATE TABLE normalized_record (
+           raw_record_id TEXT, author_id TEXT, account_fields_json TEXT NOT NULL DEFAULT '{}'
+         );
          CREATE TABLE collection_pipeline_target (
            id TEXT PRIMARY KEY, task_run_id TEXT NOT NULL, step_key TEXT NOT NULL,
            data_type TEXT NOT NULL, target_key TEXT NOT NULL,
@@ -300,7 +374,7 @@ mod tests {
         .expect("搜索原始记录应插入");
       connection
         .execute(
-          "INSERT INTO normalized_record VALUES (?1, ?2)",
+          "INSERT INTO normalized_record (raw_record_id, author_id) VALUES (?1, ?2)",
           params![raw_id, author_id],
         )
         .expect("搜索归一化记录应插入");
