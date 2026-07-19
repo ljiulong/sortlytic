@@ -11,9 +11,10 @@ use sha2::{Digest, Sha256};
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 use crate::workspace::{open_workspace_database, DATABASE_FILE_NAME};
 
+mod account_fields;
 mod storage;
 
-const NORMALIZED_SCHEMA_VERSION: i64 = 1;
+const NORMALIZED_SCHEMA_VERSION: i64 = 2;
 const MAX_PAGE_RECORDS: usize = 100;
 pub(super) const MAX_RAW_RECORD_BYTES: usize = 16 * 1024 * 1024;
 const MAX_RAW_PAGE_BYTES: usize = 16 * 1024 * 1024;
@@ -58,6 +59,8 @@ pub struct NormalizedRecordView {
   pub region: Option<String>,
   pub metrics_json: Value,
   pub tags_json: Value,
+  pub account_fields_json: Value,
+  pub field_evidence_json: Value,
   pub normalized_schema_version: i64,
   pub created_at: String,
 }
@@ -283,6 +286,8 @@ pub(super) struct NormalizedFields {
   pub(super) region: Option<String>,
   pub(super) metrics_json: Value,
   pub(super) tags_json: Value,
+  pub(super) account_fields_json: Value,
+  pub(super) field_evidence_json: Value,
 }
 
 fn normalize_input(input: PersistCollectionPageInput) -> AppResult<NormalizedInput> {
@@ -290,9 +295,11 @@ fn normalize_input(input: PersistCollectionPageInput) -> AppResult<NormalizedInp
   let task_run_id = required_text("task_run_id", &input.task_run_id, 512)?;
   let platform = required_text("platform", &input.platform, 64)?;
   let data_type = required_text("data_type", &input.data_type, 64)?;
-  let supported = crate::collection::list_platform_data_types(&platform)?
-    .iter()
-    .any(|capability| capability.data_type == data_type);
+  let supported = crate::collection::list_platform_data_types(&platform).is_ok_and(|items| {
+    items
+      .iter()
+      .any(|capability| capability.data_type == data_type)
+  }) || account_fields::is_supported_account_data_type(&platform, &data_type);
   if !supported {
     return Err(validation_error("平台与数据类型组合不受支持"));
   }
@@ -371,7 +378,7 @@ pub(super) fn prepare_record(
     raw_bytes,
     raw_hash,
     identity_hash,
-    normalized: normalize_record(payload, raw_value),
+    normalized: normalize_record(input, payload, raw_value),
   })
 }
 
@@ -439,7 +446,27 @@ fn platform_record_id(
   let pointers: &[&str] = match (platform, data_type) {
     (_, "comments") => &["/cid", "/comment_id", "/id"],
     ("xiaohongshu", "account_profile") => &["/user_id", "/red_id", "/id"],
-    (_, "account_profile") => &["/uid", "/user_id", "/sec_uid", "/unique_id", "/id"],
+    (
+      _,
+      "account_profile"
+      | "user_search"
+      | "followers"
+      | "followings"
+      | "similar_accounts"
+      | "extended_demographics"
+      | "account_country",
+    ) => &[
+      "/uid",
+      "/user_id",
+      "/userid",
+      "/sec_uid",
+      "/sec_user_id",
+      "/unique_id",
+      "/username",
+      "/id",
+      "/user/uid",
+      "/user/user_id",
+    ],
     ("xiaohongshu", _) => &["/note_id", "/id"],
     _ => &["/aweme_id", "/id"],
   };
@@ -451,8 +478,10 @@ fn platform_record_id(
   Ok(id)
 }
 
-fn normalize_record(payload: &Value, raw: &Value) -> NormalizedFields {
+fn normalize_record(input: &NormalizedInput, payload: &Value, raw: &Value) -> NormalizedFields {
   let sources = [payload, raw];
+  let (account_fields_json, field_evidence_json) =
+    account_fields::normalize_account_fields(input, raw);
   NormalizedFields {
     author_id: first_text_from_sources(
       &sources,
@@ -520,6 +549,8 @@ fn normalize_record(payload: &Value, raw: &Value) -> NormalizedFields {
     ),
     metrics_json: collect_metrics(&sources),
     tags_json: collect_tags(&sources),
+    account_fields_json,
+    field_evidence_json,
   }
 }
 

@@ -349,9 +349,11 @@ fn insert_normalized_record(
     .execute(
       "INSERT INTO normalized_record (
         id, raw_record_id, task_id, platform, author_id, author_name, content_text,
-        content_url, published_at, region, metrics_json, tags_json,
-        normalized_schema_version, created_at
-      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        content_url, published_at, region, metrics_json, tags_json, account_fields_json,
+        field_evidence_json, normalized_schema_version, created_at
+      ) VALUES (
+        ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16
+      )",
       params![
         id,
         raw_record_id,
@@ -365,6 +367,8 @@ fn insert_normalized_record(
         fields.region,
         fields.metrics_json.to_string(),
         fields.tags_json.to_string(),
+        fields.account_fields_json.to_string(),
+        fields.field_evidence_json.to_string(),
         NORMALIZED_SCHEMA_VERSION,
         created_at
       ],
@@ -406,7 +410,8 @@ fn find_normalized_record(
     .query_row(
       "SELECT id, raw_record_id, task_id, platform, author_id, author_name,
               content_text, content_url, published_at, region, metrics_json,
-              tags_json, normalized_schema_version, created_at
+              tags_json, account_fields_json, field_evidence_json,
+              normalized_schema_version, created_at
        FROM normalized_record WHERE raw_record_id = ?1",
       params![raw_record_id],
       map_normalized_record,
@@ -432,7 +437,8 @@ fn get_normalized_record(connection: &Connection, id: &str) -> AppResult<Normali
     .query_row(
       "SELECT id, raw_record_id, task_id, platform, author_id, author_name,
               content_text, content_url, published_at, region, metrics_json,
-              tags_json, normalized_schema_version, created_at
+              tags_json, account_fields_json, field_evidence_json,
+              normalized_schema_version, created_at
        FROM normalized_record WHERE id = ?1",
       params![id],
       map_normalized_record,
@@ -471,8 +477,10 @@ fn map_normalized_record(row: &Row<'_>) -> rusqlite::Result<NormalizedRecordView
     region: row.get(9)?,
     metrics_json: json_column(row, 10)?,
     tags_json: json_column(row, 11)?,
-    normalized_schema_version: row.get(12)?,
-    created_at: row.get(13)?,
+    account_fields_json: json_column(row, 12)?,
+    field_evidence_json: json_column(row, 13)?,
+    normalized_schema_version: row.get(14)?,
+    created_at: row.get(15)?,
   })
 }
 
