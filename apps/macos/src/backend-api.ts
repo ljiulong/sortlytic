@@ -201,6 +201,8 @@ export type TaskResultRecordView = {
   data_source: string
   collected_at: string
   notes?: string | null
+  account_fields_json: Record<string, unknown>
+  field_evidence_json: Record<string, unknown>
 }
 
 export type TaskResultsPageView = {
@@ -209,6 +211,7 @@ export type TaskResultsPageView = {
   run_status: string
   age_filter_configured: boolean
   gender_filter_configured: boolean
+  selected_fields: string[]
   total_count: number
   offset: number
   limit: number

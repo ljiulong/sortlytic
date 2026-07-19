@@ -59,6 +59,7 @@ describe('TaskResultsPanel', () => {
       run_status: 'success',
       age_filter_configured: true,
       gender_filter_configured: true,
+      selected_fields: ['bio', 'followers_count', 'posts_count'],
       total_count: 1,
       offset: 0,
       limit: 50,
@@ -76,6 +77,12 @@ describe('TaskResultsPanel', () => {
         posts_count: 56,
         data_source: 'TikHub API',
         collected_at: '2026-07-19T14:32:17Z',
+        account_fields_json: {
+          bio: '公开账号简介',
+          followers_count: 1234,
+          posts_count: 56,
+        },
+        field_evidence_json: {},
       }],
     })
     const mounted = mountPanel()
@@ -100,6 +107,7 @@ describe('TaskResultsPanel', () => {
         run_status: 'success',
         age_filter_configured: false,
         gender_filter_configured: false,
+        selected_fields: [],
         total_count: 0,
         offset: 0,
         limit: 50,
@@ -126,6 +134,7 @@ describe('TaskResultsPanel', () => {
       run_status: 'success',
       age_filter_configured: false,
       gender_filter_configured: false,
+      selected_fields: ['followers_count', 'posts_count', 'bio'],
       total_count: 1,
       offset: 0,
       limit: 50,
@@ -140,6 +149,8 @@ describe('TaskResultsPanel', () => {
         profile_text: null,
         data_source: 'TikHub API',
         collected_at: '2026-07-19T14:32:17Z',
+        account_fields_json: { posts_count: 0 },
+        field_evidence_json: {},
       }],
     })
     const mounted = mountPanel()
@@ -160,6 +171,7 @@ describe('TaskResultsPanel', () => {
       run_status: 'success',
       age_filter_configured: true,
       gender_filter_configured: true,
+      selected_fields: ['gender', 'age'],
       total_count: 1,
       offset: 0,
       limit: 50,
@@ -171,6 +183,8 @@ describe('TaskResultsPanel', () => {
         age: null,
         data_source: 'TikHub API',
         collected_at: '2026-07-19T14:32:17Z',
+        account_fields_json: {},
+        field_evidence_json: {},
       }],
     })
     const mounted = mountPanel()
