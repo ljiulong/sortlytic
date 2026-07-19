@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 
 use crate::domain::AppResult;
 
+use super::api_profile_migration::create_consistent_migration_backup;
 use super::{
   database_error, ensure_foreign_key_integrity, update_workspace_schema_version, workspace_error,
 };
@@ -162,6 +163,16 @@ pub(super) fn apply_account_fields_migration(connection: &mut Connection) -> App
     validate_marker_and_schema(connection, &name, &checksum)?;
     update_workspace_schema_version(connection, MIGRATION_VERSION)?;
     return ensure_foreign_key_integrity(connection);
+  }
+  let requires_table_rebuild = !record_schema_is_current(connection)?
+    || !target_schema_is_current(connection)?;
+  if requires_table_rebuild {
+    if declared_schema_version(connection)? != Some(9) {
+      return Err(workspace_error(
+        "账号字段迁移需要重建本地表，但工作区未明确声明为 v9，已拒绝继续",
+      ));
+    }
+    create_consistent_migration_backup(connection, 9, 10)?;
   }
   connection
     .execute_batch("PRAGMA foreign_keys = OFF;")
@@ -373,6 +384,38 @@ mod tests {
     install_v9_fixture(&connection);
 
     apply_account_fields_migration(&mut connection).expect("v10 migration should succeed");
+    let backup_path = fs::read_dir(root.join("backups"))
+      .unwrap()
+      .filter_map(Result::ok)
+      .map(|entry| entry.path())
+      .find(|path| {
+        path
+          .file_name()
+          .and_then(|name| name.to_str())
+          .is_some_and(|name| name.starts_with("app-v9-before-v10-") && name.ends_with(".sqlite"))
+      })
+      .expect("v9 migration backup should exist");
+    assert!(backup_path.with_extension("manifest.json").is_file());
+    let backup = Connection::open(&backup_path).unwrap();
+    assert_eq!(
+      backup
+        .query_row("SELECT COUNT(*) FROM raw_record WHERE id = 'raw-v9'", [], |row| {
+          row.get::<_, i64>(0)
+        })
+        .unwrap(),
+      1
+    );
+    assert_eq!(
+      backup
+        .query_row(
+          "SELECT COUNT(*) FROM schema_migrations WHERE version = 10",
+          [],
+          |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+      0
+    );
+    drop(backup);
     apply_account_fields_migration(&mut connection).expect("v10 migration should be idempotent");
 
     assert!(schema_is_current(&connection).unwrap());
