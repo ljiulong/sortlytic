@@ -1,13 +1,20 @@
 use std::path::Path;
 
-use rusqlite::{params, Connection};
 use rust_xlsxwriter::{
   DataValidation, DataValidationRule, ExcelDateTime, Format, FormatAlign, FormatBorder, Formula,
   Table, TableStyle, Workbook, Worksheet,
 };
+use serde_json::Value;
+
+#[path = "excel/account_export.rs"]
+mod account_export;
 
 use super::{export_error, open_workspace_connection, write_new_export_file, ReportView};
+use crate::collection::AccountFieldValueType;
 use crate::domain::AppResult;
+use account_export::{
+  load_account_export, write_field_guide_sheet, AccountExport, ExportAccount, ExportField,
+};
 
 const HEADERS: [&str; 18] = [
   "序号",
@@ -34,32 +41,16 @@ const COLUMN_WIDTHS: [f64; 18] = [
   16.0, 42.0,
 ];
 
-#[derive(Debug)]
-struct ExportAccount {
-  username: Option<String>,
-  account: Option<String>,
-  platform_user_id: Option<String>,
-  profile_text: Option<String>,
-  country_region: Option<String>,
-  region_source: Option<String>,
-  region_confidence: Option<String>,
-  platform: String,
-  gender: Option<String>,
-  age: Option<i64>,
-  followers_count: Option<i64>,
-  posts_count: Option<i64>,
-  last_posted_at: Option<String>,
-  profile_url: Option<String>,
-  data_source: String,
-  collected_at: String,
-  notes: Option<String>,
-}
-
 pub(super) fn write_excel(root_path: &Path, path: &Path, report: &ReportView) -> AppResult<()> {
   let connection = open_workspace_connection(root_path)?;
-  let accounts = load_accounts(&connection, &report.task_id)?;
+  let export = load_account_export(&connection, &report.task_id)?;
   let mut workbook = Workbook::new();
-  write_accounts_sheet(&mut workbook, &accounts)?;
+  if export.is_v4 {
+    write_dynamic_accounts_sheet(&mut workbook, &export)?;
+    write_field_guide_sheet(&mut workbook, &export)?;
+  } else {
+    write_accounts_sheet(&mut workbook, &export.accounts)?;
+  }
   write_instructions_sheet(&mut workbook)?;
   write_enums_sheet(&mut workbook)?;
   write_sources_sheet(&mut workbook)?;
@@ -67,51 +58,225 @@ pub(super) fn write_excel(root_path: &Path, path: &Path, report: &ReportView) ->
   write_new_export_file(path, &bytes)
 }
 
-fn load_accounts(connection: &Connection, task_id: &str) -> AppResult<Vec<ExportAccount>> {
-  let mut statement = connection
-    .prepare(
-      "SELECT account.username, account.account, account.platform_user_id,
-              account.profile_text, account.country_region, account.region_source,
-              account.region_confidence, account.platform, account.gender, account.age,
-              account.followers_count, account.posts_count, account.last_posted_at,
-              account.profile_url, account.data_source, account.collected_at, account.notes
-       FROM collected_account AS account
-       JOIN task_run AS run ON run.id = account.task_run_id
-       WHERE run.task_id = ?1 AND account.output_included = 1
-         AND run.id = (
-           SELECT latest.id FROM task_run AS latest
-           WHERE latest.task_id = ?1 AND latest.status IN ('success', 'partial_success')
-           ORDER BY COALESCE(latest.ended_at, latest.started_at) DESC, latest.id DESC LIMIT 1
-         )
-       ORDER BY account.created_at, account.id",
+fn write_dynamic_accounts_sheet(workbook: &mut Workbook, export: &AccountExport) -> AppResult<()> {
+  let worksheet = workbook
+    .add_worksheet()
+    .set_name("用户数据收集表")
+    .map_err(export_error)?;
+  let headers = [
+    "平台",
+    "显示名称",
+    "账号",
+    "平台用户 ID",
+    "数据来源",
+    "采集时间",
+  ]
+  .into_iter()
+  .map(str::to_string)
+  .chain(
+    export
+      .selected_fields
+      .iter()
+      .map(|field| field.label.clone()),
+  )
+  .collect::<Vec<_>>();
+  let last_column = (headers.len() - 1) as u16;
+  worksheet.set_screen_gridlines(false);
+  worksheet.set_freeze_panes(4, 0).map_err(export_error)?;
+  for column in 0..headers.len() {
+    let width = if column == 1 || column >= 6 {
+      22.0
+    } else {
+      18.0
+    };
+    worksheet
+      .set_column_width(column as u16, width)
+      .map_err(export_error)?;
+  }
+  let title = Format::new()
+    .set_bold()
+    .set_font_size(16)
+    .set_font_color("#FFFFFF")
+    .set_background_color("#1F4E78")
+    .set_align(FormatAlign::Center)
+    .set_align(FormatAlign::VerticalCenter);
+  let note = Format::new()
+    .set_font_color("#44546A")
+    .set_background_color("#D9EAF7")
+    .set_text_wrap()
+    .set_align(FormatAlign::VerticalCenter);
+  worksheet
+    .merge_range(0, 0, 0, last_column, "账号公开数据导出", &title)
+    .map_err(export_error)?;
+  worksheet
+    .merge_range(
+      1,
+      0,
+      1,
+      last_column,
+      "基础身份字段始终存在，仅追加本任务选择的扩展字段；技术游标、日志 ID、临时 URL 与签名令牌不导出。",
+      &note,
     )
-    .map_err(super::database_error)?;
-  let rows = statement
-    .query_map(params![task_id], |row| {
-      Ok(ExportAccount {
-        username: row.get(0)?,
-        account: row.get(1)?,
-        platform_user_id: row.get(2)?,
-        profile_text: row.get(3)?,
-        country_region: row.get(4)?,
-        region_source: row.get(5)?,
-        region_confidence: row.get(6)?,
-        platform: row.get(7)?,
-        gender: row.get(8)?,
-        age: row.get(9)?,
-        followers_count: row.get(10)?,
-        posts_count: row.get(11)?,
-        last_posted_at: row.get(12)?,
-        profile_url: row.get(13)?,
-        data_source: row.get(14)?,
-        collected_at: row.get(15)?,
-        notes: row.get(16)?,
-      })
-    })
-    .map_err(super::database_error)?;
-  rows
-    .collect::<rusqlite::Result<Vec<_>>>()
-    .map_err(super::database_error)
+    .map_err(export_error)?;
+  let header = header_format();
+  for (column, value) in headers.iter().enumerate() {
+    worksheet
+      .write_with_format(3, column as u16, value, &header)
+      .map_err(export_error)?;
+  }
+  let body = Format::new()
+    .set_border(FormatBorder::Thin)
+    .set_border_color("#D9E2F3")
+    .set_align(FormatAlign::VerticalCenter)
+    .set_text_wrap();
+  let centered = body.clone().set_align(FormatAlign::Center);
+  let integer = centered.clone().set_num_format("#,##0");
+  let date = centered.clone().set_num_format("yyyy-mm-dd");
+  for (index, account) in export.accounts.iter().enumerate() {
+    let row = (index + 4) as u32;
+    worksheet.set_row_height(row, 36).map_err(export_error)?;
+    write_dynamic_base_fields(worksheet, row, account, &body, &centered, &date)?;
+    for (field_index, field) in export.selected_fields.iter().enumerate() {
+      write_dynamic_field(
+        worksheet,
+        row,
+        (field_index + 6) as u16,
+        field,
+        account.account_fields_json.get(&field.key),
+        &body,
+        &centered,
+        &integer,
+        &date,
+      )?;
+    }
+  }
+  if !export.accounts.is_empty() {
+    let table = Table::new()
+      .set_name("CollectedAccounts")
+      .set_style(TableStyle::Light9)
+      .set_banded_rows(true);
+    worksheet
+      .add_table(
+        3,
+        0,
+        (export.accounts.len() + 3) as u32,
+        last_column,
+        &table,
+      )
+      .map_err(export_error)?;
+  }
+  Ok(())
+}
+
+fn write_dynamic_base_fields(
+  worksheet: &mut Worksheet,
+  row: u32,
+  account: &ExportAccount,
+  body: &Format,
+  centered: &Format,
+  date: &Format,
+) -> AppResult<()> {
+  worksheet
+    .write_with_format(row, 0, platform_label(&account.platform), centered)
+    .map_err(export_error)?;
+  write_required_text(worksheet, row, 1, account.username.as_deref(), body)?;
+  write_required_text(worksheet, row, 2, account.account.as_deref(), body)?;
+  write_required_text(worksheet, row, 3, account.platform_user_id.as_deref(), body)?;
+  write_required_text(worksheet, row, 4, Some(&account.data_source), body)?;
+  write_date(worksheet, row, 5, Some(&account.collected_at), date)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_dynamic_field(
+  worksheet: &mut Worksheet,
+  row: u32,
+  column: u16,
+  field: &ExportField,
+  value: Option<&Value>,
+  body: &Format,
+  centered: &Format,
+  integer: &Format,
+  date: &Format,
+) -> AppResult<()> {
+  let Some(value) = value.filter(|value| !value.is_null()) else {
+    return worksheet
+      .write_with_format(row, column, "未采集到", body)
+      .map(|_| ())
+      .map_err(export_error);
+  };
+  match field.value_type {
+    AccountFieldValueType::Integer => match value.as_i64() {
+      Some(number) => worksheet.write_with_format(row, column, number, integer),
+      None => worksheet.write_with_format(row, column, value.to_string(), body),
+    }
+    .map(|_| ())
+    .map_err(export_error),
+    AccountFieldValueType::Boolean => match value.as_bool() {
+      Some(flag) => worksheet.write_with_format(row, column, flag, centered),
+      None => worksheet.write_with_format(row, column, value.to_string(), body),
+    }
+    .map(|_| ())
+    .map_err(export_error),
+    AccountFieldValueType::Timestamp => {
+      let text = value.as_str().unwrap_or_default();
+      if text.len() >= 10 && ExcelDateTime::parse_from_str(&text[..10]).is_ok() {
+        write_date(worksheet, row, column, Some(text), date)
+      } else {
+        worksheet
+          .write_with_format(row, column, text, body)
+          .map(|_| ())
+          .map_err(export_error)
+      }
+    }
+    AccountFieldValueType::TextList => {
+      let text = value
+        .as_array()
+        .map(|items| {
+          items
+            .iter()
+            .map(|item| {
+              item
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| item.to_string())
+            })
+            .collect::<Vec<_>>()
+            .join("；")
+        })
+        .unwrap_or_else(|| value.to_string());
+      worksheet
+        .write_with_format(row, column, text, body)
+        .map(|_| ())
+        .map_err(export_error)
+    }
+    AccountFieldValueType::Text => {
+      let text = value
+        .as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| value.to_string());
+      write_required_text(worksheet, row, column, Some(&text), body)
+    }
+  }
+}
+
+fn write_required_text(
+  worksheet: &mut Worksheet,
+  row: u32,
+  column: u16,
+  value: Option<&str>,
+  format: &Format,
+) -> AppResult<()> {
+  worksheet
+    .write_with_format(
+      row,
+      column,
+      value
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("未采集到"),
+      format,
+    )
+    .map(|_| ())
+    .map_err(export_error)
 }
 
 fn write_accounts_sheet(workbook: &mut Workbook, accounts: &[ExportAccount]) -> AppResult<()> {

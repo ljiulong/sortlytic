@@ -226,6 +226,46 @@ fn account_template_export_preserves_200_rows_and_expands_at_201_and_1200() {
 }
 
 #[test]
+fn account_v4_export_uses_selected_fields_and_adds_field_guide() {
+  let (root_path, xlsx_path) = account_v4_export_fixture();
+  let workbook = unzip_entry(&xlsx_path, "xl/workbook.xml");
+  let strings = unzip_entry(&xlsx_path, "xl/sharedStrings.xml");
+  let accounts = unzip_entry(&xlsx_path, "xl/worksheets/sheet1.xml");
+
+  assert_eq!(workbook.matches("<sheet ").count(), 5);
+  assert!(workbook.contains("name=\"用户数据收集表\""));
+  assert!(workbook.contains("name=\"字段说明\""));
+  assert!(accounts.contains("<dimension ref=\"A1:J5\""));
+  for header in [
+    "平台",
+    "显示名称",
+    "账号",
+    "平台用户 ID",
+    "数据来源",
+    "采集时间",
+    "个人简介",
+    "粉丝数",
+    "认证状态",
+    "年龄",
+  ] {
+    assert!(
+      strings.contains(&format!(">{header}</t>")),
+      "missing {header}"
+    );
+  }
+  let zero = xml_cell(&accounts, "H5");
+  assert!(zero.contains("<v>0</v>"));
+  assert!(!zero.contains("t=\"s\""));
+  assert!(strings.contains(">未采集到</t>"));
+  assert!(strings.contains(">任务未设置</t>"));
+  assert!(strings.contains("tiktok.account_profile"));
+  assert!(strings.contains("user.signature"));
+  assert!(!strings.contains("SECRET_CURSOR_TOKEN"));
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn custom_export_target_must_be_new_and_match_the_export_type() {
   let (root_path, report) = test_report("custom-target");
   let existing = root_path.join("existing.pdf");
@@ -411,6 +451,45 @@ fn account_export_fixture(count: usize) -> (std::path::PathBuf, std::path::PathB
       )
       .expect("account should insert");
   }
+  let job = create_export_job(&root_path, &report.id, "xlsx", None).expect("xlsx should export");
+  (root_path, job.file_path.expect("xlsx path should exist"))
+}
+
+fn account_v4_export_fixture() -> (std::path::PathBuf, std::path::PathBuf) {
+  let (root_path, report) = test_report("account-v4-fields");
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  connection
+    .execute(
+      "UPDATE collection_task
+       SET account_source = 'user_search', data_types_json = '[\"account\"]',
+           selected_fields_json = '[\"bio\",\"followers_count\",\"verification_status\",\"age\"]'
+       WHERE id = ?1",
+      params![report.task_id],
+    )
+    .expect("v4 task scope should update");
+  connection
+    .execute(
+      "INSERT INTO task_run (id, task_id, status, started_at, ended_at, current_stage)
+       VALUES ('account-v4-run', ?1, 'success', ?2, ?2, '已完成')",
+      params![report.task_id, "2026-07-20T08:00:00+00:00"],
+    )
+    .expect("v4 run should insert");
+  connection
+    .execute(
+      "INSERT INTO collected_account (
+         id, task_run_id, platform, identity_key, username, account, platform_user_id,
+         data_source, collected_at, account_fields_json, field_evidence_json,
+         output_included, created_at, updated_at
+       ) VALUES ('account-v4-result', 'account-v4-run', 'tiktok', 'id:v4-user',
+         '字段账号', 'field_account', 'v4-user', 'TikHub API', ?1,
+         '{\"bio\":\"公开简介\",\"followers_count\":0,\"verification_status\":false,\"cursor_token\":\"SECRET_CURSOR_TOKEN\"}',
+         '{\"bio\":{\"endpoint_key\":\"tiktok.account_profile\",\"raw_path\":\"user.signature\",\"collected_at\":\"2026-07-20T08:00:00+00:00\"}}',
+         1, ?1, ?1)",
+      params!["2026-07-20T08:00:00+00:00"],
+    )
+    .expect("v4 result should insert");
+  drop(connection);
+
   let job = create_export_job(&root_path, &report.id, "xlsx", None).expect("xlsx should export");
   (root_path, job.file_path.expect("xlsx path should exist"))
 }
