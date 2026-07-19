@@ -76,6 +76,10 @@ describe('GuidePage', () => {
 
     expect(markup).toContain('249 个 ISO 两位代码')
     expect(markup).toContain('中文名、英文名或两位代码')
+    expect(markup).toContain('单一账号来源')
+    expect(markup).toContain('核心字段预设')
+    expect(markup).toContain('补全请求')
+    expect(markup).toContain('小红书当前不提供粉丝、关注和相似账号来源')
     expect(markup).toContain('明确公开年龄')
     expect(markup).toContain('明确公开性别')
     expect(markup).toContain('确认运行')
@@ -86,6 +90,9 @@ describe('GuidePage', () => {
     expect(markup).toContain('提示词版本')
     expect(markup).toContain('Schema')
     expect(markup).toContain('来源证据')
+    expect(markup).toContain('任务未设置')
+    expect(markup).toContain('未采集到')
+    expect(markup).toContain('字段说明')
   })
 
   it('不再借用任务卡、连接卡、导出卡或计划网格', () => {
@@ -146,7 +153,7 @@ describe('GuidePage', () => {
     expect(markup).toContain('不进入数据库、日志、导出或 Webhook')
     expect(markup).toContain('最小真实模型请求')
     expect(markup).toContain('当前启用的提示词正文')
-    expect(markup).toContain('collection_plan_v3')
+    expect(markup).toContain('collection_plan_v4')
     expect(markup).toContain('用户确认运行后')
     expect(markup).toContain('真实 TikHub 请求')
     expect(markup).not.toContain('系统安全存储引用')
@@ -154,5 +161,6 @@ describe('GuidePage', () => {
     expect(markup).not.toContain('本地规则引擎')
     expect(markup).not.toContain('只校验配置完整性')
     expect(markup).not.toContain('规则引擎不会调用')
+    expect(markup).not.toContain('collection_plan_v3')
   })
 })
