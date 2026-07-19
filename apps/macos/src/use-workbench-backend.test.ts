@@ -411,6 +411,60 @@ describe('任务页动作', () => {
     ])
   })
 
+  it('0.1 至 1.0 美元每档三轮都可确认入队，不触发额度阀门', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      const taskId = String(args?.taskId ?? '')
+      const tenths = Number(/budget-(\d+)-round-\d+/.exec(taskId)?.[1] ?? 0)
+      if (command === 'get_latest_collection_plan') {
+        return {
+          id: `plan-${taskId}`,
+          task_id: taskId,
+          source: 'form_generated',
+          schema_version: 3,
+          plan_json: {
+            platforms: ['tiktok'],
+            data_types: ['comments'],
+            keywords: ['low-budget-matrix'],
+            time_range: '1',
+            record_limit: 10,
+            budget_limit: { currency: 'USD', amount_micros: tenths * 100_000 },
+            steps: [{ endpoint_key: 'tiktok.comments' }],
+          },
+          validation_status: 'valid',
+          validation_errors_json: [],
+          cost_estimate_json: { request_count_estimate: 1 },
+          confirmed_by_user: false,
+          created_at: '2026-07-19T00:00:00Z',
+          updated_at: '2026-07-19T00:00:00Z',
+        }
+      }
+      if (command === 'estimate_task_cost') return { request_count_estimate: 1 }
+      if (command === 'confirm_collection_plan') return { ...task, id: taskId }
+      if (command === 'enqueue_task') {
+        return { id: `run-${taskId}`, task_id: taskId, status: 'queued' }
+      }
+      throw new Error(`意外命令：${command}`)
+    })
+
+    for (let round = 1; round <= 3; round += 1) {
+      for (let tenths = 1; tenths <= 10; tenths += 1) {
+        const taskId = `budget-${tenths}-round-${round}`
+        await expect(confirmPersistedTask(taskId)).resolves.toMatchObject({
+          task_id: taskId,
+          status: 'queued',
+        })
+      }
+    }
+
+    const commands = invokeMock.mock.calls.map(([command]) => command)
+    expect(commands.filter((command) => command === 'confirm_collection_plan')).toHaveLength(30)
+    expect(commands.filter((command) => command === 'enqueue_task')).toHaveLength(30)
+    expect(commands).not.toContain('get_api_profile_registry')
+    expect(commands).not.toContain('test_api_profile')
+    expect(commands).not.toContain('quote_tikhub_connector_price')
+  })
+
   it('单任务导出只生成用户选择的文件格式', async () => {
     vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
     invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
