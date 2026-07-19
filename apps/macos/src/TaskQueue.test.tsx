@@ -4,14 +4,19 @@ import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ExportJobView } from './backend-api'
 import TaskQueue, {
   capabilitiesForStatus,
   confirmationForTaskAction,
   taskExportFormatOptions,
 } from './TaskQueue'
 import { i18n as appI18n } from './i18n'
-import type { WorkbenchRuntimeData } from './use-workbench-backend'
+import type { TaskExportInput, WorkbenchRuntimeData } from './use-workbench-backend'
 import type { TaskStatus } from './workbench-data'
+
+const openPathMock = vi.hoisted(() => vi.fn())
+
+vi.mock('@tauri-apps/plugin-opener', () => ({ openPath: openPathMock }))
 
 const waitingTask: WorkbenchRuntimeData['tasks'][number] = {
   id: 'task-waiting',
@@ -32,6 +37,7 @@ const mountedQueues = new Set<{ container: HTMLDivElement; root: Root }>()
 function mountQueue(
   onConfirmTask: (taskId: string) => Promise<unknown>,
   tasks: WorkbenchRuntimeData['tasks'] = [waitingTask],
+  onExportTask: (input: TaskExportInput) => Promise<ExportJobView> = vi.fn(),
 ) {
   const container = document.createElement('div')
   const root = createRoot(container)
@@ -45,7 +51,7 @@ function mountQueue(
     onCancelTask: vi.fn(),
     onConfirmTask,
     onDeleteTask: vi.fn(),
-    onExportTask: vi.fn(),
+    onExportTask,
   })))
   return mounted
 }
@@ -54,6 +60,8 @@ beforeEach(async () => {
   ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
     .IS_REACT_ACT_ENVIRONMENT = true
   await appI18n.changeLanguage('zh-CN')
+  openPathMock.mockReset()
+  openPathMock.mockResolvedValue(undefined)
 })
 
 afterEach(() => {
@@ -228,6 +236,109 @@ describe('TaskQueue', () => {
     expect(markup).not.toContain('确认运行')
     expect(markup).toContain('导出')
     expect(markup).not.toMatch(/<button[^>]*disabled=""[^>]*>[^<]*(?:<[^>]+>)*导出/)
+  })
+
+  it('导出成功后自动打开绝对路径，并在当前任务提供再次打开入口', async () => {
+    const filePath = '/Users/test/Library/Application Support/Sortlytic/exports/result.xlsx'
+    const exportJob: ExportJobView = {
+      id: 'export-1',
+      report_id: 'report-1',
+      export_type: 'xlsx',
+      status: 'success',
+      file_path: filePath,
+      file_hash: 'sha256',
+      file_size: 2048,
+      created_at: '2026-07-19T00:00:00Z',
+      completed_at: '2026-07-19T00:00:01Z',
+    }
+    const onExportTask = vi.fn(async () => exportJob)
+    const mounted = mountQueue(
+      vi.fn(async () => undefined),
+      [{ ...waitingTask, status: '成功', progress: 100 }],
+      onExportTask,
+    )
+    const exportButton = mounted.container.querySelector<HTMLButtonElement>('button[aria-label="导出"]')
+
+    await act(async () => exportButton?.click())
+
+    expect(onExportTask).toHaveBeenCalledWith({ taskId: waitingTask.id, format: 'xlsx' })
+    expect(openPathMock).toHaveBeenCalledWith(filePath)
+    expect(mounted.container.textContent).toContain('导出文件已生成')
+    expect(mounted.container.textContent).toContain(filePath)
+
+    const openAgain = mounted.container.querySelector<HTMLButtonElement>(
+      'button[aria-label="打开导出文件"]',
+    )
+    expect(openAgain).toBeTruthy()
+
+    await act(async () => openAgain?.click())
+    expect(openPathMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('导出失败时在当前任务显示明确错误', async () => {
+    const onExportTask = vi.fn(async (): Promise<ExportJobView> => {
+      throw new Error('导出目录不可写')
+    })
+    const mounted = mountQueue(
+      vi.fn(async () => undefined),
+      [{ ...waitingTask, status: '成功', progress: 100 }],
+      onExportTask,
+    )
+    const exportButton = mounted.container.querySelector<HTMLButtonElement>('button[aria-label="导出"]')
+
+    await act(async () => exportButton?.click())
+
+    expect(openPathMock).not.toHaveBeenCalled()
+    expect(mounted.container.querySelector('[role="alert"]')?.textContent)
+      .toContain('导出失败：导出目录不可写')
+  })
+
+  it('文件已生成但系统打开失败时保留路径并显示打开错误', async () => {
+    const filePath = '/Users/test/Sortlytic/exports/result.pdf'
+    const onExportTask = vi.fn(async (): Promise<ExportJobView> => ({
+      id: 'export-pdf',
+      report_id: 'report-pdf',
+      export_type: 'pdf',
+      status: 'success',
+      file_path: filePath,
+      created_at: '2026-07-19T00:00:00Z',
+    }))
+    openPathMock.mockRejectedValueOnce(new Error('系统没有关联应用'))
+    const mounted = mountQueue(
+      vi.fn(async () => undefined),
+      [{ ...waitingTask, status: '成功', progress: 100 }],
+      onExportTask,
+    )
+    const exportButton = mounted.container.querySelector<HTMLButtonElement>('button[aria-label="导出"]')
+
+    await act(async () => exportButton?.click())
+
+    expect(mounted.container.textContent).toContain(filePath)
+    expect(mounted.container.querySelector('[role="alert"]')?.textContent)
+      .toContain('文件已生成，但无法打开：系统没有关联应用')
+    expect(mounted.container.querySelector('button[aria-label="打开导出文件"]')).toBeTruthy()
+  })
+
+  it('导出成功但缺少后端文件路径时拒绝伪装为可打开', async () => {
+    const onExportTask = vi.fn(async (): Promise<ExportJobView> => ({
+      id: 'export-without-path',
+      report_id: 'report-without-path',
+      export_type: 'xlsx',
+      status: 'success',
+      created_at: '2026-07-19T00:00:00Z',
+    }))
+    const mounted = mountQueue(
+      vi.fn(async () => undefined),
+      [{ ...waitingTask, status: '成功', progress: 100 }],
+      onExportTask,
+    )
+    const exportButton = mounted.container.querySelector<HTMLButtonElement>('button[aria-label="导出"]')
+
+    await act(async () => exportButton?.click())
+
+    expect(openPathMock).not.toHaveBeenCalled()
+    expect(mounted.container.querySelector('[role="alert"]')?.textContent)
+      .toContain('导出成功，但后端未返回文件路径')
   })
 
   it('失败任务展示最新运行阶段、安全错误和重试状态', () => {

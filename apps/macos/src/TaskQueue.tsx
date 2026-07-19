@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Ban, Download, ListTodo, Pencil, Play, Save, Trash2, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import AppSelect from './AppSelect'
-import { backendErrorMessage } from './backend-api'
+import { backendErrorMessage, type ExportJobView } from './backend-api'
 import { StatusPill } from './CollectionBuilder'
 import { i18n as appI18n } from './i18n'
 import TaskRunLogPanel from './TaskRunLogPanel'
@@ -17,6 +17,11 @@ type ActiveTaskMode =
   | { taskId: string; type: 'confirm-cancel' }
   | { taskId: string; type: 'confirm-delete' }
 type ConfirmationMode = Exclude<ActiveTaskMode, { type: 'edit' }>
+type TaskExportFeedback = {
+  errorReason?: string
+  errorType?: 'export' | 'missing-path' | 'open'
+  filePath?: string
+}
 
 type TaskQueueProps = {
   tasks: TaskRow[]
@@ -25,7 +30,7 @@ type TaskQueueProps = {
   onCancelTask: (taskId: string) => Promise<unknown>
   onConfirmTask: (taskId: string) => Promise<unknown>
   onDeleteTask: (taskId: string) => Promise<unknown>
-  onExportTask: (input: TaskExportInput) => Promise<unknown>
+  onExportTask: (input: TaskExportInput) => Promise<ExportJobView>
 }
 
 const taskStatusTranslationKeys: Record<TaskStatus, string> = {
@@ -116,6 +121,7 @@ function TaskQueue({
   const [previewTaskId, setPreviewTaskId] = useState<string>()
   const [draftName, setDraftName] = useState('')
   const [exportFormats, setExportFormats] = useState<Record<string, TaskExportInput['format']>>({})
+  const [exportFeedback, setExportFeedback] = useState<Record<string, TaskExportFeedback>>({})
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({})
   const previewTask = previewTaskId
     ? tasks.find((task) => task.id === previewTaskId)
@@ -185,11 +191,51 @@ function TaskQueue({
     }
   }
 
-  const exportTask = async (taskId: string) => {
+  const openExportFile = async (taskId: string, filePath: string) => {
+    setExportFeedback((feedback) => ({
+      ...feedback,
+      [taskId]: { filePath },
+    }))
     try {
-      await onExportTask({ taskId, format: exportFormats[taskId] ?? 'xlsx' })
-    } catch {
-      // 后端错误会显示在工作区状态栏。
+      const { openPath } = await import('@tauri-apps/plugin-opener')
+      await openPath(filePath)
+    } catch (error) {
+      setExportFeedback((feedback) => ({
+        ...feedback,
+        [taskId]: {
+          errorReason: backendErrorMessage(error),
+          errorType: 'open',
+          filePath,
+        },
+      }))
+    }
+  }
+
+  const exportTask = async (taskId: string) => {
+    setExportFeedback((feedback) => {
+      const next = { ...feedback }
+      delete next[taskId]
+      return next
+    })
+    try {
+      const exportJob = await onExportTask({ taskId, format: exportFormats[taskId] ?? 'xlsx' })
+      const filePath = exportJob.file_path?.trim()
+      if (!filePath) {
+        setExportFeedback((feedback) => ({
+          ...feedback,
+          [taskId]: { errorType: 'missing-path' },
+        }))
+        return
+      }
+      await openExportFile(taskId, filePath)
+    } catch (error) {
+      setExportFeedback((feedback) => ({
+        ...feedback,
+        [taskId]: {
+          errorReason: backendErrorMessage(error),
+          errorType: 'export',
+        },
+      }))
     }
   }
 
@@ -240,6 +286,15 @@ function TaskQueue({
               : undefined
             const isConfirming = Boolean(confirmation)
             const actionError = actionErrors[task.id]
+            const taskExportFeedback = exportFeedback[task.id]
+            const exportedFilePath = taskExportFeedback?.filePath
+            const exportError = taskExportFeedback?.errorType === 'missing-path'
+              ? t('taskQueue.exportMissingPath')
+              : taskExportFeedback?.errorType === 'open'
+                ? t('taskQueue.openExportFailed', { reason: taskExportFeedback.errorReason })
+                : taskExportFeedback?.errorType === 'export'
+                  ? t('taskQueue.exportFailed', { reason: taskExportFeedback.errorReason })
+                  : undefined
             const confirmationContent = confirmation
               ? confirmationForTaskAction(confirmation.type)
               : {
@@ -537,6 +592,33 @@ function TaskQueue({
                       </div>
                     </div>
                   </div>
+                  {taskExportFeedback ? (
+                    <div aria-live="polite" className="task-card__export-result">
+                      {exportedFilePath ? (
+                        <div>
+                          <p><strong>{t('taskQueue.exportReady')}</strong></p>
+                          <p>
+                            <span>{t('taskQueue.exportPath')}</span>
+                            <code>{exportedFilePath}</code>
+                          </p>
+                          <button
+                            aria-label={t('taskQueue.openExportFile')}
+                            className="ghost-button"
+                            disabled={isBusy}
+                            type="button"
+                            onClick={() => void openExportFile(task.id, exportedFilePath)}
+                          >
+                            {t('taskQueue.openExportFile')}
+                          </button>
+                        </div>
+                      ) : null}
+                      {exportError ? (
+                        <p className="task-card__confirmation-error" role="alert">
+                          {exportError}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </footer>
               </article>
             )
