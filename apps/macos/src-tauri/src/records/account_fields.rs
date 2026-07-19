@@ -47,6 +47,50 @@ pub(super) fn normalize_account_fields(input: &NormalizedInput, raw: &Value) -> 
       evidence.raw_path = format!("{prefix}{}", evidence.raw_path);
     }
   }
+  for (field, value, paths) in [
+    (
+      "platform_user_id",
+      account.platform_user_id.clone(),
+      &[
+        "/platform_user_id",
+        "/user_id",
+        "/userid",
+        "/uid",
+        "/sec_user_id",
+        "/sec_uid",
+      ][..],
+    ),
+    (
+      "display_name",
+      account.username.clone(),
+      &["/nickname", "/display_name", "/name"][..],
+    ),
+    (
+      "account_handle",
+      account.account.clone(),
+      &["/unique_id", "/account", "/username", "/red_id"][..],
+    ),
+  ] {
+    let Some(value) = value else {
+      continue;
+    };
+    account
+      .account_fields
+      .insert(field.to_string(), Value::String(value));
+    if let Some(raw_path) = paths
+      .iter()
+      .find(|path| account_payload.pointer(path).is_some())
+    {
+      account.field_evidence.insert(
+        field.to_string(),
+        FieldEvidence {
+          endpoint_key: endpoint_key.clone(),
+          raw_path: format!("{prefix}{raw_path}"),
+          collected_at: input.collected_at.clone(),
+        },
+      );
+    }
+  }
   if input.data_type == "account_posts" {
     if let Some((posted_at, raw_path)) = first_value_with_path(
       raw,
@@ -139,6 +183,8 @@ mod tests {
       &input("douyin", "user_search"),
       &serde_json::json!({
         "uid": "user-1",
+        "nickname": "用户一",
+        "unique_id": "account-1",
         "follower_count": 0,
         "gender": 0,
         "age": -1,
@@ -150,6 +196,18 @@ mod tests {
     assert_eq!(
       prepared.normalized.account_fields_json["followers_count"],
       0
+    );
+    assert_eq!(
+      prepared.normalized.account_fields_json["platform_user_id"],
+      "user-1"
+    );
+    assert_eq!(
+      prepared.normalized.account_fields_json["display_name"],
+      "用户一"
+    );
+    assert_eq!(
+      prepared.normalized.account_fields_json["account_handle"],
+      "account-1"
     );
     assert_eq!(
       prepared.normalized.account_fields_json["live_status"],
@@ -168,6 +226,10 @@ mod tests {
     assert_eq!(
       prepared.normalized.field_evidence_json["followers_count"]["raw_path"],
       "/follower_count"
+    );
+    assert_eq!(
+      prepared.normalized.field_evidence_json["account_handle"]["raw_path"],
+      "/unique_id"
     );
   }
 
