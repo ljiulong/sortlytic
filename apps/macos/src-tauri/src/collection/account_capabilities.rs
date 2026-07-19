@@ -362,7 +362,6 @@ fn field_support(
   use AccountFieldAvailability::{Conditional, Enrichment, Unsupported};
   const PROFILE: &[&str] = &["enrich.profile"];
   const POSTS: &[&str] = &["enrich.account_posts"];
-  const LIVE: &[&str] = &["enrich.live_status"];
   const DEMOGRAPHICS: &[&str] = &["enrich.extended_demographics"];
   const COUNTRY: &[&str] = &["enrich.account_country"];
 
@@ -404,7 +403,8 @@ fn field_support(
     ("tiktok", "country_region") => (Enrichment, COUNTRY, None),
     ("douyin", "country_region") => (Conditional, PROFILE, None),
     ("douyin", "gender" | "age" | "live_level" | "live_badge") => (Enrichment, DEMOGRAPHICS, None),
-    ("tiktok" | "douyin", "live_status" | "live_room_id") => (Enrichment, LIVE, None),
+    ("tiktok", "live_status" | "live_room_id") => (Conditional, PROFILE, None),
+    ("douyin", "live_status" | "live_room_id") => (Enrichment, DEMOGRAPHICS, None),
     ("xiaohongshu", "profile_tags" | "likes_received_count") => (Conditional, PROFILE, None),
     (_, "profile_tags") => (Conditional, PROFILE, None),
     (_, "gender" | "age") => (
@@ -550,5 +550,32 @@ mod tests {
         .filter(|field| field.default_selected)
         .all(|field| field.availability != AccountFieldAvailability::Unsupported));
     }
+  }
+
+  #[test]
+  fn douyin_demographics_and_live_fields_share_one_enrichment_operation() {
+    let capability = get_account_collection_capabilities("douyin").unwrap();
+    for key in [
+      "gender",
+      "age",
+      "live_status",
+      "live_room_id",
+      "live_level",
+      "live_badge",
+    ] {
+      let field = capability
+        .fields
+        .iter()
+        .find(|field| field.key == key)
+        .unwrap();
+      assert_eq!(
+        field.required_operation_keys,
+        vec!["enrich.extended_demographics"]
+      );
+    }
+    assert!(capability.fields.iter().all(|field| !field
+      .required_operation_keys
+      .iter()
+      .any(|key| key == "enrich.live_status")));
   }
 }

@@ -10,6 +10,17 @@ use super::{
 };
 use crate::domain::{AppError, AppErrorStage, AppResult};
 
+#[rustfmt::skip]
+const DIRECT_PROFILE_FIELDS: &[&str] = &[
+  "secure_user_id", "avatar_url", "profile_url", "bio", "website_url", "verification_status",
+  "verification_reason", "account_type", "private_account", "language", "profile_tags",
+  "followers_count", "following_count", "friends_count", "posts_count", "likes_received_count",
+  "liked_content_count", "account_created_at", "live_status", "live_room_id", "username_modified_at",
+  "nickname_modified_at", "commerce_status", "commerce_category", "seller_status", "organization_status",
+  "comments_permission", "duet_permission", "stitch_permission", "download_permission", "favorites_visibility",
+  "following_visibility", "playlist_visibility",
+];
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AccountFormCollectionPlanRequest {
   pub platform: String,
@@ -105,16 +116,19 @@ pub fn generate_account_collection_plan(
   for (index, operation_key) in enrichment_operations.iter().enumerate() {
     let endpoint_key = enrichment_endpoint_key(&capability.platform, operation_key)
       .expect("能力目录只能返回已注册的补全操作");
+    let input_field = enrichment_input_field(&capability.platform, operation_key);
     steps.push(serde_json::json!({
       "step_key": format!("enrich_{}", index + 1),
       "operation_key": operation_key,
       "role": "enrichment",
       "depends_on_step_key": "discover",
-      "input_binding": { "account_id": "platform_user_id" },
+      "input_binding": { "account_id": input_field },
       "endpoint_key": endpoint_key,
       "platform": capability.platform,
       "data_type": endpoint_data_type(&endpoint_key),
-      "params": { "account_id": "$steps.discover.accounts[].platform_user_id" },
+      "params": {
+        "account_id": format!("$steps.discover.accounts[].{input_field}")
+      },
       "request_limit": 1,
       "output_selected": true
     }));
@@ -229,6 +243,7 @@ pub fn validate_collection_plan_v4(plan_json: &Value) -> CollectionPlanValidatio
 
   let mut expected_operations = Vec::new();
   let mut expected_endpoints = BTreeMap::new();
+  let mut expected_source_param = None;
   if let (Some(capability), Some(account_source), Some(selected_fields)) =
     (&capability, account_source, &selected_fields)
   {
@@ -238,6 +253,7 @@ pub fn validate_collection_plan_v4(plan_json: &Value) -> CollectionPlanValidatio
       .find(|source| source.key == account_source)
     {
       let discovery = format!("discover.{account_source}");
+      expected_source_param = Some(source_param_key(source.input_kind));
       expected_endpoints.insert(discovery.clone(), source.endpoint_key.clone());
       expected_operations.push(discovery);
       match normalize_account_fields(capability, selected_fields) {
@@ -316,12 +332,12 @@ pub fn validate_collection_plan_v4(plan_json: &Value) -> CollectionPlanValidatio
             calculated_request_count.saturating_add(step_request_limit.unwrap_or_default());
           if step
             .get("params")
-            .and_then(|params| params.get("source_input"))
+            .and_then(|params| expected_source_param.and_then(|key| params.get(key)))
             .and_then(Value::as_str)
             .map(str::trim)
             .is_none_or(str::is_empty)
           {
-            errors.push(format!("{prefix}.params.source_input 不能为空"));
+            errors.push(format!("{prefix}.params 缺少账号来源输入"));
           }
         } else {
           calculated_request_count = calculated_request_count
@@ -417,8 +433,11 @@ fn required_enrichment_operations(
   let mut operations = Vec::new();
   for key in selected_fields {
     if let Some(field) = capability.fields.iter().find(|field| field.key == *key) {
+      if source_covers_field(&capability.platform, account_source, &field.key) {
+        continue;
+      }
       for operation in &field.required_operation_keys {
-        if !source_covers_operation(account_source, operation) && !operations.contains(operation) {
+        if !operations.contains(operation) {
           operations.push(operation.clone());
         }
       }
@@ -427,8 +446,28 @@ fn required_enrichment_operations(
   operations
 }
 
-fn source_covers_operation(account_source: &str, operation_key: &str) -> bool {
-  account_source == "direct_account" && operation_key == "enrich.profile"
+fn source_covers_field(platform: &str, account_source: &str, field_key: &str) -> bool {
+  if account_source == "direct_account" {
+    return DIRECT_PROFILE_FIELDS.contains(&field_key);
+  }
+  matches!(
+    (platform, account_source, field_key),
+    (
+      "douyin",
+      "user_search",
+      "secure_user_id"
+        | "avatar_url"
+        | "bio"
+        | "verification_reason"
+        | "gender"
+        | "followers_count"
+        | "live_status",
+    ) | (
+      "tiktok",
+      "user_search",
+      "secure_user_id" | "avatar_url" | "bio" | "followers_count",
+    ) | ("xiaohongshu", "user_search", "avatar_url" | "bio")
+  )
 }
 
 fn enrichment_endpoint_key(platform: &str, operation_key: &str) -> Option<String> {
@@ -437,7 +476,6 @@ fn enrichment_endpoint_key(platform: &str, operation_key: &str) -> Option<String
     "enrich.extended_demographics" => "extended_demographics",
     "enrich.account_country" => "account_country",
     "enrich.account_posts" => "account_posts",
-    "enrich.live_status" => "live_status",
     _ => return None,
   };
   Some(format!("{platform}.{suffix}"))
@@ -447,6 +485,16 @@ fn endpoint_data_type(endpoint_key: &str) -> &str {
   endpoint_key
     .split_once('.')
     .map_or(endpoint_key, |(_, suffix)| suffix)
+}
+
+fn enrichment_input_field(platform: &str, operation_key: &str) -> &'static str {
+  match (platform, operation_key) {
+    (_, "enrich.account_country") => "account_handle",
+    ("tiktok", "enrich.profile") => "account_handle",
+    ("douyin", "enrich.profile" | "enrich.extended_demographics") => "secure_user_id",
+    ("tiktok" | "douyin", "enrich.account_posts") => "secure_user_id",
+    _ => "platform_user_id",
+  }
 }
 
 fn normalize_account_source_params(
@@ -468,7 +516,7 @@ fn normalize_account_source_params(
     .filter(|value| !value.is_empty())
     .ok_or_else(|| validation_error("账号来源输入不能为空"))?;
   let mut normalized = Map::from_iter([(
-    "source_input".to_string(),
+    source_param_key(input_kind).to_string(),
     Value::String(source_input.to_string()),
   )]);
   for key in ["region", "time_range"] {
@@ -477,6 +525,14 @@ fn normalize_account_source_params(
     }
   }
   Ok(Value::Object(normalized))
+}
+
+fn source_param_key(input_kind: AccountSourceInputKind) -> &'static str {
+  match input_kind {
+    AccountSourceInputKind::Keyword => "keyword",
+    AccountSourceInputKind::Account => "account_id",
+    AccountSourceInputKind::Item => "item_id",
+  }
 }
 
 fn validate_requested_filters(
@@ -673,6 +729,31 @@ mod tests {
   }
 
   #[test]
+  fn douyin_search_reuses_direct_fields_and_deduplicates_extended_profile() {
+    let mut request = request("douyin", "user_search");
+    request.params = serde_json::json!({ "keyword": "汽车" });
+    request.selected_fields = ["gender", "age", "live_status", "live_level"]
+      .map(ToString::to_string)
+      .to_vec();
+    let plan = generate_account_collection_plan(request).unwrap();
+
+    assert_eq!(plan.plan_json["steps"].as_array().unwrap().len(), 2);
+    assert_eq!(plan.plan_json["steps"][0]["params"]["keyword"], "汽车");
+    assert!(plan.plan_json["steps"][0]["params"]
+      .get("source_input")
+      .is_none());
+    assert_eq!(
+      plan.plan_json["steps"][1]["operation_key"],
+      "enrich.extended_demographics"
+    );
+    assert_eq!(
+      plan.plan_json["steps"][1]["input_binding"]["account_id"],
+      "secure_user_id"
+    );
+    assert_eq!(plan.cost_estimate_json["request_count_estimate"], 2);
+  }
+
+  #[test]
   fn rejects_unsupported_source_field_and_tampered_operation() {
     assert!(generate_account_collection_plan(request("xiaohongshu", "followers")).is_err());
     let mut unsupported_field = request("tiktok", "user_search");
@@ -680,7 +761,7 @@ mod tests {
     assert!(generate_account_collection_plan(unsupported_field).is_err());
 
     let mut valid_request = request("xiaohongshu", "user_search");
-    valid_request.selected_fields = vec!["avatar_url".to_string()];
+    valid_request.selected_fields = vec!["following_count".to_string()];
     let mut plan = generate_account_collection_plan(valid_request)
       .unwrap()
       .plan_json;
