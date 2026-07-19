@@ -327,6 +327,24 @@ describe('collection form controls', () => {
     })
   })
 
+  it('空的记录数和成本上限使用当前语言的业务错误', () => {
+    const result = collectionFormSchema.safeParse({
+      ...baseInput,
+      maxRecords: undefined,
+      budget: undefined,
+    })
+
+    expect(result.success).toBe(false)
+    if (result.success) return
+    expect(Object.fromEntries(result.error.issues.map((issue) => [
+      issue.path.join('.'),
+      issue.message,
+    ]))).toMatchObject({
+      maxRecords: '请输入最大记录数',
+      budget: '请输入成本上限',
+    })
+  })
+
   it('新建任务使用四个业务分组和完整计划空状态', () => {
     const markup = renderBuilder()
 

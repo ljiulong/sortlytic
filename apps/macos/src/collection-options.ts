@@ -150,10 +150,10 @@ export function createCollectionFormSchema(t: CollectionTranslator) {
         .refine((value) => !value || knownRegionCodes.has(value), t('validation.regionInvalid')),
       keyword: z.string().min(2, t('validation.keywordMin')).max(80, t('validation.keywordMax')),
       range: z.string().trim(),
-      maxRecords: z.coerce.number()
+      maxRecords: z.coerce.number({ error: t('validation.maxRecordsRequired') })
         .min(10, t('validation.maxRecordsMin'))
         .max(5000, t('validation.maxRecordsMax')),
-      budget: z.coerce.number()
+      budget: z.coerce.number({ error: t('validation.budgetRequired') })
         .min(0.1, t('validation.budgetMin'))
         .max(500, t('validation.budgetMax')),
       ageRangeEnabled: z.boolean(),
