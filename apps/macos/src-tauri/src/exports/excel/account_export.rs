@@ -82,16 +82,23 @@ pub(super) fn load_account_export(
   } else {
     Vec::new()
   };
-  let selected_fields = selected_keys
+  let selected_set = selected_keys
     .iter()
-    .map(|key| {
-      catalog_fields
-        .iter()
-        .find(|field| field.key == *key)
-        .cloned()
-        .ok_or_else(|| export_error(format!("所选账号字段不在能力目录中：{key}")))
-    })
-    .collect::<AppResult<Vec<_>>>()?;
+    .map(String::as_str)
+    .collect::<BTreeSet<_>>();
+  if selected_set.len() != selected_keys.len() {
+    return Err(export_error("所选账号字段不得重复"));
+  }
+  for key in &selected_keys {
+    if !catalog_fields.iter().any(|field| field.key == *key) {
+      return Err(export_error(format!("所选账号字段不在能力目录中：{key}")));
+    }
+  }
+  let selected_fields = catalog_fields
+    .iter()
+    .filter(|field| selected_set.contains(field.key.as_str()))
+    .cloned()
+    .collect();
 
   Ok(AccountExport {
     is_v4: scope.0.is_some(),

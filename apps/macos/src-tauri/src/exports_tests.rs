@@ -253,6 +253,25 @@ fn account_v4_export_uses_selected_fields_and_adds_field_guide() {
       "missing {header}"
     );
   }
+  let mut previous_header = 0;
+  for header in [
+    "平台",
+    "显示名称",
+    "账号",
+    "平台用户 ID",
+    "数据来源",
+    "采集时间",
+    "个人简介",
+    "认证状态",
+    "年龄",
+    "粉丝数",
+  ] {
+    let position = strings[previous_header..]
+      .find(&format!(">{header}</t>"))
+      .map(|offset| previous_header + offset)
+      .unwrap_or_else(|| panic!("字段表头未按目录稳定排序：{header}"));
+    previous_header = position;
+  }
   let zero = xml_cell(&accounts, "H5");
   assert!(zero.contains("<v>0</v>"));
   assert!(!zero.contains("t=\"s\""));
