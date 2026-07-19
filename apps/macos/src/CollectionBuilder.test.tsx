@@ -139,6 +139,19 @@ function renderBuilder(activePlan?: RuntimeCollectionPlan) {
 }
 
 describe('CollectionPlanPreview', () => {
+  it('普通计价事实区沿用平面表面且禁止反相主题块', () => {
+    const markup = renderToStaticMarkup(
+      createElement(CollectionPlanPreview, {
+        actionMessage: '等待确认',
+        isBusy: false,
+        onConfirmPlan: vi.fn(),
+        plan: draftPlan,
+      }),
+    )
+
+    expect(markup).toContain('class="collection-plan__pricing" data-tone="neutral"')
+  })
+
   it('计划卡按头部、事实区、成本区和稳定底栏组织', () => {
     const markup = renderToStaticMarkup(
       createElement(CollectionPlanPreview, {

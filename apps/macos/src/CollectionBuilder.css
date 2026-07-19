@@ -491,9 +491,9 @@
 .collection-plan__pricing {
   display: grid;
   gap: 8px;
-  color: var(--primary-ink);
-  background: var(--text-strong);
-  border-color: var(--text-strong);
+  color: var(--text);
+  background: var(--surface-raised);
+  border-color: var(--border-subtle);
 }
 
 .collection-plan__pricing > div {
@@ -504,12 +504,12 @@
 .collection-plan__pricing h4,
 .collection-plan__pricing p,
 .collection-plan__pricing span {
-  color: color-mix(in oklch, var(--primary-ink) 76%, transparent);
+  color: var(--text-muted);
 }
 
 .collection-plan__pricing strong {
   overflow-wrap: anywhere;
-  color: var(--primary-ink);
+  color: var(--text-strong);
   font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
   font-size: 17px;
   font-variant-numeric: tabular-nums;

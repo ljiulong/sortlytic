@@ -580,6 +580,7 @@ export function CollectionPlanPreview({
           </section>
           <section
             className="collection-plan__pricing"
+            data-tone="neutral"
             data-ready={plan.pricingReady === true}
             aria-labelledby="collection-plan-pricing-heading"
           >
