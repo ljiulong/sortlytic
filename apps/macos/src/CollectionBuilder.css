@@ -248,6 +248,14 @@
   border-color: var(--border);
 }
 
+.collection-builder__filter-block[data-supported='false'] {
+  opacity: 0.74;
+}
+
+.collection-builder__filter-block[data-supported='false'] .collection-builder__filter-toggle {
+  cursor: not-allowed;
+}
+
 .collection-builder__filter-toggle {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
