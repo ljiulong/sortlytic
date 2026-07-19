@@ -110,6 +110,7 @@ describe('TaskResultsPanel', () => {
     await act(async () => Promise.resolve())
     expect(mounted.container.querySelector('[role="alert"]')?.textContent)
       .toContain('数据库暂时不可读')
+    expect(mounted.container.textContent).not.toContain('正在读取已落库结果')
 
     await act(async () => mounted.container.querySelector<HTMLButtonElement>(
       'button[aria-label="重新读取"]',

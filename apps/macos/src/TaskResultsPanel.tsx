@@ -65,11 +65,12 @@ function TaskResultsPanel({ taskId, taskName }: TaskResultsPanelProps) {
       <header className="task-results__header">
         <div>
           <h4>{t('taskQueue.results.title')}</h4>
-          <p>
-            {state.status === 'ready'
-              ? t('taskQueue.results.summary', { count: state.page.total_count })
-              : t('taskQueue.results.loading')}
-          </p>
+          {state.status === 'ready' ? (
+            <p>{t('taskQueue.results.summary', { count: state.page.total_count })}</p>
+          ) : null}
+          {state.status === 'loading' ? (
+            <p>{t('taskQueue.results.loading')}</p>
+          ) : null}
         </div>
         {state.status === 'ready' && state.page.total_count > 0 ? (
           <span>{t('taskQueue.results.page', {
