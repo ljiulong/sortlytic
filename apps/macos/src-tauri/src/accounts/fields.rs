@@ -19,6 +19,27 @@ pub(super) fn extract_account_fields(
     evidence: BTreeMap::new(),
   };
 
+  if endpoint_key.ends_with(".account_posts") {
+    add(
+      &mut extraction,
+      "last_posted_at",
+      timestamp(
+        value,
+        &[
+          "/last_posted_at",
+          "/latest_posted_at",
+          "/create_time",
+          "/publish_time",
+          "/note_card/time",
+          "/time",
+        ],
+      ),
+      endpoint_key,
+      collected_at,
+    );
+    return extraction;
+  }
+
   add(
     &mut extraction,
     "secure_user_id",

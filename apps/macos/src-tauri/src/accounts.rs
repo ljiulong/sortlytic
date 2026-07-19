@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -216,6 +217,7 @@ pub fn normalize_account_with_evidence(
     })?;
   let priority = source_kind.priority();
   let extracted = fields::extract_account_fields(value, endpoint_key, collected_at);
+  let account_posts = endpoint_key.ends_with(".account_posts");
   let mut field_priorities = BTreeMap::new();
   for field in [
     "platform_user_id",
@@ -230,7 +232,14 @@ pub fn normalize_account_with_evidence(
     "last_posted_at",
     "profile_url",
   ] {
-    field_priorities.insert(field.to_string(), priority);
+    field_priorities.insert(
+      field.to_string(),
+      if account_posts && field != "last_posted_at" {
+        SourceKind::CommentAuthor.priority()
+      } else {
+        priority
+      },
+    );
   }
   for field in extracted.values.keys() {
     field_priorities.insert(field.clone(), priority);
@@ -293,7 +302,12 @@ pub fn normalize_account_with_evidence(
         "/user/aweme_count",
       ],
     ),
-    last_posted_at: first_text(value, &["/last_posted_at", "/latest_posted_at"]),
+    last_posted_at: first_text(value, &["/last_posted_at", "/latest_posted_at"]).or_else(|| {
+      extracted
+        .values
+        .get("last_posted_at")
+        .and_then(timestamp_text)
+    }),
     profile_url: first_text(
       value,
       &[
@@ -332,16 +346,23 @@ fn merge_account(existing: &mut AccountRecord, incoming: AccountRecord) {
   merge_copy_field(existing, &incoming, "posts_count", |record| {
     &mut record.posts_count
   });
-  merge_field(existing, &incoming, "last_posted_at", |record| {
-    &mut record.last_posted_at
-  });
+  merge_latest_timestamp(existing, &incoming, "last_posted_at");
   merge_field(existing, &incoming, "profile_url", |record| {
     &mut record.profile_url
   });
   for (field, value) in &incoming.account_fields {
     let incoming_priority = incoming.field_priorities.get(field).copied().unwrap_or(0);
     let existing_priority = prior_field_priorities.get(field).copied().unwrap_or(0);
-    if !existing.account_fields.contains_key(field) || incoming_priority > existing_priority {
+    let later_equal_priority_timestamp = field == "last_posted_at"
+      && incoming_priority == existing_priority
+      && existing
+        .account_fields
+        .get(field)
+        .is_some_and(|current| timestamp_value_is_later(value, current));
+    if !existing.account_fields.contains_key(field)
+      || incoming_priority > existing_priority
+      || later_equal_priority_timestamp
+    {
       existing.account_fields.insert(field.clone(), value.clone());
       if let Some(evidence) = incoming.field_evidence.get(field) {
         existing
@@ -353,6 +374,54 @@ fn merge_account(existing: &mut AccountRecord, incoming: AccountRecord) {
         .insert(field.clone(), incoming_priority);
     }
   }
+}
+
+fn merge_latest_timestamp(existing: &mut AccountRecord, incoming: &AccountRecord, field: &str) {
+  let Some(incoming_value) = incoming.last_posted_at.as_ref() else {
+    return;
+  };
+  let incoming_priority = incoming.field_priorities.get(field).copied().unwrap_or(0);
+  let existing_priority = existing.field_priorities.get(field).copied().unwrap_or(0);
+  let should_replace = existing.last_posted_at.as_ref().is_none_or(|current| {
+    incoming_priority > existing_priority
+      || (incoming_priority == existing_priority
+        && timestamp_text_is_later(incoming_value, current))
+  });
+  if should_replace {
+    existing.last_posted_at = Some(incoming_value.clone());
+    existing
+      .field_priorities
+      .insert(field.to_string(), incoming_priority);
+  }
+}
+
+fn timestamp_text(value: &Value) -> Option<String> {
+  match value {
+    Value::String(value) if !value.trim().is_empty() => Some(value.trim().to_string()),
+    Value::Number(value) => Some(value.to_string()),
+    _ => None,
+  }
+}
+
+fn timestamp_value_is_later(incoming: &Value, existing: &Value) -> bool {
+  match (timestamp_text(incoming), timestamp_text(existing)) {
+    (Some(incoming), Some(existing)) => timestamp_text_is_later(&incoming, &existing),
+    _ => false,
+  }
+}
+
+fn timestamp_text_is_later(incoming: &str, existing: &str) -> bool {
+  match (timestamp_sort_key(incoming), timestamp_sort_key(existing)) {
+    (Some(incoming), Some(existing)) => incoming > existing,
+    _ => incoming > existing,
+  }
+}
+
+fn timestamp_sort_key(value: &str) -> Option<i64> {
+  value
+    .parse::<i64>()
+    .ok()
+    .or_else(|| DateTime::parse_from_rfc3339(value).ok().map(|value| value.timestamp()))
 }
 
 fn merge_field(

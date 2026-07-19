@@ -526,6 +526,92 @@ fn persisted_account_fields_keep_zero_and_latest_field_evidence() {
 }
 
 #[test]
+fn account_posts_only_contribute_the_latest_post_time() {
+  let connection = account_connection();
+  for (data_type, record, collected_at) in [
+    (
+      "account_profile",
+      json!({
+        "user_id": "user-posts",
+        "nickname": "可靠资料昵称",
+        "signature": "可靠资料简介",
+        "create_time": 100
+      }),
+      "2026-07-20T08:00:00+08:00",
+    ),
+    (
+      "account_posts",
+      json!({
+        "aweme_id": "post-old",
+        "create_time": 200,
+        "author": {
+          "user_id": "user-posts",
+          "nickname": "作品快照昵称",
+          "signature": "作品快照简介"
+        }
+      }),
+      "2026-07-20T08:01:00+08:00",
+    ),
+    (
+      "account_posts",
+      json!({
+        "aweme_id": "post-new",
+        "create_time": 300,
+        "author": {
+          "user_id": "user-posts",
+          "nickname": "另一作品快照昵称",
+          "signature": "另一作品快照简介"
+        }
+      }),
+      "2026-07-20T08:02:00+08:00",
+    ),
+  ] {
+    persist_account_observations(
+      &connection,
+      AccountObservationInput {
+        task_run_id: "run-account-posts".to_string(),
+        platform: "douyin".to_string(),
+        data_type: data_type.to_string(),
+        records: vec![record],
+        output_selected: true,
+        age_range: None,
+        record_limit: 10,
+        collected_at: collected_at.to_string(),
+      },
+    )
+    .unwrap();
+  }
+
+  let (username, profile_text, last_posted_at, fields, evidence) = connection
+    .query_row(
+      "SELECT username, profile_text, last_posted_at, account_fields_json, field_evidence_json
+       FROM collected_account WHERE task_run_id = 'run-account-posts'",
+      [],
+      |row| {
+        Ok((
+          row.get::<_, Option<String>>(0)?,
+          row.get::<_, Option<String>>(1)?,
+          row.get::<_, Option<String>>(2)?,
+          row.get::<_, String>(3)?,
+          row.get::<_, String>(4)?,
+        ))
+      },
+    )
+    .unwrap();
+  let fields: Value = serde_json::from_str(&fields).unwrap();
+  let evidence: Value = serde_json::from_str(&evidence).unwrap();
+
+  assert_eq!(username.as_deref(), Some("可靠资料昵称"));
+  assert_eq!(profile_text.as_deref(), Some("可靠资料简介"));
+  assert_eq!(last_posted_at.as_deref(), Some("300"));
+  assert_eq!(fields["account_created_at"], 100);
+  assert_eq!(fields["last_posted_at"], 300);
+  assert_eq!(evidence["account_created_at"]["endpoint_key"], "douyin.account_profile");
+  assert_eq!(evidence["last_posted_at"]["endpoint_key"], "douyin.account_posts");
+  assert_eq!(evidence["last_posted_at"]["raw_path"], "/create_time");
+}
+
+#[test]
 fn persisted_user_search_is_a_supported_account_observation() {
   let connection = account_connection();
   let result = persist_account_observations(
