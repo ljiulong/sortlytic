@@ -285,6 +285,7 @@ pub fn validate_collection_plan_v4(plan_json: &Value) -> CollectionPlanValidatio
     .unwrap_or(0)
     .max(0);
   let mut actual_operations = Vec::new();
+  let mut actual_step_keys = BTreeSet::new();
   let mut calculated_request_count = 0_i64;
   match plan_json.get("steps").and_then(Value::as_array) {
     Some(steps) if !steps.is_empty() => {
@@ -294,6 +295,16 @@ pub fn validate_collection_plan_v4(plan_json: &Value) -> CollectionPlanValidatio
           errors.push(format!("{prefix} 必须是对象"));
           continue;
         };
+        let step_key = step
+          .get("step_key")
+          .and_then(Value::as_str)
+          .map(str::trim)
+          .filter(|value| !value.is_empty());
+        match step_key {
+          Some(step_key) if actual_step_keys.insert(step_key.to_string()) => {}
+          Some(_) => errors.push(format!("{prefix}.step_key 不能重复")),
+          None => errors.push(format!("{prefix}.step_key 不能为空")),
+        }
         let operation = step
           .get("operation_key")
           .and_then(Value::as_str)
@@ -328,6 +339,21 @@ pub fn validate_collection_plan_v4(plan_json: &Value) -> CollectionPlanValidatio
           errors.push(format!("{prefix}.request_limit 必须是大于 0 的整数"));
         }
         if operation.starts_with("discover.") {
+          if step_key != Some("discover") {
+            errors.push(format!("{prefix}.step_key 必须为 discover"));
+          }
+          if step.get("role").and_then(Value::as_str) != Some("discovery") {
+            errors.push(format!("{prefix}.role 必须为 discovery"));
+          }
+          if !step
+            .get("depends_on_step_key")
+            .is_some_and(Value::is_null)
+          {
+            errors.push(format!("{prefix}.depends_on_step_key 必须为 null"));
+          }
+          if !step.get("input_binding").is_some_and(Value::is_null) {
+            errors.push(format!("{prefix}.input_binding 必须为 null"));
+          }
           calculated_request_count =
             calculated_request_count.saturating_add(step_request_limit.unwrap_or_default());
           if step
@@ -340,11 +366,46 @@ pub fn validate_collection_plan_v4(plan_json: &Value) -> CollectionPlanValidatio
             errors.push(format!("{prefix}.params 缺少账号来源输入"));
           }
         } else {
+          if step.get("role").and_then(Value::as_str) != Some("enrichment") {
+            errors.push(format!("{prefix}.role 必须为 enrichment"));
+          }
           calculated_request_count = calculated_request_count
             .saturating_add(record_limit.saturating_mul(step_request_limit.unwrap_or_default()));
           if step.get("depends_on_step_key").and_then(Value::as_str) != Some("discover") {
             errors.push(format!("{prefix}.depends_on_step_key 必须引用 discover"));
           }
+          if let Some(operation_index) = expected_operations
+            .iter()
+            .position(|expected| expected == operation)
+          {
+            let expected_step_key = format!("enrich_{operation_index}");
+            if step_key != Some(expected_step_key.as_str()) {
+              errors.push(format!("{prefix}.step_key 与 operation_key 不匹配"));
+            }
+          }
+          if let Some(platform) = platform {
+            let expected_input = enrichment_input_field(platform, operation);
+            if step
+              .get("input_binding")
+              .and_then(|binding| binding.get("account_id"))
+              .and_then(Value::as_str)
+              != Some(expected_input)
+            {
+              errors.push(format!("{prefix}.input_binding 与 operation_key 不匹配"));
+            }
+            let expected_param = format!("$steps.discover.accounts[].{expected_input}");
+            if step
+              .get("params")
+              .and_then(|params| params.get("account_id"))
+              .and_then(Value::as_str)
+              != Some(expected_param.as_str())
+            {
+              errors.push(format!("{prefix}.params.account_id 与输入绑定不匹配"));
+            }
+          }
+        }
+        if step.get("output_selected").and_then(Value::as_bool) != Some(true) {
+          errors.push(format!("{prefix}.output_selected 必须为 true"));
         }
       }
     }
@@ -362,6 +423,11 @@ pub fn validate_collection_plan_v4(plan_json: &Value) -> CollectionPlanValidatio
   }
   if actual_operations.first() != expected_operations.first() {
     errors.push("第一个步骤必须是当前账号来源的发现操作".to_string());
+  }
+  if actual_operations.len() == expected_operations.len()
+    && actual_operations != expected_operations
+  {
+    errors.push("steps 必须按发现和补全依赖顺序排列".to_string());
   }
   if plan_json
     .get("cost_estimate")
@@ -652,125 +718,4 @@ fn age_range_json(age_range: &AgeRangeInput) -> Value {
 
 fn validation_error(message: impl Into<String>) -> AppError {
   AppError::validation(message, AppErrorStage::Collection)
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-
-  fn request(platform: &str, source: &str) -> AccountFormCollectionPlanRequest {
-    AccountFormCollectionPlanRequest {
-      platform: platform.to_string(),
-      account_source: source.to_string(),
-      selected_fields: Vec::new(),
-      enrichment_policy: "auto_costed".to_string(),
-      params: serde_json::json!({ "source_input": "seed" }),
-      age_range: None,
-      gender_filter: None,
-      request_limit: Some(1),
-      record_limit: Some(1),
-      budget_limit_micros: Some(1_000_000),
-    }
-  }
-
-  #[test]
-  fn materializes_discovery_minimal_enrichment_and_cost_breakdown() {
-    let mut request = request("tiktok", "content_search_authors");
-    request.selected_fields = ["avatar_url", "country_region", "last_posted_at"]
-      .map(ToString::to_string)
-      .to_vec();
-    request.params = serde_json::json!({ "keyword": "新能源汽车" });
-    request.request_limit = Some(2);
-    request.record_limit = Some(40);
-    let plan = generate_account_collection_plan(request).unwrap();
-
-    assert_eq!(plan.schema_version, 4);
-    assert_eq!(
-      plan.validation_status, "valid",
-      "{:?}",
-      plan.validation_errors_json
-    );
-    assert_eq!(
-      plan.plan_json["steps"][0]["operation_key"],
-      "discover.content_search_authors"
-    );
-    assert_eq!(
-      plan.plan_json["steps"][1]["operation_key"],
-      "enrich.profile"
-    );
-    assert_eq!(
-      plan.plan_json["steps"][2]["operation_key"],
-      "enrich.account_country"
-    );
-    assert_eq!(
-      plan.plan_json["steps"][3]["operation_key"],
-      "enrich.account_posts"
-    );
-    assert_eq!(plan.cost_estimate_json["discovery_request_count"], 1);
-    assert_eq!(plan.cost_estimate_json["enrichment_request_count"], 120);
-    assert_eq!(plan.cost_estimate_json["request_count_estimate"], 121);
-  }
-
-  #[test]
-  fn direct_account_reuses_the_discovery_profile_response() {
-    let mut request = request("douyin", "direct_account");
-    request.selected_fields = ["avatar_url", "followers_count"]
-      .map(ToString::to_string)
-      .to_vec();
-    let plan = generate_account_collection_plan(request).unwrap();
-
-    assert_eq!(
-      plan.validation_status, "valid",
-      "{:?}",
-      plan.validation_errors_json
-    );
-    assert_eq!(plan.plan_json["steps"].as_array().unwrap().len(), 1);
-    assert_eq!(plan.cost_estimate_json["request_count_estimate"], 1);
-  }
-
-  #[test]
-  fn douyin_search_reuses_direct_fields_and_deduplicates_extended_profile() {
-    let mut request = request("douyin", "user_search");
-    request.params = serde_json::json!({ "keyword": "汽车" });
-    request.selected_fields = ["gender", "age", "live_status", "live_level"]
-      .map(ToString::to_string)
-      .to_vec();
-    let plan = generate_account_collection_plan(request).unwrap();
-
-    assert_eq!(plan.plan_json["steps"].as_array().unwrap().len(), 2);
-    assert_eq!(plan.plan_json["steps"][0]["params"]["keyword"], "汽车");
-    assert!(plan.plan_json["steps"][0]["params"]
-      .get("source_input")
-      .is_none());
-    assert_eq!(
-      plan.plan_json["steps"][1]["operation_key"],
-      "enrich.extended_demographics"
-    );
-    assert_eq!(
-      plan.plan_json["steps"][1]["input_binding"]["account_id"],
-      "secure_user_id"
-    );
-    assert_eq!(plan.cost_estimate_json["request_count_estimate"], 2);
-  }
-
-  #[test]
-  fn rejects_unsupported_source_field_and_tampered_operation() {
-    assert!(generate_account_collection_plan(request("xiaohongshu", "followers")).is_err());
-    let mut unsupported_field = request("tiktok", "user_search");
-    unsupported_field.selected_fields = vec!["gender".to_string()];
-    assert!(generate_account_collection_plan(unsupported_field).is_err());
-
-    let mut valid_request = request("xiaohongshu", "user_search");
-    valid_request.selected_fields = vec!["following_count".to_string()];
-    let mut plan = generate_account_collection_plan(valid_request)
-      .unwrap()
-      .plan_json;
-    plan["steps"][1]["operation_key"] = serde_json::json!("enrich.account_country");
-    let validation = validate_collection_plan_v4(&plan);
-    assert!(!validation.valid);
-    assert!(validation
-      .errors
-      .iter()
-      .any(|error| error.contains("未声明操作")));
-  }
 }
