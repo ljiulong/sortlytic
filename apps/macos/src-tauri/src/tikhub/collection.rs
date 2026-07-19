@@ -752,7 +752,13 @@ fn required_array_field(data: &Value, keys: &[&str]) -> AppResult<Vec<Value>> {
     .or_else(|| {
       keys
         .iter()
-        .find_map(|key| data.get(*key).and_then(Value::as_array))
+        .filter_map(|key| data.get(*key).and_then(Value::as_array))
+        .find(|records| !records.is_empty())
+        .or_else(|| {
+          keys
+            .iter()
+            .find_map(|key| data.get(*key).and_then(Value::as_array))
+        })
     })
     .ok_or_else(|| {
       response_shape_error("missing_record_array", "列表响应缺少预期的记录数组字段")

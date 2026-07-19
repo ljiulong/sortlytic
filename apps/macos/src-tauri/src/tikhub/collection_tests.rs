@@ -280,6 +280,40 @@ fn prioritizes_tiktok_search_items_over_empty_compatibility_array() {
 }
 
 #[test]
+fn falls_back_to_non_empty_tiktok_compatibility_array() {
+  let request = build_collection_request(
+    "tiktok",
+    "keyword_search",
+    &params_for("keyword_search"),
+    None,
+  )
+  .expect("TikTok search request should build");
+  let page = parse_collection_page(
+    &request,
+    serde_json::json!({
+      "code": 200,
+      "data": {
+        "search_item_list": [],
+        "aweme_list": [{
+          "aweme_id": "video-from-compatibility-array",
+          "author": { "uid": "author-compatibility" }
+        }],
+        "cursor": 20,
+        "has_more": 0
+      }
+    }),
+  )
+  .expect("non-empty TikTok compatibility records should not be discarded");
+
+  assert_eq!(page.records.len(), 1);
+  assert_eq!(
+    page.records[0]["aweme_id"],
+    "video-from-compatibility-array"
+  );
+  assert_eq!(page.records[0]["author"]["uid"], "author-compatibility");
+}
+
+#[test]
 fn unwraps_xiaohongshu_app_v2_search_envelope() {
   let request = build_collection_request(
     "xiaohongshu",
