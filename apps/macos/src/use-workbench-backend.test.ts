@@ -11,6 +11,7 @@ import {
   getLatestCollectionPlan,
   listLatestTaskRuns,
   listTaskRecordCounts,
+  listTaskResults,
   listTaskLogs,
   prepareAppUpdate,
   quoteTikhubConnectorPrice,
@@ -274,6 +275,19 @@ describe('任务页动作', () => {
     await listTaskRecordCounts()
 
     expect(invokeMock).toHaveBeenCalledWith('list_task_record_counts', {
+      rootPath: null,
+    })
+  })
+
+  it('按任务分页读取最新成功运行的应用内结果', async () => {
+    invokeMock.mockResolvedValue({ items: [], total_count: 0 })
+
+    await listTaskResults('task-1', 100, 200)
+
+    expect(invokeMock).toHaveBeenCalledWith('list_task_results', {
+      taskId: 'task-1',
+      limit: 100,
+      offset: 200,
       rootPath: null,
     })
   })

@@ -139,6 +139,37 @@ export type TaskRecordCountView = {
   record_count: number
 }
 
+export type TaskResultRecordView = {
+  id: string
+  platform: string
+  username?: string | null
+  account?: string | null
+  platform_user_id?: string | null
+  profile_text?: string | null
+  country_region?: string | null
+  region_source?: string | null
+  region_confidence?: string | null
+  gender?: string | null
+  age?: number | null
+  followers_count?: number | null
+  posts_count?: number | null
+  last_posted_at?: string | null
+  profile_url?: string | null
+  data_source: string
+  collected_at: string
+  notes?: string | null
+}
+
+export type TaskResultsPageView = {
+  task_id: string
+  task_run_id: string
+  run_status: string
+  total_count: number
+  offset: number
+  limit: number
+  items: TaskResultRecordView[]
+}
+
 export type PromptTemplateView = {
   id: string
   template_key: string
@@ -251,6 +282,15 @@ export function listTaskLogs(taskRunId: string) {
 
 export function listTaskRecordCounts() {
   return invoke<TaskRecordCountView[]>('list_task_record_counts', { rootPath: null })
+}
+
+export function listTaskResults(taskId: string, limit = 100, offset = 0) {
+  return invoke<TaskResultsPageView>('list_task_results', {
+    taskId,
+    limit,
+    offset,
+    rootPath: null,
+  })
 }
 
 export function createCollectionTask(input: {
