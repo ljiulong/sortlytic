@@ -2,9 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import * as Tabs from '@radix-ui/react-tabs'
 import { zodResolver } from '@hookform/resolvers/zod'
 import {
-  Activity,
   AlertTriangle,
-  BadgeCheck,
   CheckCircle2,
   Gauge,
   MessageSquareText,
@@ -33,6 +31,7 @@ import {
   newCollectionFormDefaults,
   normalizeNaturalIntent,
 } from './collection-form-defaults'
+import { PlanFact, StatusPill } from './CollectionBuilderPrimitives'
 import {
   countryRegionSelectOptions,
   platformSelectOptions,
@@ -41,6 +40,8 @@ import { useCollectionTimeRanges } from './collection-time-ranges'
 import { i18n } from './i18n'
 import type { RuntimeCollectionPlan } from './use-workbench-backend'
 import type { DataType } from './workbench-data'
+
+export { StatusPill }
 
 export type CollectionFormInput = z.input<typeof collectionFormSchema>
 export type CollectionFormValues = z.output<typeof collectionFormSchema>
@@ -664,15 +665,6 @@ export function CollectionPlanPreview({
   )
 }
 
-function PlanFact({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt>{label}</dt>
-      <dd>{value}</dd>
-    </div>
-  )
-}
-
 const planStatusTranslationKeys: Record<RuntimeCollectionPlan['status'], string> = {
   '已排队': 'status.queued',
   '运行中': 'status.running',
@@ -798,20 +790,4 @@ function toneForPlanStatus(status: RuntimeCollectionPlan['status']) {
   if (status === '失败') return 'danger'
   if (status === '等待确认' || status === '待人工确认' || status === '部分成功') return 'warning'
   return 'info'
-}
-
-export function StatusPill({ tone, label }: { tone: string; label: string }) {
-  return (
-    <span className="status-pill" data-tone={tone}>
-      {iconForTone(tone)}
-      {label}
-    </span>
-  )
-}
-
-function iconForTone(tone: string) {
-  if (tone === 'success') return <CheckCircle2 size={13} aria-hidden="true" />
-  if (tone === 'danger') return <AlertTriangle size={13} aria-hidden="true" />
-  if (tone === 'warning') return <Activity size={13} aria-hidden="true" />
-  return <BadgeCheck size={13} aria-hidden="true" />
 }
