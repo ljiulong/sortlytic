@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::account_capabilities::source_covers_field;
+use super::account_input::normalize_account_source_input;
 use super::{
   get_account_collection_capabilities, AccountCollectionCapabilityView, AccountFieldAvailability,
   AccountSourceInputKind, AgeRangeInput, CollectionPlanDraftView, CollectionPlanValidationResult,
@@ -50,7 +51,12 @@ pub fn generate_account_collection_plan(
   )?;
   let enrichment_operations =
     required_enrichment_operations(&capability, &selected_fields, request.account_source.trim());
-  let source_params = normalize_account_source_params(source.input_kind, &request.params)?;
+  let source_params = normalize_account_source_params(
+    &capability.platform,
+    &source.key,
+    source.input_kind,
+    &request.params,
+  )?;
   let requested_source_limit = request
     .request_limit
     .unwrap_or(1)
@@ -233,7 +239,7 @@ pub fn validate_collection_plan_v4(plan_json: &Value) -> CollectionPlanValidatio
 
   let mut expected_operations = Vec::new();
   let mut expected_endpoints = BTreeMap::new();
-  let mut expected_source_param = None;
+  let mut expected_source_params = Vec::new();
   let mut source_limits = None;
   if let (Some(capability), Some(account_source), Some(selected_fields)) =
     (&capability, account_source, &selected_fields)
@@ -244,7 +250,11 @@ pub fn validate_collection_plan_v4(plan_json: &Value) -> CollectionPlanValidatio
       .find(|source| source.key == account_source)
     {
       let discovery = format!("discover.{account_source}");
-      expected_source_param = Some(source_param_key(source.input_kind));
+      expected_source_params.push(source_param_key(source.input_kind));
+      if capability.platform == "xiaohongshu" && source.input_kind != AccountSourceInputKind::Keyword
+      {
+        expected_source_params.push("share_text");
+      }
       source_limits = Some((
         source.pagination_mode,
         source.max_page_size,
@@ -386,10 +396,15 @@ pub fn validate_collection_plan_v4(plan_json: &Value) -> CollectionPlanValidatio
             discovery_request_count.saturating_add(step_request_limit.unwrap_or_default());
           if step
             .get("params")
-            .and_then(|params| expected_source_param.and_then(|key| params.get(key)))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .is_none_or(str::is_empty)
+            .and_then(Value::as_object)
+            .is_none_or(|params| {
+              !expected_source_params.iter().any(|key| {
+                params
+                  .get(*key)
+                  .and_then(Value::as_str)
+                  .is_some_and(|value| !value.trim().is_empty())
+              })
+            })
           {
             errors.push(format!("{prefix}.params 缺少账号来源输入"));
           }
@@ -596,6 +611,8 @@ fn enrichment_input_field(platform: &str, operation_key: &str) -> &'static str {
 }
 
 fn normalize_account_source_params(
+  platform: &str,
+  account_source: &str,
   input_kind: AccountSourceInputKind,
   params: &Value,
 ) -> AppResult<Value> {
@@ -613,9 +630,15 @@ fn normalize_account_source_params(
     .map(str::trim)
     .filter(|value| !value.is_empty())
     .ok_or_else(|| validation_error("账号来源输入不能为空"))?;
+  let source_input = normalize_account_source_input(
+    platform,
+    account_source,
+    input_kind,
+    source_input,
+  )?;
   let mut normalized = Map::from_iter([(
-    source_param_key(input_kind).to_string(),
-    Value::String(source_input.to_string()),
+    source_input.key.as_str().to_string(),
+    Value::String(source_input.value),
   )]);
   for key in ["region", "time_range"] {
     if let Some(value) = params.get(key).cloned().filter(|value| !value.is_null()) {

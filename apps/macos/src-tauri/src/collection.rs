@@ -5,6 +5,7 @@ use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 use crate::tasks::CostEstimateView;
 
 mod account_capabilities;
+mod account_input;
 mod account_plan;
 #[cfg(test)]
 #[path = "collection/account_plan_tests.rs"]
