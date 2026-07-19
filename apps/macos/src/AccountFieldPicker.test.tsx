@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AccountCollectionCapabilityView } from './backend-api'
 import AccountFieldPicker from './AccountFieldPicker'
+import { i18n } from './i18n'
 
 const mountedRoots = new Set<{ container: HTMLDivElement; root: Root }>()
 
@@ -75,9 +76,10 @@ function buttonByText(container: HTMLElement, text: string) {
     .find((button) => button.textContent?.includes(text))
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
     .IS_REACT_ACT_ENVIRONMENT = true
+  await i18n.changeLanguage('zh-CN')
 })
 
 afterEach(() => {

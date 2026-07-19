@@ -1,10 +1,12 @@
 import { ChevronDown, Search, SlidersHorizontal } from 'lucide-react'
 import { useId, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type {
   AccountCollectionCapabilityView,
   AccountFieldCapabilityView,
 } from './backend-api'
 import './AccountFieldPicker.css'
+import { i18n } from './i18n'
 
 const baseFieldCount = 6
 
@@ -16,10 +18,6 @@ type AccountFieldPickerProps = {
   selectedFields: string[]
 }
 
-function searchableText(field: AccountFieldCapabilityView) {
-  return `${field.display_name} ${field.key} ${field.description}`.toLocaleLowerCase()
-}
-
 function AccountFieldPicker({
   capability,
   error,
@@ -27,6 +25,7 @@ function AccountFieldPicker({
   onChange,
   selectedFields,
 }: AccountFieldPickerProps) {
+  const { t } = useTranslation('collection', { i18n })
   const contentId = useId()
   const [expanded, setExpanded] = useState(false)
   const [query, setQuery] = useState('')
@@ -43,9 +42,27 @@ function AccountFieldPicker({
   )
   const effectiveGroup = activeGroup || capability?.field_groups[0]?.key || ''
   const normalizedQuery = query.trim().toLocaleLowerCase()
-  const filteredFields = useMemo(() => capability?.fields.filter(
-    (field) => !normalizedQuery || searchableText(field).includes(normalizedQuery),
-  ) ?? [], [capability, normalizedQuery])
+  const fieldName = (field: AccountFieldCapabilityView) => String(t(
+    `accountFields.${field.key}.label`,
+    { defaultValue: field.display_name },
+  ))
+  const fieldDescription = (field: AccountFieldCapabilityView) => String(t(
+    `accountFields.${field.key}.description`,
+    { defaultValue: field.description },
+  ))
+  const groupName = (key: string, fallback: string) => String(t(
+    `accountFieldGroups.${key}`,
+    { defaultValue: fallback },
+  ))
+  const filteredFields = capability?.fields.filter(
+    (field) => !normalizedQuery || [
+      field.display_name,
+      field.key,
+      field.description,
+      fieldName(field),
+      fieldDescription(field),
+    ].join(' ').toLocaleLowerCase().includes(normalizedQuery),
+  ) ?? []
   const enrichmentCount = availableFields.filter(
     (field) => selected.has(field.key) && field.required_operation_keys.length > 0,
   ).length
@@ -86,15 +103,17 @@ function AccountFieldPicker({
   }
 
   return (
-    <section className="account-field-picker" aria-label="结果字段">
+    <section className="account-field-picker" aria-label={t('accountFields.title')}>
       <div className="account-field-picker__summary">
         <div>
-          <strong>结果字段</strong>
-          <span>{baseFieldCount} 个基础字段 + {selectedFields.length} 个扩展字段</span>
+          <strong>{t('accountFields.title')}</strong>
+          <span>{t('accountFields.summary', { base: baseFieldCount, count: selectedFields.length })}</span>
         </div>
         <div className="account-field-picker__summary-meta">
-          <span>{isCorePreset ? '核心字段预设' : '自定义字段'}</span>
-          <span>{enrichmentCount > 0 ? `其中 ${enrichmentCount} 项需要补全请求` : '无需额外补全请求'}</span>
+          <span>{t(isCorePreset ? 'accountFields.corePreset' : 'accountFields.customPreset')}</span>
+          <span>{enrichmentCount > 0
+            ? t('accountFields.enrichmentCount', { count: enrichmentCount })
+            : t('accountFields.noEnrichment')}</span>
         </div>
         <button
           type="button"
@@ -104,14 +123,14 @@ function AccountFieldPicker({
           onClick={() => setExpanded((value) => !value)}
         >
           <SlidersHorizontal size={15} aria-hidden="true" />
-          {expanded ? '收起字段' : '配置字段'}
+          {t(expanded ? 'accountFields.collapse' : 'accountFields.configure')}
         </button>
       </div>
 
-      {isLoading ? <p className="account-field-picker__state" role="status">正在读取当前平台字段能力</p> : null}
-      {error ? <p className="account-field-picker__state" data-tone="danger" role="alert">字段能力读取失败，请重试</p> : null}
+      {isLoading ? <p className="account-field-picker__state" role="status">{t('accountFields.loading')}</p> : null}
+      {error ? <p className="account-field-picker__state" data-tone="danger" role="alert">{t('accountFields.loadFailed')}</p> : null}
       {!isLoading && !error && capability?.fields.length === 0 ? (
-        <p className="account-field-picker__state" role="status">当前平台没有可配置的账号字段</p>
+        <p className="account-field-picker__state" role="status">{t('accountFields.noFields')}</p>
       ) : null}
 
       {expanded && capability ? (
@@ -119,24 +138,24 @@ function AccountFieldPicker({
           <div className="account-field-picker__toolbar">
             <label className="account-field-picker__search">
               <Search size={14} aria-hidden="true" />
-              <span className="account-field-picker__visually-hidden">搜索字段</span>
+              <span className="account-field-picker__visually-hidden">{t('accountFields.searchLabel')}</span>
               <input
                 type="search"
-                placeholder="搜索名称、字段代码或说明"
+                placeholder={t('accountFields.searchPlaceholder')}
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
               />
             </label>
             <div className="account-field-picker__quick-actions">
-              <button type="button" onClick={() => emitSelection(defaultFields)}>恢复核心字段</button>
+              <button type="button" onClick={() => emitSelection(defaultFields)}>{t('accountFields.restoreCore')}</button>
               <button type="button" onClick={() => emitSelection(availableFields.map((field) => field.key))}>
-                选择全部可用字段
+                {t('accountFields.selectAll')}
               </button>
             </div>
           </div>
 
           <div className="account-field-picker__layout">
-            <nav className="account-field-picker__groups" aria-label="字段分类">
+            <nav className="account-field-picker__groups" aria-label={t('accountFields.groupNavigation')}>
               {capability.field_groups.map((group) => {
                 const fields = availableFields.filter((field) => field.group === group.key)
                 const selectedCount = fields.filter((field) => selected.has(field.key)).length
@@ -147,7 +166,7 @@ function AccountFieldPicker({
                     key={group.key}
                     onClick={() => setActiveGroup(group.key)}
                   >
-                    <span>{group.display_name}</span>
+                    <span>{groupName(group.key, group.display_name)}</span>
                     <small>{selectedCount}/{fields.length}</small>
                   </button>
                 )
@@ -176,8 +195,11 @@ function AccountFieldPicker({
                         onClick={() => toggleCollapsed(group.key)}
                       >
                         <span>
-                          <strong>{group.display_name}</strong>
-                          <small>已选 {selectedCount}/{availableGroupFields.length}</small>
+                          <strong>{groupName(group.key, group.display_name)}</strong>
+                          <small>{t('accountFields.selectedCount', {
+                            count: selectedCount,
+                            total: availableGroupFields.length,
+                          })}</small>
                         </span>
                         <ChevronDown size={15} aria-hidden="true" />
                       </button>
@@ -188,8 +210,8 @@ function AccountFieldPicker({
                       >
                         {availableGroupFields.length > 0
                           && availableGroupFields.every((field) => selected.has(field.key))
-                          ? '取消本组'
-                          : '选择本组'}
+                          ? t('accountFields.clearGroup')
+                          : t('accountFields.selectGroup')}
                       </button>
                     </header>
                     <div className="account-field-picker__rows" id={`${contentId}-${group.key}`}>
@@ -210,20 +232,20 @@ function AccountFieldPicker({
                             />
                             <span className="account-field-picker__field-copy">
                               <span>
-                                <strong>{field.display_name}</strong>
+                                <strong>{fieldName(field)}</strong>
                                 <code>{field.key}</code>
                               </span>
-                              <small>{field.description}</small>
+                              <small>{fieldDescription(field)}</small>
                             </span>
                             <FieldStatus field={field} />
                           </label>
                         )
                       })}
                       {visibleFields.length === 0 ? (
-                        <p className="account-field-picker__empty">本分类没有匹配字段</p>
+                        <p className="account-field-picker__empty">{t('accountFields.noMatchingFields')}</p>
                       ) : null}
                       {allGroupFields.length === 0 ? (
-                        <p className="account-field-picker__empty">本分类暂无字段</p>
+                        <p className="account-field-picker__empty">{t('accountFields.emptyGroup')}</p>
                       ) : null}
                     </div>
                   </section>
@@ -238,20 +260,21 @@ function AccountFieldPicker({
 }
 
 function FieldStatus({ field }: { field: AccountFieldCapabilityView }) {
+  const { t } = useTranslation('collection', { i18n })
   if (field.availability === 'enrichment') {
-    return <span className="account-field-picker__status" data-tone="warning">需补全，会增加请求</span>
+    return <span className="account-field-picker__status" data-tone="warning">{t('accountFields.status.enrichment')}</span>
   }
   if (field.availability === 'conditional') {
-    return <span className="account-field-picker__status" data-tone="info">接口可能不返回</span>
+    return <span className="account-field-picker__status" data-tone="info">{t('accountFields.status.conditional')}</span>
   }
   if (field.availability === 'unsupported') {
     return (
       <span className="account-field-picker__status" data-tone="muted">
-        {field.missing_reason || '当前平台不支持'}
+        {t('accountFields.status.unsupported', { defaultValue: field.missing_reason || '当前平台不支持' })}
       </span>
     )
   }
-  return <span className="account-field-picker__status">直接提供</span>
+  return <span className="account-field-picker__status">{t('accountFields.status.direct')}</span>
 }
 
 export default AccountFieldPicker
