@@ -580,7 +580,8 @@ fn required_enrichment_operations(
 
 fn source_covers_field(platform: &str, account_source: &str, field_key: &str) -> bool {
   if account_source == "direct_account" {
-    return DIRECT_PROFILE_FIELDS.contains(&field_key);
+    return DIRECT_PROFILE_FIELDS.contains(&field_key)
+      || (platform == "douyin" && field_key == "country_region");
   }
   matches!(
     (platform, account_source, field_key),

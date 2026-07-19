@@ -56,7 +56,7 @@ fn materializes_discovery_minimal_enrichment_and_cost_breakdown() {
 #[test]
 fn direct_account_reuses_the_discovery_profile_response() {
   let mut request = request("douyin", "direct_account");
-  request.selected_fields = ["avatar_url", "followers_count"]
+  request.selected_fields = ["avatar_url", "followers_count", "country_region"]
     .map(ToString::to_string)
     .to_vec();
   let plan = generate_account_collection_plan(request).unwrap();
