@@ -172,7 +172,6 @@ export async function confirmPersistedTask(taskId: string) {
   if (runtimePlan.validationStatus !== 'valid') {
     throw new Error(runtimePlan.missing[0] ?? '计划校验未通过，无法确认运行')
   }
-  await preflightCollectionPlanPricing(runtimePlan)
   await confirmCollectionPlan(taskId, plan.id)
   return enqueueTask(taskId)
 }
@@ -237,7 +236,6 @@ export function useWorkbenchBackend() {
       if (!activePlan?.taskId || !activePlan.planId) {
         throw new Error('请先生成采集计划')
       }
-      await preflightCollectionPlanPricing(activePlan)
       await confirmCollectionPlan(activePlan.taskId, activePlan.planId)
       const run = await enqueueTask(activePlan.taskId)
       return run

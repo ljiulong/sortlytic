@@ -317,9 +317,8 @@ describe('任务页动作', () => {
     expect(invalidateQueriesMock).toHaveBeenCalledWith({ queryKey: ['workbench-backend'] })
   })
 
-  it('从持久化计划完成计价、确认和入队，不依赖页面内存中的 activePlan', async () => {
+  it('从持久化计划直接确认和入队，不用额度预检阻塞运行', async () => {
     vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
-    const registry = tikhubRegistryFixture({ balance: 1, freeCredit: 1, availableCredit: 2 })
     invokeMock.mockImplementation(async (command: string) => {
       if (command === 'get_latest_collection_plan') {
         return {
@@ -344,15 +343,8 @@ describe('任务页动作', () => {
           updated_at: '2026-07-17T00:00:00Z',
         }
       }
-      if (command === 'get_api_profile_registry') return registry
       if (command === 'estimate_task_cost') {
         return { request_count_estimate: 3 }
-      }
-      if (command === 'test_api_profile') {
-        return { success: true, message: 'TikHub API 配置测试成功', registry }
-      }
-      if (command === 'quote_tikhub_connector_price') {
-        return { total_price: 0.01 }
       }
       if (command === 'confirm_collection_plan') return task
       if (command === 'enqueue_task') return { id: 'run-1', task_id: 'task-1', status: 'queued' }
@@ -366,21 +358,13 @@ describe('任务页动作', () => {
     expect(invokeMock.mock.calls.map(([command]) => command)).toEqual([
       'get_latest_collection_plan',
       'estimate_task_cost',
-      'get_api_profile_registry',
-      'test_api_profile',
-      'quote_tikhub_connector_price',
       'confirm_collection_plan',
       'enqueue_task',
     ])
   })
 
-  it('确认历史计划前使用后端重算请求量，不沿用低估的持久化缓存', async () => {
+  it('预计总价超过设定上限时仍允许确认入队', async () => {
     vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
-    const registry = tikhubRegistryFixture({
-      balance: 4.99,
-      freeCredit: 0.05,
-      availableCredit: 5.04,
-    })
     invokeMock.mockImplementation(async (command: string) => {
       if (command === 'get_latest_collection_plan') {
         return {
@@ -408,11 +392,6 @@ describe('任务页动作', () => {
       if (command === 'estimate_task_cost') {
         return { request_count_estimate: 22_020 }
       }
-      if (command === 'get_api_profile_registry') return registry
-      if (command === 'test_api_profile') {
-        return { success: true, message: 'TikHub API 配置测试成功', registry }
-      }
-      if (command === 'quote_tikhub_connector_price') return { total_price: 0.01 }
       if (command === 'confirm_collection_plan') return task
       if (command === 'enqueue_task') {
         return { id: 'run-legacy', task_id: 'task-legacy-underestimated', status: 'queued' }
@@ -420,11 +399,16 @@ describe('任务页动作', () => {
       throw new Error(`意外命令：${command}`)
     })
 
-    await expect(confirmPersistedTask('task-legacy-underestimated')).rejects.toThrow(
-      'TikHub 实时报价超过计划预算上限',
-    )
-    expect(invokeMock.mock.calls.map(([command]) => command)).not.toContain('confirm_collection_plan')
-    expect(invokeMock.mock.calls.map(([command]) => command)).not.toContain('enqueue_task')
+    await expect(confirmPersistedTask('task-legacy-underestimated')).resolves.toMatchObject({
+      task_id: 'task-legacy-underestimated',
+      status: 'queued',
+    })
+    expect(invokeMock.mock.calls.map(([command]) => command)).toEqual([
+      'get_latest_collection_plan',
+      'estimate_task_cost',
+      'confirm_collection_plan',
+      'enqueue_task',
+    ])
   })
 
   it('单任务导出只生成用户选择的文件格式', async () => {
@@ -892,7 +876,7 @@ describe('计划实时计价预检', () => {
     expect(quoteCalls.get('/api/v1/xiaohongshu/app_v2/get_video_note_detail')).toBe(1)
   })
 
-  it('免费额度与充值余额合计不足时阻止确认', async () => {
+  it('预计总价超过余额上限时只返回参考信息而不阻塞', async () => {
     const registry = tikhubRegistryFixture({
       balance: 0.01,
       freeCredit: 0.01,
@@ -916,9 +900,30 @@ describe('计划实时计价预检', () => {
       throw new Error(`意外命令：${command}`)
     })
 
-    await expect(preflightCollectionPlanPricing(plan)).rejects.toThrow(
-      'TikHub 免费额度与充值余额合计不足',
-    )
+    await expect(preflightCollectionPlanPricing(plan)).resolves.toMatchObject({
+      availableCredit: 0.02,
+      quotedTotalMicros: 60_000,
+    })
+  })
+
+  it('预计总价超过设定上限时只返回参考信息而不阻塞', async () => {
+    const registry = tikhubRegistryFixture()
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'get_api_profile_registry') return registry
+      if (command === 'test_api_profile') {
+        return { success: true, message: 'TikHub API 配置测试成功', registry }
+      }
+      if (command === 'quote_tikhub_connector_price') return { total_price: 0.02 }
+      throw new Error(`意外命令：${command}`)
+    })
+
+    await expect(preflightCollectionPlanPricing({
+      ...plan,
+      budgetMicros: 10_000,
+    })).resolves.toMatchObject({
+      availableCredit: 0.3,
+      quotedTotalMicros: 60_000,
+    })
   })
 
   it('没有当前 TikHub 配置时失败关闭且不测试、不报价', async () => {

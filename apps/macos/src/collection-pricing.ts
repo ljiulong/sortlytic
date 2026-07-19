@@ -100,12 +100,6 @@ export async function preflightCollectionPlanPricing(plan: CollectionPricingPlan
   }
   const unitPrice = Math.max(...quotes.map((quote) => requiredMoney(quote.total_price, 'TikHub 实时报价')))
   const quotedTotalMicros = Math.round(unitPrice * requestCount * 1_000_000)
-  if (quotedTotalMicros > budgetMicros) {
-    throw new Error('TikHub 实时报价超过计划预算上限')
-  }
-  if (quotedTotalMicros > Math.round(profileSnapshot.availableCredit * 1_000_000)) {
-    throw new Error('TikHub 免费额度与充值余额合计不足')
-  }
   return { ...profileSnapshot, quotedTotalMicros }
 }
 
