@@ -5,11 +5,12 @@ import { createRoot, type Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ExportJobView } from './backend-api'
-import TaskQueue, {
+import TaskQueue from './TaskQueue'
+import {
   capabilitiesForStatus,
   confirmationForTaskAction,
   taskExportFormatOptions,
-} from './TaskQueue'
+} from './task-queue-config'
 import { i18n as appI18n } from './i18n'
 import type { TaskExportInput, WorkbenchRuntimeData } from './use-workbench-backend'
 import type { TaskStatus } from './workbench-data'
@@ -17,6 +18,13 @@ import type { TaskStatus } from './workbench-data'
 const openPathMock = vi.hoisted(() => vi.fn())
 
 vi.mock('@tauri-apps/plugin-opener', () => ({ openPath: openPathMock }))
+vi.mock('./TaskResultsPanel', () => ({
+  default: ({ taskId }: { taskId: string }) => createElement(
+    'div',
+    { 'data-testid': 'task-results-panel' },
+    `结果面板 ${taskId}`,
+  ),
+}))
 
 const waitingTask: WorkbenchRuntimeData['tasks'][number] = {
   id: 'task-waiting',
@@ -355,6 +363,37 @@ describe('TaskQueue', () => {
     expect(markup).not.toContain('确认运行')
     expect(markup).toContain('导出')
     expect(markup).not.toMatch(/<button[^>]*disabled=""[^>]*>[^<]*(?:<[^>]+>)*导出/)
+  })
+
+  it('成功任务可进入应用内结果预览并返回任务列表', () => {
+    const successTask = {
+      ...waitingTask,
+      id: 'task-success-results',
+      name: '有结果的成功任务',
+      status: '成功' as const,
+      progress: 100,
+      records: 2,
+    }
+    const otherTask = {
+      ...waitingTask,
+      id: 'task-other-results',
+      name: '其他任务',
+    }
+    const mounted = mountQueue(vi.fn(async () => undefined), [successTask, otherTask])
+
+    expect(mounted.container.querySelector('[data-testid="task-results-panel"]')).toBeNull()
+    act(() => mounted.container.querySelector<HTMLButtonElement>(
+      'button[aria-label="查看结果"]',
+    )?.click())
+
+    expect(mounted.container.textContent).toContain('结果面板 task-success-results')
+    expect(mounted.container.textContent).not.toContain(otherTask.name)
+
+    act(() => mounted.container.querySelector<HTMLButtonElement>(
+      'button[aria-label="返回任务列表"]',
+    )?.click())
+    expect(mounted.container.textContent).toContain(otherTask.name)
+    expect(mounted.container.querySelector('[data-testid="task-results-panel"]')).toBeNull()
   })
 
   it('导出成功后自动打开绝对路径，并在当前任务提供再次打开入口', async () => {

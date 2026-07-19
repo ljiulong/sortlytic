@@ -1,10 +1,18 @@
 import { useState } from 'react'
-import { Ban, Download, ListTodo, Pencil, Play, Save, Trash2, X } from 'lucide-react'
+import { Ban, Download, ListTodo, Pencil, Play, Save, Table2, Trash2, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import AppSelect from './AppSelect'
 import { backendErrorMessage, type ExportJobView } from './backend-api'
 import { StatusPill } from './CollectionBuilder'
-import { i18n as appI18n } from './i18n'
+import {
+  capabilitiesForStatus,
+  confirmationForTaskAction,
+  taskDataTypeTranslationKeys,
+  taskExportFormatOptions,
+  taskSourceTranslationKeys,
+  taskStatusTranslationKeys,
+} from './task-queue-config'
+import TaskResultsPanel from './TaskResultsPanel'
 import TaskRunLogPanel from './TaskRunLogPanel'
 import type { TaskExportInput, WorkbenchRuntimeData } from './use-workbench-backend'
 import type { TaskStatus } from './workbench-data'
@@ -39,80 +47,6 @@ type TaskQueueProps = {
   onExportTask: (input: TaskExportInput) => Promise<ExportJobView>
 }
 
-const taskStatusTranslationKeys: Record<TaskStatus, string> = {
-  已排队: 'taskStatus.queued',
-  运行中: 'taskStatus.running',
-  等待确认: 'taskStatus.waitingConfirmation',
-  部分成功: 'taskStatus.partialSuccess',
-  成功: 'taskStatus.success',
-  待人工确认: 'taskStatus.manualConfirmation',
-  失败: 'taskStatus.failed',
-  已取消: 'taskStatus.cancelled',
-}
-
-const taskSourceTranslationKeys = {
-  natural_language: 'taskQueue.source.naturalLanguage',
-  form: 'taskQueue.source.form',
-} as const
-
-const taskDataTypeTranslationKeys: Record<string, string> = {
-  keyword_search: 'taskQueue.dataType.keywordSearch',
-  account_profile: 'taskQueue.dataType.accountProfile',
-  item_detail: 'taskQueue.dataType.itemDetail',
-  account_posts: 'taskQueue.dataType.accountPosts',
-  comments: 'taskQueue.dataType.comments',
-}
-
-const taskExportFormatOptionKeys = [
-  { value: 'xlsx', key: 'export.formats.xlsx' },
-  { value: 'pdf', key: 'export.formats.pdf' },
-] as const
-
-// oxlint-disable-next-line react/only-export-components
-export const taskExportFormatOptions = taskExportFormatOptionKeys.map(({ value, key }) => ({
-  value,
-  get label() {
-    return appI18n.t(key, { ns: 'tasks' })
-  },
-})) satisfies Array<{ value: TaskExportInput['format']; label: string }>
-
-// oxlint-disable-next-line react/only-export-components
-export function capabilitiesForStatus(status: TaskStatus) {
-  return {
-    canEdit: status === '等待确认' || status === '待人工确认',
-    canCancel: ['等待确认', '待人工确认', '已排队', '运行中'].includes(status),
-    canConfirm: status === '等待确认',
-    canDelete: status !== '已排队' && status !== '运行中',
-    canExport: status === '成功' || status === '部分成功',
-  }
-}
-
-// oxlint-disable-next-line react/only-export-components
-export function confirmationForTaskAction(type: ConfirmationMode['type']) {
-  if (type === 'confirm-run') {
-    return {
-      ariaLabel: appI18n.t('confirmation.confirmRun.ariaLabel', { ns: 'tasks' }),
-      buttonLabel: appI18n.t('confirmation.confirmRun.button', { ns: 'tasks' }),
-      message: appI18n.t('confirmation.confirmRun.message', { ns: 'tasks' }),
-      tone: 'primary' as const,
-    }
-  }
-  if (type === 'confirm-cancel') {
-    return {
-      ariaLabel: appI18n.t('confirmation.confirmCancel.ariaLabel', { ns: 'tasks' }),
-      buttonLabel: appI18n.t('confirmation.confirmCancel.button', { ns: 'tasks' }),
-      message: appI18n.t('confirmation.confirmCancel.message', { ns: 'tasks' }),
-      tone: 'danger' as const,
-    }
-  }
-  return {
-    ariaLabel: appI18n.t('confirmation.confirmDelete.ariaLabel', { ns: 'tasks' }),
-    buttonLabel: appI18n.t('confirmation.confirmDelete.button', { ns: 'tasks' }),
-    message: appI18n.t('confirmation.confirmDelete.message', { ns: 'tasks' }),
-    tone: 'danger' as const,
-  }
-}
-
 function TaskQueue({
   tasks,
   isBusy,
@@ -125,6 +59,7 @@ function TaskQueue({
   const { t, i18n } = useTranslation('tasks')
   const [activeMode, setActiveMode] = useState<ActiveTaskMode>()
   const [previewTaskId, setPreviewTaskId] = useState<string>()
+  const [resultsTaskId, setResultsTaskId] = useState<string>()
   const [draftName, setDraftName] = useState('')
   const [exportFormats, setExportFormats] = useState<Record<string, TaskExportInput['format']>>({})
   const [exportFeedback, setExportFeedback] = useState<Record<string, TaskExportFeedback>>({})
@@ -192,6 +127,7 @@ function TaskQueue({
     try {
       if (action.type === 'confirm-run') {
         await onConfirmTask(action.taskId)
+        setResultsTaskId(undefined)
         setPreviewTaskId(action.taskId)
       } else if (action.type === 'confirm-cancel') {
         await onCancelTask(action.taskId)
@@ -316,7 +252,10 @@ function TaskQueue({
             aria-label={t('taskQueue.backToList')}
             className="ghost-button"
             type="button"
-            onClick={() => setPreviewTaskId(undefined)}
+            onClick={() => {
+              setPreviewTaskId(undefined)
+              setResultsTaskId(undefined)
+            }}
           >
             {t('taskQueue.backToList')}
           </button>
@@ -555,6 +494,10 @@ function TaskQueue({
                   </div>
                 </div>
 
+                {resultsTaskId === task.id ? (
+                  <TaskResultsPanel taskId={task.id} taskName={task.name} />
+                ) : null}
+
                 {task.latestRun ? (
                   <section
                     aria-label={t('taskQueue.runDetails')}
@@ -659,6 +602,22 @@ function TaskQueue({
                         </button>
                       </div>
                       <div className="task-card__run-action">
+                        {capabilities.canExport && resultsTaskId !== task.id ? (
+                          <button
+                            aria-label={t('taskQueue.viewResults')}
+                            className="primary-button"
+                            disabled={isBusy || isEditing || isConfirming}
+                            type="button"
+                            onClick={() => {
+                              setActiveMode(undefined)
+                              setResultsTaskId(task.id)
+                              setPreviewTaskId(task.id)
+                            }}
+                          >
+                            <Table2 size={15} aria-hidden="true" />
+                            {t('taskQueue.viewResults')}
+                          </button>
+                        ) : null}
                         {capabilities.canConfirm ? (
                           <button
                             className="primary-button"
