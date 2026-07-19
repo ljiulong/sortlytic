@@ -126,6 +126,7 @@ export type AccountFieldCapabilityView = {
   required_operation_keys: string[]
   missing_reason?: string | null
   supported_platforms?: string[]
+  covered_by_source_keys?: string[]
 }
 
 export type AccountCollectionCapabilityView = {
