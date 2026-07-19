@@ -55,6 +55,7 @@ function renderFields(
   root: Root,
   callbacks: {
     onAccountSourceChange: (source?: AccountSourceKey) => void
+    onCapabilityChange: (capability?: AccountCollectionCapabilityView) => void
     onPlatformChange: (platform?: Platform) => void
     onSelectedFieldsChange: (fields: string[]) => void
   },
@@ -64,6 +65,7 @@ function renderFields(
       accountSource="user_search"
       capabilityLoader={capabilityLoader}
       onAccountSourceChange={callbacks.onAccountSourceChange}
+      onCapabilityChange={callbacks.onCapabilityChange}
       onPlatformChange={callbacks.onPlatformChange}
       onSelectedFieldsChange={callbacks.onSelectedFieldsChange}
       platform="TikTok"
@@ -80,6 +82,7 @@ async function mountFields() {
   document.body.append(container)
   const callbacks = {
     onAccountSourceChange: vi.fn(),
+    onCapabilityChange: vi.fn(),
     onPlatformChange: vi.fn(),
     onSelectedFieldsChange: vi.fn(),
   }
@@ -117,12 +120,20 @@ describe('AccountSourceFields', () => {
 
     const nextCallbacks = {
       onAccountSourceChange: vi.fn(),
+      onCapabilityChange: vi.fn(),
       onPlatformChange: vi.fn(),
       onSelectedFieldsChange: vi.fn(),
     }
     await act(async () => renderFields(root, nextCallbacks))
 
     expect(nextCallbacks.onSelectedFieldsChange).not.toHaveBeenCalled()
+    expect(nextCallbacks.onCapabilityChange).not.toHaveBeenCalled()
+  })
+
+  it('把已加载的平台能力上报给父表单', async () => {
+    const { callbacks } = await mountFields()
+
+    expect(callbacks.onCapabilityChange).toHaveBeenLastCalledWith(capability)
   })
 
   it('英文界面按稳定 key 翻译来源和动态输入文案', async () => {

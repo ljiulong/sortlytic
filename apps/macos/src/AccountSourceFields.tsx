@@ -3,6 +3,7 @@ import type { UseFormRegisterReturn } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import AccountFieldPicker from './AccountFieldPicker'
 import AppSelect from './AppSelect'
+import type { AccountCollectionCapabilityView } from './backend-api'
 import { reconcileAccountFields, sourceInputCopy } from './account-source-rules'
 import type { AccountSourceKey } from './collection-options'
 import { platformSelectOptions } from './collection-select-options'
@@ -28,6 +29,7 @@ type AccountSourceFieldsProps = {
     sourceInput?: string
   }
   onAccountSourceChange: (source?: AccountSourceKey) => void
+  onCapabilityChange?: (capability?: AccountCollectionCapabilityView) => void
   onPlatformChange: (platform?: Platform) => void
   onSelectedFieldsChange: (fields: string[]) => void
   platform?: Platform
@@ -40,6 +42,7 @@ function AccountSourceFields({
   capabilityLoader,
   errors,
   onAccountSourceChange,
+  onCapabilityChange,
   onPlatformChange,
   onSelectedFieldsChange,
   platform,
@@ -54,6 +57,7 @@ function AccountSourceFields({
   const selectedFieldsRef = useRef(selectedFields)
   const accountSourceRef = useRef(accountSource)
   const onAccountSourceChangeRef = useRef(onAccountSourceChange)
+  const onCapabilityChangeRef = useRef(onCapabilityChange)
   const onSelectedFieldsChangeRef = useRef(onSelectedFieldsChange)
   const customizedRef = useRef(false)
   const previousPlatformRef = useRef<string | undefined>(undefined)
@@ -61,7 +65,12 @@ function AccountSourceFields({
   selectedFieldsRef.current = selectedFields
   accountSourceRef.current = accountSource
   onAccountSourceChangeRef.current = onAccountSourceChange
+  onCapabilityChangeRef.current = onCapabilityChange
   onSelectedFieldsChangeRef.current = onSelectedFieldsChange
+
+  useEffect(() => {
+    onCapabilityChangeRef.current?.(capability)
+  }, [capability])
 
   useEffect(() => {
     if (!capability) return
