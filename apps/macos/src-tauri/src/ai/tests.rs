@@ -68,7 +68,7 @@ fn text_generation_uses_active_prompt_and_real_provider_response() {
   let (base_url, server) = serve_ai_once(200, response, |request| {
     assert!(request.starts_with("POST /v1/chat/completions HTTP/1.1"));
     assert!(request.contains("input_json.text"));
-    assert!(request.contains("collection_plan_v3"));
+    assert!(request.contains("collection_plan_v4"));
     assert!(request.contains("最近 7 天美国 TikTok 汽车内容"));
   });
   let profile_id = configure_active_ai(&root_path, base_url);
@@ -110,7 +110,7 @@ fn text_generation_uses_active_prompt_and_real_provider_response() {
   assert_eq!(result.runtime_snapshot.model_id, "deepseek-test");
   assert_eq!(
     result.runtime_snapshot.output_schema_id,
-    "collection_plan_v3"
+    "collection_plan_v4"
   );
   assert_eq!(result.runtime_snapshot.config_source, "active_api_profile");
   assert_eq!(result.collection_plan.validation_status, "valid");
@@ -119,10 +119,7 @@ fn text_generation_uses_active_prompt_and_real_provider_response() {
     2_000_000
   );
   assert_eq!(updated_task.platforms_json, serde_json::json!(["tiktok"]));
-  assert_eq!(
-    updated_task.data_types_json,
-    serde_json::json!(["keyword_search"])
-  );
+  assert_eq!(updated_task.data_types_json, serde_json::json!(["account"]));
   assert_eq!(runs.len(), 1);
 
   std::fs::remove_dir_all(root_path).ok();
@@ -244,7 +241,7 @@ fn natural_language_plan_runs_through_tikhub_and_persists_records() {
   let (ai_base_url, ai_server) = serve_ai_once(200, ai_response, |request| {
     assert!(request.starts_with("POST /v1/chat/completions HTTP/1.1"));
     assert!(request.contains("input_json.text"));
-    assert!(request.contains("collection_plan_v3"));
+    assert!(request.contains("collection_plan_v4"));
     assert!(request.contains("最近 7 天美国 TikTok 汽车内容"));
   });
   let ai_profile_id = configure_active_ai(&root_path, ai_base_url);
@@ -301,7 +298,7 @@ fn natural_language_plan_runs_through_tikhub_and_persists_records() {
   assert_eq!(generated.runtime_snapshot.model_id, "deepseek-test");
   assert_eq!(
     generated.runtime_snapshot.output_schema_id,
-    "collection_plan_v3"
+    "collection_plan_v4"
   );
   assert_eq!(generated.ai_run.input_tokens, Some(44));
   assert_eq!(generated.ai_run.output_tokens, Some(66));
@@ -331,7 +328,7 @@ fn prompt_regression_calls_the_active_model_with_the_candidate_content() {
   let (base_url, server) = serve_ai_once(200, response, |request| {
     assert!(request.contains("候选提示词正文-必须真实发送"));
     assert!(request.contains("回归样例-最近 7 天美国 TikTok 汽车内容"));
-    assert!(request.contains("collection_plan_v3"));
+    assert!(request.contains("collection_plan_v4"));
   });
   let profile_id = configure_active_ai(&root_path, base_url);
 
@@ -397,19 +394,20 @@ fn provider_failure_is_persisted_without_secret_or_body() {
 
 fn valid_keyword_plan() -> Value {
   serde_json::json!({
-    "schema_version": 3,
+    "schema_version": 4,
+    "entity": "account",
     "platforms": ["tiktok"],
-    "data_types": ["keyword_search"],
-    "internal_data_types": [],
+    "account_source": "content_search_authors",
+    "selected_fields": [],
+    "enrichment_policy": "auto_costed",
     "region": "US",
-    "keywords": ["car"],
-    "accounts": [],
     "time_range": "7",
     "age_range": null,
     "gender_filter": null,
     "steps": [{
-      "step_key": "keyword_search",
-      "role": "entry",
+      "step_key": "discover",
+      "operation_key": "discover.content_search_authors",
+      "role": "discovery",
       "depends_on_step_key": null,
       "input_binding": null,
       "endpoint_key": "tiktok.keyword_search",
@@ -421,19 +419,33 @@ fn valid_keyword_plan() -> Value {
         "account_id": null,
         "region": "US",
         "time_range": "7",
-        "page_size": 50
+        "page_size": 20
       },
       "request_limit": 1,
       "output_selected": true
     }],
-    "record_limit": 50,
+    "record_limit": 20,
     "request_limit": 1,
     "budget_limit": { "currency": "USD", "amount_micros": 2_000_000 },
     "output_rules": {
       "entity": "account",
+      "required_fields": [
+        "platform", "display_name", "account_handle", "platform_user_id",
+        "data_source", "collected_at"
+      ],
+      "selected_fields": [],
       "dedupe_key": ["platform", "platform_user_id"],
-      "fallback_dedupe_key": ["platform", "normalized_account"],
-      "selected_data_types": ["keyword_search"]
+      "fallback_dedupe_key": ["platform", "account_handle"],
+      "unselected_value_label": "任务未设置",
+      "missing_value_label": "未采集到",
+      "evidence_required": true
+    },
+    "cost_estimate": {
+      "request_count_estimate": 1,
+      "discovery_request_count": 1,
+      "enrichment_request_count": 0,
+      "enrichment_operation_count": 0,
+      "requires_confirmation": true
     },
     "missing_fields": [],
     "confidence": 0.96,

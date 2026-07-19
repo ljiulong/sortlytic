@@ -92,13 +92,15 @@ const BUILTIN_PROMPTS: &[BuiltinPromptTemplate] = &[
     key: "collection_plan_from_text",
     name: "自然语言采集计划生成",
     task_type: "collection_plan",
-    description: "把自然语言需求转为 v3 结构化计划；校验并确认后由运行器调用真实 TikHub。",
-    output_schema_id: "collection_plan_v3",
-    content: r#"读取 input_json.text，把它作为本次计划的唯一需求证据，只输出 collection_plan_v3 JSON，不得输出 Markdown。
-必须包含 schema_version、platforms、data_types、internal_data_types、region、keywords、accounts、time_range、age_range、gender_filter、steps、record_limit、request_limit、budget_limit、output_rules、missing_fields、confidence 和 requires_user_confirmation。
-schema_version 必须为 3；requires_user_confirmation 必须为 true。平台只允许 tiktok、douyin、xiaohongshu，步骤必须使用匹配的 endpoint_key 和依赖关系。
-TikTok 关键词时间范围只允许 1、7、30、180；抖音和小红书只允许 1、7、180。地区只提交明确的 ISO 两位代码，无法从输入证据确认时写入 missing_fields。
-预算按输入原值换算为 USD 微美元；年龄和性别只能使用接口明确值，禁止根据头像、姓名或简介推断。不得猜测任何缺失信息，也不得绕过 Schema 校验、预算校验或用户确认。"#,
+    description: "把自然语言需求转为 v4 账号计划；校验并确认后由运行器调用真实 TikHub。",
+    output_schema_id: "collection_plan_v4",
+    content: r#"读取 input_json.text，把它作为本次计划的唯一需求证据，只输出 collection_plan_v4 JSON，不得输出 Markdown。
+必须包含 schema_version、entity、platforms、account_source、selected_fields、enrichment_policy、region、time_range、age_range、gender_filter、steps、record_limit、request_limit、budget_limit、output_rules、cost_estimate、missing_fields、confidence 和 requires_user_confirmation。
+schema_version 必须为 4，entity 必须为 account，enrichment_policy 必须为 auto_costed，requires_user_confirmation 必须为 true。每条计划只允许 tiktok、douyin、xiaohongshu 中的一个平台和一个账号来源。
+发现步骤必须使用 discover.* operation_key；字段补全只允许 enrich.profile、enrich.extended_demographics、enrich.account_country、enrich.account_posts，并复用同一端点响应。不得生成当前平台不支持的来源、字段、endpoint_key 或依赖关系。
+selected_fields 只包含公开账号业务字段，不包含固定身份字段和技术字段。output_rules 必须记录逐字段证据，并严格区分“任务未设置”和“未采集到”。
+预算按输入原值换算为 USD 微美元并覆盖发现和补全请求；年龄和性别只能使用接口明确值，禁止根据头像、姓名或简介推断。数值 0 必须保留，未知值不能通过已启用筛选。
+无法从输入证据确认的信息写入 missing_fields，不得猜测，也不得绕过 Schema 校验、能力校验、预算校验或用户确认。"#,
   },
   BuiltinPromptTemplate {
     key: "general_summary",
@@ -428,31 +430,34 @@ fn ensure_builtin_regression_cases(
   let cases = match builtin.key {
     "collection_plan_from_text" => vec![
       (
-        "TikTok 关键词完整计划",
-        serde_json::json!({ "text": "采集美国 TikTok 最近 7 天的汽车关键词结果，最多 50 条，预算 2 美元" }),
+        "TikTok 账号搜索完整计划",
+        serde_json::json!({ "text": "搜索美国 TikTok 汽车账号，采集头像、简介、粉丝数和国家地区，最多 20 个账号，预算 2 美元" }),
         serde_json::json!({
           "expected_platforms": ["tiktok"],
-          "expected_data_types": ["keyword_search"],
+          "expected_account_source": "user_search",
+          "expected_selected_fields": ["avatar_url", "bio", "country_region", "followers_count"],
           "expected_missing_fields": [],
           "expected_plan_valid": true
         }),
       ),
       (
-        "抖音关键词完整计划",
-        serde_json::json!({ "text": "采集抖音最近 180 天的新能源汽车关键词结果，最多 100 条，预算 3 美元" }),
+        "抖音人口属性补全计划",
+        serde_json::json!({ "text": "搜索抖音新能源汽车账号，采集头像、粉丝数、性别和年龄，最多 20 个账号，预算 3 美元" }),
         serde_json::json!({
           "expected_platforms": ["douyin"],
-          "expected_data_types": ["keyword_search"],
+          "expected_account_source": "user_search",
+          "expected_selected_fields": ["avatar_url", "gender", "age", "followers_count"],
           "expected_missing_fields": [],
           "expected_plan_valid": true
         }),
       ),
       (
-        "小红书关键词完整计划",
-        serde_json::json!({ "text": "采集小红书最近 180 天的智能汽车关键词结果，最多 80 条，预算 4 美元" }),
+        "小红书账号搜索完整计划",
+        serde_json::json!({ "text": "搜索小红书智能汽车账号，采集头像、简介、粉丝数和笔记数，最多 20 个账号，预算 4 美元" }),
         serde_json::json!({
           "expected_platforms": ["xiaohongshu"],
-          "expected_data_types": ["keyword_search"],
+          "expected_account_source": "user_search",
+          "expected_selected_fields": ["avatar_url", "bio", "followers_count", "posts_count"],
           "expected_missing_fields": [],
           "expected_plan_valid": true
         }),

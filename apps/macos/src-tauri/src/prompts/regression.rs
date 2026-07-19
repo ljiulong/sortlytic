@@ -3,7 +3,7 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::ai::run_collection_prompt_regression;
-use crate::collection::validate_collection_plan_v3;
+use crate::collection::validate_collection_plan_v4;
 
 use super::{PromptRegressionCaseView, PromptVersionView};
 
@@ -23,7 +23,7 @@ pub(super) fn evaluate_prompt_case(
   let mut schema_errors = Vec::new();
   let mut rule_errors = Vec::new();
   let (provider_id, model_id) = match case.expected_schema_id.as_str() {
-    "collection_plan_v3" => evaluate_collection_case(
+    "collection_plan_v4" => evaluate_collection_case(
       root_path,
       version,
       case,
@@ -81,18 +81,22 @@ fn evaluate_collection_case(
     &version.content,
     &[
       "json",
-      "collection_plan_v3",
+      "collection_plan_v4",
       "input_json.text",
       "schema_version",
+      "entity",
       "platforms",
-      "data_types",
-      "internal_data_types",
+      "account_source",
+      "selected_fields",
+      "enrichment_policy",
       "region",
       "steps",
+      "operation_key",
       "record_limit",
       "request_limit",
       "budget_limit",
       "output_rules",
+      "cost_estimate",
       "missing_fields",
       "requires_user_confirmation",
       "证据",
@@ -120,11 +124,18 @@ fn evaluate_collection_case(
     "expected_platforms",
     rule_errors,
   );
+  compare_string_rule(
+    &output,
+    "account_source",
+    &case.expected_rules_json,
+    "expected_account_source",
+    rule_errors,
+  );
   compare_string_array_rule(
     &output,
-    "data_types",
+    "selected_fields",
     &case.expected_rules_json,
-    "expected_data_types",
+    "expected_selected_fields",
     rule_errors,
   );
   compare_string_array_rule(
@@ -135,7 +146,7 @@ fn evaluate_collection_case(
     rule_errors,
   );
 
-  let validation = validate_collection_plan_v3(&output);
+  let validation = validate_collection_plan_v4(&output);
   if let Some(expected_valid) = case
     .expected_rules_json
     .get("expected_plan_valid")
@@ -224,6 +235,23 @@ fn compare_string_array_rule(
 ) {
   let actual = string_array(output.get(output_field));
   let expected = string_array(rules.get(rule_field));
+  if actual != expected {
+    errors.push(format!(
+      "{output_field} 应为 {:?}，实际为 {:?}",
+      expected, actual
+    ));
+  }
+}
+
+fn compare_string_rule(
+  output: &Value,
+  output_field: &str,
+  rules: &Value,
+  rule_field: &str,
+  errors: &mut Vec<String>,
+) {
+  let actual = output.get(output_field).and_then(Value::as_str);
+  let expected = rules.get(rule_field).and_then(Value::as_str);
   if actual != expected {
     errors.push(format!(
       "{output_field} 应为 {:?}，实际为 {:?}",
