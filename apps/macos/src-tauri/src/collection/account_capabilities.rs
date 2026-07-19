@@ -76,6 +76,7 @@ pub enum AccountFieldValueType {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AccountSourceCapabilityView {
   pub key: String,
+  pub label: String,
   pub display_name: String,
   pub description: String,
   pub input_kind: AccountSourceInputKind,
@@ -95,6 +96,7 @@ pub struct AccountFieldGroupView {
 pub struct AccountFieldCapabilityView {
   pub key: String,
   pub group: String,
+  pub label: String,
   pub display_name: String,
   pub description: String,
   pub value_type: AccountFieldValueType,
@@ -102,6 +104,7 @@ pub struct AccountFieldCapabilityView {
   pub default_selected: bool,
   pub required_operation_keys: Vec<String>,
   pub missing_reason: Option<String>,
+  pub supported_platforms: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -322,6 +325,7 @@ fn source(
 ) -> AccountSourceCapabilityView {
   AccountSourceCapabilityView {
     key: key.to_string(),
+    label: display_name.to_string(),
     display_name: display_name.to_string(),
     description: description.to_string(),
     input_kind,
@@ -338,6 +342,7 @@ fn field_capability(platform: &str, definition: &FieldDefinition) -> AccountFiel
   AccountFieldCapabilityView {
     key: key.to_string(),
     group: group.to_string(),
+    label: display_name.to_string(),
     display_name: display_name.to_string(),
     description: description.to_string(),
     value_type,
@@ -348,6 +353,13 @@ fn field_capability(platform: &str, definition: &FieldDefinition) -> AccountFiel
       .map(|value| (*value).to_string())
       .collect(),
     missing_reason: missing_reason.map(ToString::to_string),
+    supported_platforms: ["tiktok", "douyin", "xiaohongshu"]
+      .into_iter()
+      .filter(|candidate| {
+        field_support(candidate, key).0 != AccountFieldAvailability::Unsupported
+      })
+      .map(ToString::to_string)
+      .collect(),
   }
 }
 
@@ -511,6 +523,22 @@ mod tests {
       .account_sources
       .iter()
       .any(|source| source.key == "followers"));
+  }
+
+  #[test]
+  fn serialized_capabilities_expose_labels_reasons_and_supported_platforms() {
+    let capability = get_account_collection_capabilities("tiktok").unwrap();
+    let serialized = serde_json::to_value(capability).unwrap();
+    assert_eq!(serialized["account_sources"][0]["label"], "搜索用户");
+    let gender = serialized["fields"]
+      .as_array()
+      .unwrap()
+      .iter()
+      .find(|field| field["key"] == "gender")
+      .unwrap();
+    assert_eq!(gender["label"], "性别");
+    assert!(gender["missing_reason"].as_str().is_some());
+    assert_eq!(gender["supported_platforms"], serde_json::json!(["douyin"]));
   }
 
   #[test]
