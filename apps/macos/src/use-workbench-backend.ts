@@ -13,7 +13,6 @@ import {
   ensureDefaultWorkspace,
   generateAccountCollectionPlan,
   generateCollectionPlanFromText,
-  generateFormCollectionPlan,
   getLatestCollectionPlan,
   type GenerateFormPlanInput,
   type GenerateAccountPlanInput,
@@ -376,19 +375,13 @@ export async function loadBackendWorkbench(): Promise<BackendWorkbenchData> {
 
 async function createFormPlan(values: CollectionFormPayload): Promise<RuntimeCollectionPlan> {
   assertTauriRuntime()
-  const accountRequest = values.accountSource ? buildAccountPlanRequest(values) : undefined
-  const request = accountRequest ?? buildFormPlanRequest(values)
-  const draft = accountRequest
-    ? await generateAccountCollectionPlan(accountRequest)
-    : await generateFormCollectionPlan(request as GenerateFormPlanInput)
+  const request = buildAccountPlanRequest(values)
+  const draft = await generateAccountCollectionPlan(request)
   const task = await createCollectionTask({
     name: values.keyword.trim(),
     source_type: 'form',
     platforms: [request.platform],
-    data_types: accountRequest
-      ? ['account']
-      : (request as GenerateFormPlanInput).data_types
-        ?? [(request as GenerateFormPlanInput).data_type ?? 'keyword_search'],
+    data_types: ['account'],
   })
   let runtimePlan: RuntimeCollectionPlan
   try {
@@ -423,7 +416,9 @@ export function buildAccountPlanRequest(values: CollectionFormPayload): Generate
       ? 'item_id'
       : 'account_id'
   const singleSource = ['direct_account', 'item_author'].includes(values.accountSource)
-  const selectedFields = [...new Set(values.selectedFields ?? [])]
+  const selectedFields = new Set(values.selectedFields ?? [])
+  if (values.genderFilterEnabled) selectedFields.add('gender')
+  if (values.ageRangeEnabled) selectedFields.add('age')
   const ageRange = values.ageRangeEnabled
     && values.ageMin !== undefined
     && values.ageMax !== undefined
@@ -436,7 +431,7 @@ export function buildAccountPlanRequest(values: CollectionFormPayload): Generate
   return {
     platform,
     account_source: values.accountSource,
-    selected_fields: selectedFields,
+    selected_fields: [...selectedFields],
     enrichment_policy: 'auto_costed',
     params,
     age_range: ageRange,

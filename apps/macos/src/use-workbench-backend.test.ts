@@ -156,6 +156,8 @@ const savedFormPlan: CollectionPlanView = {
 
 const formPlanInput = {
   platform: '小红书',
+  accountSource: 'user_search',
+  selectedFields: ['avatar_url'],
   dataType: '关键词搜索',
   dataTypes: ['keyword_search'],
   regionCode: 'CN',
@@ -530,7 +532,7 @@ describe('计划生成失败的草稿清理', () => {
       ...formPlanInput,
       platform: '抖音',
       accountSource: 'user_search',
-      selectedFields: ['avatar_url', 'gender', 'age', 'gender'],
+      selectedFields: ['avatar_url'],
       ageRangeEnabled: true,
       ageMin: 18,
       ageMax: 35,
@@ -548,6 +550,19 @@ describe('计划生成失败的草稿清理', () => {
       record_limit: 100,
       budget_limit_micros: 1_000_000,
     })
+  })
+
+  it('当前表单缺少账号来源时在调用任何计划生成命令前拒绝', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    renderWorkbenchHook()
+    const generateFormMutation = mutationOptionsMock.current[0]
+
+    await expect(generateFormMutation?.mutationFn?.({
+      ...formPlanInput,
+      accountSource: undefined,
+    }))
+      .rejects.toThrow('请选择账号来源')
+    expect(invokeMock).not.toHaveBeenCalled()
   })
 
   it('账号来源表单调用 v4 命令并把任务范围固定为 account', async () => {
@@ -587,7 +602,7 @@ describe('计划生成失败的草稿清理', () => {
   it('表单计划保存失败后删除已创建的草稿任务', async () => {
     vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
     invokeMock.mockImplementation(async (command: string) => {
-      if (command === 'generate_form_collection_plan') return generatedFormDraft
+      if (command === 'generate_account_collection_plan') return generatedFormDraft
       if (command === 'create_collection_task') {
         return { ...task, id: 'task-draft-1', status: 'waiting_confirmation' }
       }
@@ -601,7 +616,7 @@ describe('计划生成失败的草稿清理', () => {
     await expect(generateFormMutation?.mutationFn?.(formPlanInput))
       .rejects.toThrow('保存计划失败')
     expect(invokeMock.mock.calls.map(([command]) => command)).toEqual([
-      'generate_form_collection_plan',
+      'generate_account_collection_plan',
       'create_collection_task',
       'save_collection_plan',
       'delete_task',
@@ -641,7 +656,7 @@ describe('计划生成失败的草稿清理', () => {
   it('草稿清理失败时同时返回原始错误与明确的人工清理提示', async () => {
     vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
     invokeMock.mockImplementation(async (command: string) => {
-      if (command === 'generate_form_collection_plan') return generatedFormDraft
+      if (command === 'generate_account_collection_plan') return generatedFormDraft
       if (command === 'create_collection_task') {
         return { ...task, id: 'task-draft-1', status: 'waiting_confirmation' }
       }
@@ -676,7 +691,7 @@ describe('计划生成失败的草稿清理', () => {
   it('定价预检失败只返回 pricingBlocker，不删除已保存计划的任务', async () => {
     vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
     invokeMock.mockImplementation(async (command: string) => {
-      if (command === 'generate_form_collection_plan') return generatedFormDraft
+      if (command === 'generate_account_collection_plan') return generatedFormDraft
       if (command === 'create_collection_task') {
         return { ...task, id: 'task-draft-1', status: 'waiting_confirmation' }
       }
