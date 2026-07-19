@@ -47,6 +47,8 @@ export { StatusPill }
 export type CollectionFormInput = z.input<typeof collectionFormSchema>
 export type CollectionFormValues = z.output<typeof collectionFormSchema>
 
+const emptySelectedFields: string[] = []
+
 const legacySourceTypes: Record<AccountSourceKey, {
   dataType: DataType
   dataTypeCode: CollectionDataType
@@ -99,6 +101,7 @@ export function CollectionBuilder({
   const { field: dataTypesField } = useController({ control, name: 'dataTypes' })
   const selectedPlatform = platformField.value
   const selectedDataTypes = dataTypesField.value ?? []
+  const selectedFields = selectedFieldsField.value ?? emptySelectedFields
   const selectedRange = watch('range')
   const ageRangeEnabled = watch('ageRangeEnabled')
   const genderFilterEnabled = watch('genderFilterEnabled')
@@ -140,6 +143,26 @@ export function CollectionBuilder({
     ageRangeEnabled,
     genderFilterEnabled,
     genderFilterSupported,
+    setValue,
+  ])
+
+  useEffect(() => {
+    const requiredFields = [
+      genderFilterEnabled && genderFilterSupported ? 'gender' : undefined,
+      ageRangeEnabled && ageFilterSupported ? 'age' : undefined,
+    ].filter((field): field is string => Boolean(field))
+    const missingFields = requiredFields.filter((field) => !selectedFields.includes(field))
+    if (missingFields.length === 0) return
+    setValue('selectedFields', [...selectedFields, ...missingFields], {
+      shouldDirty: true,
+      shouldValidate: true,
+    })
+  }, [
+    ageFilterSupported,
+    ageRangeEnabled,
+    genderFilterEnabled,
+    genderFilterSupported,
+    selectedFields,
     setValue,
   ])
 
@@ -221,7 +244,7 @@ export function CollectionBuilder({
                 onPlatformChange={platformField.onChange}
                 onSelectedFieldsChange={selectedFieldsField.onChange}
                 platform={selectedPlatform}
-                selectedFields={selectedFieldsField.value ?? []}
+                selectedFields={selectedFields}
                 sourceInputRegistration={register('keyword')}
               />
             </FormGroup>

@@ -473,6 +473,15 @@ describe('collection form controls', () => {
       .toBe(false)
     expect(mounted.container.textContent).toContain('单一闭区间，不接收未知、异常或推断年龄')
     expect(mounted.container.textContent).toContain('不根据头像、姓名或简介推断，仅使用明确公开性别')
+
+    await act(async () => {
+      mounted.container.querySelector<HTMLInputElement>('input[name="ageRangeEnabled"]')?.click()
+      mounted.container.querySelector<HTMLInputElement>('input[name="genderFilterEnabled"]')?.click()
+    })
+
+    expect(mounted.container.textContent).toContain('6 个基础字段 + 2 个扩展字段')
+    await act(async () => findButton(mounted.container, '配置字段')?.click())
+    expect(mounted.container.textContent).toContain('人口属性2/2')
   })
 
   it('时间范围只接受平台能力中的规范值，不再接受任意文本', () => {
