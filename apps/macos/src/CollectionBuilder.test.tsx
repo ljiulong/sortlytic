@@ -151,7 +151,7 @@ describe('CollectionPlanPreview', () => {
     expect(markup).toMatch(/<button[^>]*disabled=""/)
   })
 
-  it('实时计价或双额度预检未通过时禁用确认并显示原因', () => {
+  it('预计总价超过余额时显示参考提示但不禁用运行', () => {
     const markup = renderToStaticMarkup(
       createElement(CollectionPlanPreview, {
         actionMessage: '等待确认',
@@ -168,11 +168,12 @@ describe('CollectionPlanPreview', () => {
       }),
     )
 
-    expect(markup).toContain('暂不能运行：TikHub 免费额度与充值余额合计不足')
-    expect(markup).toMatch(/<button[^>]*disabled=""/)
+    expect(markup).toContain('额度参考：TikHub 免费额度与充值余额合计不足')
+    expect(markup).toContain('任务会在达到金额上限或可用余额上限时自动停止')
+    expect(markup).not.toMatch(/<button[^>]*disabled=""/)
   })
 
-  it('实时计价被限流时不得误报成计划校验未通过', () => {
+  it('实时计价被限流时显示参考提示但不禁用运行', () => {
     const markup = renderToStaticMarkup(
       createElement(CollectionPlanPreview, {
         actionMessage: '等待确认',
@@ -189,12 +190,12 @@ describe('CollectionPlanPreview', () => {
       }),
     )
 
-    expect(markup).toContain('暂不能运行：实时计价请求过于频繁，请稍后重试')
+    expect(markup).toContain('额度参考：实时计价请求过于频繁，请稍后重试')
     expect(markup).not.toContain('计划校验未通过')
-    expect(markup).toMatch(/<button[^>]*disabled=""/)
+    expect(markup).not.toMatch(/<button[^>]*disabled=""/)
   })
 
-  it('实时报价超过预算时显示预算原因而不是通用校验错误', () => {
+  it('实时报价超过设定上限时显示参考提示但不禁用运行', () => {
     const markup = renderToStaticMarkup(
       createElement(CollectionPlanPreview, {
         actionMessage: '等待确认',
@@ -211,8 +212,9 @@ describe('CollectionPlanPreview', () => {
       }),
     )
 
-    expect(markup).toContain('暂不能运行：实时计价超过计划预算上限，请缩小范围或提高预算')
+    expect(markup).toContain('额度参考：实时计价超过计划预算上限，请缩小范围或提高预算')
     expect(markup).not.toContain('计划校验未通过')
+    expect(markup).not.toMatch(/<button[^>]*disabled=""/)
   })
 
   it('计划和实时计价均有效时允许确认运行', () => {

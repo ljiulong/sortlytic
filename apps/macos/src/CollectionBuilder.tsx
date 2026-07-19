@@ -545,6 +545,9 @@ export function CollectionPlanPreview({
   const blockerId = useId()
   const localizedGenderFilterOptions = useMemo(() => getGenderFilterOptions(t), [t])
   const blocker = confirmationBlocker(plan, isBusy, t)
+  const pricingNotice = plan.pricingReady !== true && plan.pricingBlocker
+    ? localizePricingMessage(t, plan.pricingBlocker)
+    : undefined
   const isEnqueued = plan.status === '已排队' || plan.status === '运行中'
   const canConfirm = plan.status === '等待确认' && !blocker
   const showConfirmButton = plan.status === '等待确认' || plan.status === '待人工确认'
@@ -632,6 +635,11 @@ export function CollectionPlanPreview({
             <AlertTriangle size={15} aria-hidden="true" />
             {plan.taskId ? t('preview.blockerPrefix', { blocker }) : blocker}
           </p>
+        ) : pricingNotice && !isEnqueued ? (
+          <p className="collection-plan__blocker" data-blocking="false" id={blockerId} role="status">
+            <AlertTriangle size={15} aria-hidden="true" />
+            {t('preview.pricingNoticePrefix', { notice: pricingNotice })}
+          </p>
         ) : null}
       </div>
 
@@ -639,7 +647,7 @@ export function CollectionPlanPreview({
         <p>{isEnqueued ? t('preview.enqueuedFooter') : localizeActionMessage(t, actionMessage)}</p>
         {showConfirmButton ? (
           <button
-            aria-describedby={blocker ? blockerId : undefined}
+            aria-describedby={blocker || pricingNotice ? blockerId : undefined}
             className="primary-button"
             disabled={!canConfirm || isBusy}
             type="button"
@@ -777,9 +785,6 @@ function confirmationBlocker(
   if (!plan.taskId || !plan.planId) return t('blocker.unsaved')
   if (plan.validationStatus !== 'valid') {
     return localizePlanMessage(t, plan.missing[0]) || t('blocker.validationFailed')
-  }
-  if (plan.pricingReady !== true) {
-    return localizePricingMessage(t, plan.pricingBlocker) || t('blocker.pricingNotReady')
   }
   if (plan.status === '已排队' || plan.status === '运行中') return undefined
   if (plan.status !== '等待确认') {
