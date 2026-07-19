@@ -218,6 +218,44 @@ describe('TaskResultsPanel', () => {
 
     expect(mounted.container.textContent).toContain('性别：未采集到')
     expect(mounted.container.textContent).toContain('年龄：未采集到')
-    expect(mounted.container.textContent).not.toContain('任务未设置')
+    expect(mounted.container.textContent).not.toContain('性别：任务未设置')
+    expect(mounted.container.textContent).not.toContain('年龄：任务未设置')
+  })
+
+  it('以所选结果字段而不是筛选开关判定缺失语义', async () => {
+    listTaskResultsMock.mockResolvedValue({
+      task_id: 'task-1',
+      task_run_id: 'run-1',
+      run_status: 'success',
+      age_filter_configured: false,
+      gender_filter_configured: false,
+      selected_fields: ['gender', 'age'],
+      total_count: 1,
+      offset: 0,
+      limit: 50,
+      items: [{
+        id: 'account-selected-demographics',
+        platform: 'douyin',
+        username: '字段选择口径测试',
+        country_region: null,
+        gender: null,
+        age: null,
+        followers_count: null,
+        posts_count: null,
+        profile_text: null,
+        data_source: 'douyin.user_search',
+        collected_at: '2026-07-19T14:32:17Z',
+        account_fields_json: {},
+        field_evidence_json: {},
+      }],
+    })
+    const mounted = mountPanel()
+
+    await act(async () => Promise.resolve())
+
+    expect(mounted.container.textContent).toContain('性别：未采集到')
+    expect(mounted.container.textContent).toContain('年龄：未采集到')
+    const rowText = mounted.container.querySelector('tbody tr')?.textContent ?? ''
+    expect(rowText.match(/任务未设置/g)).toHaveLength(4)
   })
 })

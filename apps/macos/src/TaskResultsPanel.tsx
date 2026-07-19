@@ -54,8 +54,8 @@ function TaskResultsPanel({ taskId, taskName }: TaskResultsPanelProps) {
 
   const notConfigured = t('taskQueue.results.notConfigured')
   const notCollected = t('taskQueue.results.notCollected')
-  const formatNumber = (value?: number | null) => value == null
-    ? notCollected
+  const formatNumber = (value: number | null | undefined, missingValue: string) => value == null
+    ? missingValue
     : value.toLocaleString(numberLocale)
   const formatDate = (value: string) => {
     const date = new Date(value)
@@ -155,11 +155,15 @@ function TaskResultsPanel({ taskId, taskName }: TaskResultsPanelProps) {
               </thead>
               <tbody>
                 {state.page.items.map((item) => {
+                  const selectedFields = new Set(state.page.selected_fields)
+                  const missingValue = (field: string) => selectedFields.has(field)
+                    ? notCollected
+                    : notConfigured
                   const account = item.account?.trim()
                   const gender = item.gender?.trim()
-                    || (state.page.gender_filter_configured ? notCollected : notConfigured)
+                    || missingValue('gender')
                   const age = item.age == null
-                    ? (state.page.age_filter_configured ? notCollected : notConfigured)
+                    ? missingValue('age')
                     : item.age.toString()
                   const accountName = item.username?.trim() || account || notCollected
                   const detailsId = `task-result-details-${item.id.replace(/[^a-zA-Z0-9_-]/g, '-')}`
@@ -173,15 +177,19 @@ function TaskResultsPanel({ taskId, taskName }: TaskResultsPanelProps) {
                           {item.platform_user_id ? <small>{item.platform_user_id}</small> : null}
                         </td>
                         <td>{platformName(item.platform)}</td>
-                        <td>{item.country_region?.trim() || notCollected}</td>
+                        <td>{item.country_region?.trim() || missingValue('country_region')}</td>
                         <td>
                           <div>{t('taskQueue.results.genderLabel')}：{gender}</div>
                           <div>{t('taskQueue.results.ageLabel')}：{age}</div>
                         </td>
-                        <td className="task-results__number">{formatNumber(item.followers_count)}</td>
-                        <td className="task-results__number">{formatNumber(item.posts_count)}</td>
+                        <td className="task-results__number">
+                          {formatNumber(item.followers_count, missingValue('followers_count'))}
+                        </td>
+                        <td className="task-results__number">
+                          {formatNumber(item.posts_count, missingValue('posts_count'))}
+                        </td>
                         <td className="task-results__profile">
-                          {item.profile_text?.trim() || item.notes?.trim() || notCollected}
+                          {item.profile_text?.trim() || item.notes?.trim() || missingValue('bio')}
                         </td>
                         <td>
                           <time dateTime={item.collected_at}>{formatDate(item.collected_at)}</time>
