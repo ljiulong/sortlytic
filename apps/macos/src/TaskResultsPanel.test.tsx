@@ -52,6 +52,45 @@ describe('TaskResultsPanel', () => {
     expect(mounted.container.textContent).not.toContain('这次运行没有可展示的结果')
   })
 
+  it('英文界面本地化平台和性别契约值', async () => {
+    await appI18n.changeLanguage('en-US')
+    listTaskResultsMock.mockResolvedValue({
+      task_id: 'task-1',
+      task_run_id: 'run-1',
+      run_status: 'success',
+      age_filter_configured: false,
+      gender_filter_configured: false,
+      selected_fields: ['gender'],
+      total_count: 1,
+      offset: 0,
+      limit: 50,
+      items: [{
+        id: 'account-en',
+        platform: 'douyin',
+        username: 'Account',
+        account: 'account',
+        platform_user_id: 'user-en',
+        profile_text: null,
+        country_region: null,
+        gender: 'female',
+        age: null,
+        followers_count: null,
+        posts_count: null,
+        data_source: 'douyin.user_search',
+        collected_at: '2026-07-20T00:00:00Z',
+        account_fields_json: { gender: 'female' },
+        field_evidence_json: {},
+      }],
+    })
+
+    const mounted = mountPanel()
+    await act(async () => Promise.resolve())
+    expect(mounted.container.textContent).toContain('Douyin')
+    expect(mounted.container.textContent).toContain('Gender: Female')
+    expect(mounted.container.textContent).not.toContain('抖音')
+    expect(mounted.container.textContent).not.toContain('Gender: female')
+  })
+
   it('展示最新成功运行的真实账号数据', async () => {
     listTaskResultsMock.mockResolvedValue({
       task_id: 'task-1',

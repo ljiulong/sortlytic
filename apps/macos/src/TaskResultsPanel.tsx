@@ -70,6 +70,7 @@ function TaskResultsPanel({ taskId, taskName }: TaskResultsPanelProps) {
     if (Array.isArray(value)) {
       return value.length > 0 ? value.join(numberLocale.startsWith('zh') ? '、' : ', ') : notCollected
     }
+    if (typeof value === 'string' && key === 'gender') return genderName(value, t)
     if (typeof value === 'string' && key.endsWith('_at')) return formatDate(value)
     if (typeof value === 'object') return JSON.stringify(value)
     return String(value)
@@ -161,7 +162,8 @@ function TaskResultsPanel({ taskId, taskName }: TaskResultsPanelProps) {
                     : notConfigured
                   const account = item.account?.trim()
                   const gender = item.gender?.trim()
-                    || missingValue('gender')
+                    ? genderName(item.gender, t)
+                    : missingValue('gender')
                   const age = item.age == null
                     ? missingValue('age')
                     : item.age.toString()
@@ -176,11 +178,11 @@ function TaskResultsPanel({ taskId, taskName }: TaskResultsPanelProps) {
                           {account ? <span>@{account.replace(/^@/, '')}</span> : null}
                           {item.platform_user_id ? <small>{item.platform_user_id}</small> : null}
                         </td>
-                        <td>{platformName(item.platform)}</td>
+                        <td>{platformName(item.platform, t)}</td>
                         <td>{item.country_region?.trim() || missingValue('country_region')}</td>
                         <td>
-                          <div>{t('taskQueue.results.genderLabel')}：{gender}</div>
-                          <div>{t('taskQueue.results.ageLabel')}：{age}</div>
+                          <div>{t('taskQueue.results.genderLabel')}{t('taskQueue.results.labelSeparator')}{gender}</div>
+                          <div>{t('taskQueue.results.ageLabel')}{t('taskQueue.results.labelSeparator')}{age}</div>
                         </td>
                         <td className="task-results__number">
                           {formatNumber(item.followers_count, missingValue('followers_count'))}
@@ -336,11 +338,16 @@ function notAvailable(t: TFunction<'tasks'>) {
   return t('taskQueue.results.notCollected')
 }
 
-function platformName(platform: string) {
-  if (platform === 'tiktok') return 'TikTok'
-  if (platform === 'douyin') return '抖音'
-  if (platform === 'xiaohongshu') return '小红书'
-  return platform
+function platformName(platform: string, t: TFunction<'tasks'>) {
+  return ['tiktok', 'douyin', 'xiaohongshu'].includes(platform)
+    ? String(t(`taskQueue.results.platform.${platform}`))
+    : platform
+}
+
+function genderName(gender: string, t: TFunction<'tasks'>) {
+  return ['female', 'male', 'other'].includes(gender)
+    ? String(t(`taskQueue.results.gender.${gender}`))
+    : gender
 }
 
 export default TaskResultsPanel
