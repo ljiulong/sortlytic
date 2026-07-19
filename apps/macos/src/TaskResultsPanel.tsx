@@ -7,46 +7,10 @@ import {
   type TaskResultRecordView,
   type TaskResultsPageView,
 } from './backend-api'
+import { accountFieldGroups, catalogAccountFields } from './account-field-groups'
 import './TaskResultsPanel.css'
 
 const pageSize = 50
-const accountFieldGroups = [
-  {
-    key: 'profile',
-    fields: [
-      'secure_user_id', 'avatar_url', 'profile_url', 'bio', 'website_url',
-      'verification_status', 'verification_reason', 'account_type', 'private_account',
-      'language', 'country_region', 'profile_tags',
-    ],
-  },
-  { key: 'demographics', fields: ['gender', 'age'] },
-  {
-    key: 'statistics',
-    fields: [
-      'followers_count', 'following_count', 'friends_count', 'posts_count',
-      'likes_received_count', 'liked_content_count',
-    ],
-  },
-  {
-    key: 'activity',
-    fields: [
-      'account_created_at', 'last_posted_at', 'live_status', 'live_room_id',
-      'username_modified_at', 'nickname_modified_at',
-    ],
-  },
-  {
-    key: 'platform_specific',
-    fields: [
-      'commerce_status', 'commerce_category', 'seller_status', 'organization_status',
-      'comments_permission', 'duet_permission', 'stitch_permission', 'download_permission',
-      'favorites_visibility', 'following_visibility', 'playlist_visibility', 'live_level',
-      'live_badge',
-    ],
-  },
-] as const
-const catalogFields: ReadonlySet<string> = new Set(
-  accountFieldGroups.flatMap((group) => group.fields),
-)
 
 type ResultsState =
   | { status: 'loading' }
@@ -308,7 +272,7 @@ function AccountFieldDetails({
   const groups = accountFieldGroups.map((group, index) => ({
     key: group.key,
     fields: fields.filter((field) => group.fields.some((candidate) => candidate === field)
-      || (index === accountFieldGroups.length - 1 && !catalogFields.has(field))),
+      || (index === accountFieldGroups.length - 1 && !catalogAccountFields.has(field))),
   })).filter((group) => group.fields.length > 0)
 
   return (
