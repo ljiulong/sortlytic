@@ -58,17 +58,28 @@ pub fn build_report_model(
   report_type: &str,
 ) -> AppResult<ReportView> {
   let connection = open_workspace_connection(&root_path)?;
+  let report_type = normalize_export_type(report_type, &["summary", "analysis"])?;
   let task = task_summary(&connection, task_id)?;
   let ai_runs = ai_run_summaries(&connection, task_id)?;
   let logs = task_log_summaries(&connection, task_id)?;
+  let analysis = if report_type == "analysis" {
+    task_analysis(&connection, task_id)?
+  } else {
+    Value::Null
+  };
   let now = Utc::now().to_rfc3339();
   let report_id = Uuid::new_v4().to_string();
-  let report_type = normalize_export_type(report_type, &["summary", "analysis"])?;
-  let title = format!("{} 报告", task["name"].as_str().unwrap_or("任务"));
+  let task_name = task["name"].as_str().unwrap_or("任务");
+  let title = if report_type == "analysis" {
+    format!("{task_name} 数据分析报告")
+  } else {
+    format!("{task_name} 数据导出")
+  };
   let report_model = serde_json::json!({
     "title": title,
     "generated_at": now,
     "task": task,
+    "analysis": analysis,
     "ai_runs": ai_runs,
     "logs": logs,
     "data_source_statement": "仅包含本地工作区内已记录的任务、AI 运行和日志摘要。",
@@ -117,8 +128,20 @@ pub fn validate_export_integrity(
   {
     errors.push("报告模型疑似包含敏感密钥信息".to_string());
   }
-  if export_type == "pdf" && report.title.trim().is_empty() {
-    errors.push("PDF 报告缺少标题".to_string());
+  if export_type == "pdf" {
+    if report.report_type != "analysis" {
+      errors.push("PDF 只能导出数据分析报告，原始结果明细请使用 Excel".to_string());
+    }
+    if report.title.trim().is_empty() {
+      errors.push("PDF 报告缺少标题".to_string());
+    }
+    if report.report_model_json["analysis"]["sample_size"]
+      .as_i64()
+      .unwrap_or(0)
+      <= 0
+    {
+      errors.push("没有可分析的结果数据，无法生成 PDF 数据分析报告".to_string());
+    }
   }
 
   Ok(ExportIntegrityResult {
@@ -414,6 +437,211 @@ fn task_summary(connection: &Connection, task_id: &str) -> AppResult<Value> {
     .optional()
     .map_err(database_error)?
     .ok_or_else(|| export_error("任务不存在，无法生成报告"))
+}
+
+fn task_analysis(connection: &Connection, task_id: &str) -> AppResult<Value> {
+  let run = connection
+    .query_row(
+      "SELECT id, status, started_at, ended_at
+       FROM task_run
+       WHERE task_id = ?1 AND status IN ('success', 'partial_success')
+       ORDER BY COALESCE(ended_at, started_at) DESC, id DESC
+       LIMIT 1",
+      params![task_id],
+      |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, String>(1)?,
+          row.get::<_, String>(2)?,
+          row.get::<_, Option<String>>(3)?,
+        ))
+      },
+    )
+    .optional()
+    .map_err(database_error)?;
+  let Some((run_id, run_status, started_at, ended_at)) = run else {
+    return Ok(serde_json::json!({
+      "task_run_id": null,
+      "run_status": null,
+      "started_at": null,
+      "ended_at": null,
+      "sample_size": 0,
+      "platform_breakdown": {},
+      "region_breakdown": {},
+      "data_source_breakdown": {},
+      "field_completeness": {},
+      "followers_summary": numeric_summary_json(0, None, None, None),
+      "posts_summary": numeric_summary_json(0, None, None, None),
+      "findings": [],
+      "limitations": ["当前任务没有成功或部分成功的运行，无法生成数据分析结论。"]
+    }));
+  };
+  let sample_size = connection
+    .query_row(
+      "SELECT COUNT(*) FROM collected_account
+       WHERE task_run_id = ?1 AND output_included = 1",
+      params![run_id],
+      |row| row.get::<_, i64>(0),
+    )
+    .map_err(database_error)?;
+  let platform_breakdown = count_breakdown(
+    connection,
+    "SELECT platform, COUNT(*) FROM collected_account
+     WHERE task_run_id = ?1 AND output_included = 1
+     GROUP BY platform ORDER BY COUNT(*) DESC, platform",
+    &run_id,
+  )?;
+  let region_breakdown = count_breakdown(
+    connection,
+    "SELECT COALESCE(NULLIF(TRIM(country_region), ''), '未采集到'), COUNT(*)
+     FROM collected_account
+     WHERE task_run_id = ?1 AND output_included = 1
+     GROUP BY COALESCE(NULLIF(TRIM(country_region), ''), '未采集到')
+     ORDER BY COUNT(*) DESC, COALESCE(NULLIF(TRIM(country_region), ''), '未采集到')",
+    &run_id,
+  )?;
+  let data_source_breakdown = count_breakdown(
+    connection,
+    "SELECT COALESCE(NULLIF(TRIM(data_source), ''), '未采集到'), COUNT(*)
+     FROM collected_account
+     WHERE task_run_id = ?1 AND output_included = 1
+     GROUP BY COALESCE(NULLIF(TRIM(data_source), ''), '未采集到')
+     ORDER BY COUNT(*) DESC, COALESCE(NULLIF(TRIM(data_source), ''), '未采集到')",
+    &run_id,
+  )?;
+  let completeness = connection
+    .query_row(
+      "SELECT
+         COALESCE(SUM(CASE WHEN NULLIF(TRIM(country_region), '') IS NOT NULL THEN 1 ELSE 0 END), 0),
+         COALESCE(SUM(CASE WHEN NULLIF(TRIM(gender), '') IS NOT NULL THEN 1 ELSE 0 END), 0),
+         COALESCE(SUM(CASE WHEN age IS NOT NULL THEN 1 ELSE 0 END), 0),
+         COALESCE(SUM(CASE WHEN followers_count IS NOT NULL THEN 1 ELSE 0 END), 0),
+         COALESCE(SUM(CASE WHEN posts_count IS NOT NULL THEN 1 ELSE 0 END), 0)
+       FROM collected_account
+       WHERE task_run_id = ?1 AND output_included = 1",
+      params![run_id],
+      |row| {
+        Ok(serde_json::json!({
+          "country_region": row.get::<_, i64>(0)?,
+          "gender": row.get::<_, i64>(1)?,
+          "age": row.get::<_, i64>(2)?,
+          "followers_count": row.get::<_, i64>(3)?,
+          "posts_count": row.get::<_, i64>(4)?
+        }))
+      },
+    )
+    .map_err(database_error)?;
+  let followers_summary = numeric_summary(connection, &run_id, "followers_count")?;
+  let posts_summary = numeric_summary(connection, &run_id, "posts_count")?;
+  let known_regions = completeness["country_region"].as_i64().unwrap_or(0);
+  let followers_known = completeness["followers_count"].as_i64().unwrap_or(0);
+  let posts_known = completeness["posts_count"].as_i64().unwrap_or(0);
+  let top_platform = top_breakdown(&platform_breakdown).unwrap_or(("未采集到", 0));
+  let findings = if sample_size == 0 {
+    Vec::new()
+  } else {
+    vec![
+      serde_json::json!({
+        "kind": "sample",
+        "text": format!("本次分析包含 {sample_size} 条已落库结果，主要平台为 {}（{} 条）。", top_platform.0, top_platform.1),
+        "evidence": {"task_run_id": run_id, "record_count": sample_size}
+      }),
+      serde_json::json!({
+        "kind": "region_coverage",
+        "text": format!("国家/地区字段已采集 {known_regions} 条，完整率 {:.1}%。", percentage(known_regions, sample_size)),
+        "evidence": {"task_run_id": run_id, "known_count": known_regions, "record_count": sample_size}
+      }),
+      serde_json::json!({
+        "kind": "numeric_coverage",
+        "text": format!("粉丝数字段完整率 {:.1}%，作品数字段完整率 {:.1}%。", percentage(followers_known, sample_size), percentage(posts_known, sample_size)),
+        "evidence": {"task_run_id": run_id, "followers_known": followers_known, "posts_known": posts_known, "record_count": sample_size}
+      }),
+    ]
+  };
+
+  Ok(serde_json::json!({
+    "task_run_id": run_id,
+    "run_status": run_status,
+    "started_at": started_at,
+    "ended_at": ended_at,
+    "sample_size": sample_size,
+    "platform_breakdown": platform_breakdown,
+    "region_breakdown": region_breakdown,
+    "data_source_breakdown": data_source_breakdown,
+    "field_completeness": completeness,
+    "followers_summary": followers_summary,
+    "posts_summary": posts_summary,
+    "findings": findings,
+    "limitations": [
+      "仅统计任务最新一次成功或部分成功运行中明确进入输出集合的落库记录。",
+      "年龄、性别和地区只使用接口或公开资料明确返回的值，缺失字段不做推断。",
+      "本报告反映本次任务目标与时间窗口内的样本，不代表对应平台的总体分布。"
+    ]
+  }))
+}
+
+fn count_breakdown(connection: &Connection, sql: &str, run_id: &str) -> AppResult<Value> {
+  let mut statement = connection.prepare(sql).map_err(database_error)?;
+  let rows = statement
+    .query_map(params![run_id], |row| {
+      Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+    })
+    .map_err(database_error)?;
+  let mut counts = serde_json::Map::new();
+  for row in rows {
+    let (label, count) = row.map_err(database_error)?;
+    counts.insert(label, Value::from(count));
+  }
+  Ok(Value::Object(counts))
+}
+
+fn numeric_summary(connection: &Connection, run_id: &str, field: &str) -> AppResult<Value> {
+  let sql = format!(
+    "SELECT COUNT({field}), MIN({field}), MAX({field}), AVG({field})
+     FROM collected_account WHERE task_run_id = ?1 AND output_included = 1"
+  );
+  connection
+    .query_row(&sql, params![run_id], |row| {
+      Ok(numeric_summary_json(
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+      ))
+    })
+    .map_err(database_error)
+}
+
+fn numeric_summary_json(
+  available_count: i64,
+  minimum: Option<i64>,
+  maximum: Option<i64>,
+  average: Option<f64>,
+) -> Value {
+  serde_json::json!({
+    "available_count": available_count,
+    "minimum": minimum,
+    "maximum": maximum,
+    "average": average.map(|value| (value * 10.0).round() / 10.0)
+  })
+}
+
+fn top_breakdown(value: &Value) -> Option<(&str, i64)> {
+  value.as_object()?.iter().fold(None, |top, (label, count)| {
+    let count = count.as_i64().unwrap_or(0);
+    match top {
+      Some((_, top_count)) if top_count >= count => top,
+      _ => Some((label.as_str(), count)),
+    }
+  })
+}
+
+fn percentage(count: i64, total: i64) -> f64 {
+  if total == 0 {
+    0.0
+  } else {
+    count as f64 * 100.0 / total as f64
+  }
 }
 
 fn ai_run_summaries(connection: &Connection, task_id: &str) -> AppResult<Value> {

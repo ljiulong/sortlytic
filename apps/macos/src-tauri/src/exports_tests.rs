@@ -4,7 +4,7 @@ use crate::workspace::create_workspace;
 use std::process::Command;
 
 #[test]
-fn report_exports_xlsx_and_pdf_files() {
+fn report_exports_xlsx_file() {
   let root_path = unique_temp_workspace("exports");
   create_workspace("导出测试", &root_path).expect("workspace should be created");
   let task = create_collection_task(
@@ -30,23 +30,12 @@ fn report_exports_xlsx_and_pdf_files() {
     }
   }
   let xlsx = create_export_job(&root_path, &report.id, "xlsx", None).expect("xlsx exported");
-  let pdf = create_export_job(&root_path, &report.id, "pdf", None).expect("pdf exported");
 
   assert_eq!(xlsx.status, "success");
-  assert_eq!(pdf.status, "success");
   let xlsx_path = xlsx.file_path.expect("xlsx path");
   assert!(xlsx_path.is_file());
   assert_template_workbook_structure(&xlsx_path, 204);
-  let pdf_path = pdf.file_path.expect("pdf path");
-  assert!(pdf_path.is_file());
-  let pdf_bytes = fs::read(pdf_path).expect("pdf should be readable");
-  assert_pdf_xref_is_well_formed(&pdf_bytes);
-  let pdf_text = std::str::from_utf8(&pdf_bytes).expect("pdf fixture should be UTF-8");
-  assert!(pdf_text.contains(&pdf_hex_text("导出任务 报告")));
-  assert!(!pdf_text.contains("See XLSX export for full structured data."));
-  assert!(!pdf_text.contains("Smart Data Workbench"));
   assert!(xlsx.file_hash.is_some());
-  assert!(pdf.file_size.unwrap_or_default() > 0);
 
   std::fs::remove_dir_all(root_path).ok();
 }
@@ -74,7 +63,9 @@ fn pdf_export_contains_persisted_result_accounts_instead_of_a_placeholder() {
     )
     .expect("account should insert");
 
-  let job = create_export_job(&root_path, &report.id, "pdf", None).expect("pdf should export");
+  let analysis = build_report_model(&root_path, &report.task_id, "analysis")
+    .expect("analysis report should build");
+  let job = create_export_job(&root_path, &analysis.id, "pdf", None).expect("pdf should export");
   let bytes = fs::read(job.file_path.expect("pdf path")).expect("pdf should be readable");
   let text = std::str::from_utf8(&bytes).expect("generated PDF should be ASCII-safe");
 
@@ -83,6 +74,109 @@ fn pdf_export_contains_persisted_result_accounts_instead_of_a_placeholder() {
   assert!(text.contains(&pdf_hex_text("作品数：0")));
   assert!(!text.contains("See XLSX export for full structured data."));
   assert_pdf_xref_is_well_formed(&bytes);
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn analysis_report_model_aggregates_latest_results_without_copying_raw_profiles() {
+  let (root_path, summary_report) = test_report("analysis-model");
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  for (run_id, ended_at) in [
+    ("analysis-old-run", "2026-07-18T14:32:17+00:00"),
+    ("analysis-latest-run", "2026-07-19T14:32:17+00:00"),
+  ] {
+    connection
+      .execute(
+        "INSERT INTO task_run (id, task_id, status, started_at, ended_at, current_stage)
+         VALUES (?1, ?2, 'success', ?3, ?3, '已完成')",
+        params![run_id, summary_report.task_id, ended_at],
+      )
+      .expect("run should insert");
+  }
+  connection
+    .execute(
+      "INSERT INTO collected_account (
+         id, task_run_id, platform, identity_key, username, profile_text, country_region,
+         followers_count, posts_count, data_source, collected_at, output_included,
+         created_at, updated_at
+       ) VALUES ('analysis-old-account', 'analysis-old-run', 'douyin', 'id:old', '旧运行账号',
+         '旧运行不应进入统计', 'CN', 999999, 999, 'TikHub API', ?1, 1, ?1, ?1)",
+      params!["2026-07-18T14:32:17+00:00"],
+    )
+    .expect("old account should insert");
+  for (id, region, followers, posts) in [
+    ("analysis-account-1", Some("US"), Some(120_i64), Some(0_i64)),
+    ("analysis-account-2", None, None, Some(8_i64)),
+  ] {
+    connection
+      .execute(
+        "INSERT INTO collected_account (
+           id, task_run_id, platform, identity_key, username, profile_text, country_region,
+           followers_count, posts_count, data_source, collected_at, output_included,
+           created_at, updated_at
+         ) VALUES (?1, 'analysis-latest-run', 'tiktok', ?2, ?1,
+           '不应进入分析报告模型的原始长简介', ?3, ?4, ?5, 'TikHub API', ?6, 1, ?6, ?6)",
+        params![
+          id,
+          format!("id:{id}"),
+          region,
+          followers,
+          posts,
+          "2026-07-19T14:32:17+00:00"
+        ],
+      )
+      .expect("latest account should insert");
+  }
+
+  let report = build_report_model(&root_path, &summary_report.task_id, "analysis")
+    .expect("analysis report should build");
+  let analysis = report
+    .report_model_json
+    .get("analysis")
+    .expect("analysis model should exist");
+
+  assert_eq!(report.title, "导出任务 数据分析报告");
+  assert_eq!(analysis["task_run_id"], "analysis-latest-run");
+  assert_eq!(analysis["sample_size"], 2);
+  assert_eq!(analysis["platform_breakdown"]["tiktok"], 2);
+  assert_eq!(analysis["region_breakdown"]["US"], 1);
+  assert_eq!(analysis["region_breakdown"]["未采集到"], 1);
+  assert_eq!(analysis["field_completeness"]["followers_count"], 1);
+  assert_eq!(analysis["field_completeness"]["posts_count"], 2);
+  assert_eq!(analysis["followers_summary"]["minimum"], 120);
+  assert_eq!(analysis["followers_summary"]["maximum"], 120);
+  assert!(analysis["findings"]
+    .as_array()
+    .is_some_and(|items| !items.is_empty()));
+  assert!(analysis["limitations"]
+    .as_array()
+    .is_some_and(|items| !items.is_empty()));
+  assert!(!report
+    .report_model_json
+    .to_string()
+    .contains("不应进入分析报告模型的原始长简介"));
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn pdf_export_rejects_summary_models_and_empty_analysis() {
+  let (root_path, summary_report) = test_report("pdf-analysis-gate");
+
+  let summary_result = create_export_job(&root_path, &summary_report.id, "pdf", None);
+  let empty_analysis = build_report_model(&root_path, &summary_report.task_id, "analysis")
+    .expect("empty analysis model should build for review");
+  let empty_result = create_export_job(&root_path, &empty_analysis.id, "pdf", None);
+
+  assert!(summary_result
+    .expect_err("summary PDF should be rejected")
+    .message
+    .contains("PDF 只能导出数据分析报告"));
+  assert!(empty_result
+    .expect_err("empty analysis PDF should be rejected")
+    .message
+    .contains("没有可分析的结果数据"));
 
   std::fs::remove_dir_all(root_path).ok();
 }
@@ -138,7 +232,7 @@ fn custom_export_target_must_be_new_and_match_the_export_type() {
 #[cfg(unix)]
 #[test]
 fn failed_export_returns_an_error_instead_of_a_successful_job_view() {
-  let (root_path, report) = test_report("failed-export");
+  let (root_path, report) = test_analysis_report("failed-export");
   let target_dir = root_path.join("read-only-export");
   fs::create_dir(&target_dir).expect("target directory should exist");
   fs::set_permissions(&target_dir, fs::Permissions::from_mode(0o500))
@@ -221,6 +315,39 @@ fn test_report(label: &str) -> (std::path::PathBuf, ReportView) {
   )
   .expect("task should be created");
   let report = build_report_model(&root_path, &task.id, "summary").expect("report built");
+  (root_path, report)
+}
+
+fn test_analysis_report(label: &str) -> (std::path::PathBuf, ReportView) {
+  let (root_path, summary_report) = test_report(label);
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  connection
+    .execute(
+      "INSERT INTO task_run (id, task_id, status, started_at, ended_at, current_stage)
+       VALUES (?1, ?2, 'success', ?3, ?3, '已完成')",
+      params![
+        format!("{label}-run"),
+        summary_report.task_id,
+        "2026-07-19T14:32:17+00:00"
+      ],
+    )
+    .expect("run should insert");
+  connection
+    .execute(
+      "INSERT INTO collected_account (
+         id, task_run_id, platform, identity_key, username, data_source, collected_at,
+         output_included, created_at, updated_at
+       ) VALUES (?1, ?2, 'tiktok', ?3, '分析样本', 'TikHub API', ?4, 1, ?4, ?4)",
+      params![
+        format!("{label}-account"),
+        format!("{label}-run"),
+        format!("id:{label}"),
+        "2026-07-19T14:32:17+00:00"
+      ],
+    )
+    .expect("account should insert");
+  let report = build_report_model(&root_path, &summary_report.task_id, "analysis")
+    .expect("analysis report should build");
   (root_path, report)
 }
 
