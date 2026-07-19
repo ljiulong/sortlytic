@@ -3,6 +3,7 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use chrono::{TimeZone, Utc};
+use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -68,6 +69,39 @@ pub struct TaskRecordCountView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TaskResultRecordView {
+  pub id: String,
+  pub platform: String,
+  pub username: Option<String>,
+  pub account: Option<String>,
+  pub platform_user_id: Option<String>,
+  pub profile_text: Option<String>,
+  pub country_region: Option<String>,
+  pub region_source: Option<String>,
+  pub region_confidence: Option<String>,
+  pub gender: Option<String>,
+  pub age: Option<i64>,
+  pub followers_count: Option<i64>,
+  pub posts_count: Option<i64>,
+  pub last_posted_at: Option<String>,
+  pub profile_url: Option<String>,
+  pub data_source: String,
+  pub collected_at: String,
+  pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TaskResultsPageView {
+  pub task_id: String,
+  pub task_run_id: String,
+  pub run_status: String,
+  pub total_count: i64,
+  pub offset: i64,
+  pub limit: i64,
+  pub items: Vec<TaskResultRecordView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PersistCollectionPageResult {
   pub inserted_count: usize,
   pub existing_count: usize,
@@ -115,6 +149,93 @@ pub fn list_task_record_counts(root_path: impl AsRef<Path>) -> AppResult<Vec<Tas
   rows
     .collect::<rusqlite::Result<Vec<_>>>()
     .map_err(database_error)
+}
+
+pub fn list_task_results(
+  root_path: impl AsRef<Path>,
+  task_id: &str,
+  limit: i64,
+  offset: i64,
+) -> AppResult<TaskResultsPageView> {
+  let task_id = required_text("task_id", task_id, 512)?;
+  if !(1..=200).contains(&limit) {
+    return Err(validation_error("limit 必须在 1 到 200 之间"));
+  }
+  if offset < 0 {
+    return Err(validation_error("offset 不能小于 0"));
+  }
+
+  let connection = open_workspace_database(root_path.as_ref().join(DATABASE_FILE_NAME))?;
+  let latest_run = connection
+    .query_row(
+      "SELECT run.id, run.status
+       FROM task_run AS run
+       WHERE run.task_id = ?1 AND run.status IN ('success', 'partial_success')
+       ORDER BY COALESCE(run.ended_at, run.started_at) DESC, run.id DESC
+       LIMIT 1",
+      params![task_id],
+      |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    )
+    .optional()
+    .map_err(database_error)?
+    .ok_or_else(|| validation_error("任务没有可查看的成功运行"))?;
+  let total_count = connection
+    .query_row(
+      "SELECT COUNT(*) FROM collected_account
+       WHERE task_run_id = ?1 AND output_included = 1",
+      params![latest_run.0],
+      |row| row.get::<_, i64>(0),
+    )
+    .map_err(database_error)?;
+  let mut statement = connection
+    .prepare(
+      "SELECT id, platform, username, account, platform_user_id, profile_text,
+              country_region, region_source, region_confidence, gender, age,
+              followers_count, posts_count, last_posted_at, profile_url,
+              data_source, collected_at, notes
+       FROM collected_account
+       WHERE task_run_id = ?1 AND output_included = 1
+       ORDER BY created_at, id
+       LIMIT ?2 OFFSET ?3",
+    )
+    .map_err(database_error)?;
+  let rows = statement
+    .query_map(params![latest_run.0, limit, offset], |row| {
+      Ok(TaskResultRecordView {
+        id: row.get(0)?,
+        platform: row.get(1)?,
+        username: row.get(2)?,
+        account: row.get(3)?,
+        platform_user_id: row.get(4)?,
+        profile_text: row.get(5)?,
+        country_region: row.get(6)?,
+        region_source: row.get(7)?,
+        region_confidence: row.get(8)?,
+        gender: row.get(9)?,
+        age: row.get(10)?,
+        followers_count: row.get(11)?,
+        posts_count: row.get(12)?,
+        last_posted_at: row.get(13)?,
+        profile_url: row.get(14)?,
+        data_source: row.get(15)?,
+        collected_at: row.get(16)?,
+        notes: row.get(17)?,
+      })
+    })
+    .map_err(database_error)?;
+  let items = rows
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .map_err(database_error)?;
+
+  Ok(TaskResultsPageView {
+    task_id,
+    task_run_id: latest_run.0,
+    run_status: latest_run.1,
+    total_count,
+    offset,
+    limit,
+    items,
+  })
 }
 
 #[derive(Debug)]
