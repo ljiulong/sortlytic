@@ -153,7 +153,7 @@ The form supports TikTok, Douyin, and Xiaohongshu. Select one or more output typ
 | Age | Optional closed range from 0 to 130. Sortlytic accepts only an explicit age returned by TikHub or public profile data. Unknown or malformed ages are excluded while this filter is active. |
 | Gender | Optional multi-select filter. Sortlytic accepts only an explicit gender returned by TikHub or public profile data and never infers it from a name, avatar, biography, or content. |
 
-A single task accepts 10–5,000 qualified, deduplicated account rows and a budget value from 1–500. Accounts are deduplicated by platform and stable platform user ID, with normalized account identity as the fallback.
+A single task accepts 10–5,000 qualified, deduplicated account rows and a budget value from 0.1–500. Accounts are deduplicated by platform and stable platform user ID, with normalized account identity as the fallback.
 
 After selecting **Generate Plan** or **Parse into Plan**:
 
