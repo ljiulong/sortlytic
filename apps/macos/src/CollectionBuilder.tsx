@@ -433,6 +433,7 @@ export function CollectionBuilder({
 
       {activePlan ? (
         <CollectionPlanPreview
+          accountCapability={capabilityReady ? accountCapability : undefined}
           actionMessage={actionMessage}
           isBusy={isBusy}
           onConfirmPlan={onConfirmPlan}
@@ -509,11 +510,13 @@ function FormError({ id, message }: { id: string; message?: string }) {
 }
 
 export function CollectionPlanPreview({
+  accountCapability,
   actionMessage,
   isBusy,
   onConfirmPlan,
   plan,
 }: {
+  accountCapability?: AccountCollectionCapabilityView
   actionMessage: string
   isBusy: boolean
   onConfirmPlan: () => Promise<unknown>
@@ -561,11 +564,22 @@ export function CollectionPlanPreview({
     : undefined
   const selectedFieldCount = plan.selectedFields?.length ?? 0
   const selectedFieldSet = new Set(plan.selectedFields ?? [])
-  const enrichmentGroups = (plan.pricingEndpoints?.length ?? 0) > 1
+  const sourceAwareEnrichmentGroups = accountCapability && plan.accountSource
+    ? new Set(accountCapability.fields
+      .filter((field) => selectedFieldSet.has(field.key)
+        && field.required_operation_keys.length > 0
+        && !field.covered_by_source_keys?.includes(plan.accountSource ?? ''))
+      .map((field) => field.group))
+    : undefined
+  const enrichmentGroups = sourceAwareEnrichmentGroups
     ? accountFieldGroups
-      .filter((group) => group.fields.some((field) => selectedFieldSet.has(field)))
+      .filter((group) => sourceAwareEnrichmentGroups.has(group.key))
       .map((group) => t(`accountFieldGroups.${group.key}`))
-    : []
+    : (plan.pricingEndpoints?.length ?? 0) > 1
+      ? accountFieldGroups
+        .filter((group) => group.fields.some((field) => selectedFieldSet.has(field)))
+        .map((group) => t(`accountFieldGroups.${group.key}`))
+      : []
 
   return (
     <section className="collection-plan" aria-labelledby="collection-plan-heading">

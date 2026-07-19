@@ -31,6 +31,7 @@ import {
   supportsRegionSelection,
 } from './collection-options'
 import { i18n } from './i18n'
+import type { AccountCollectionCapabilityView } from './backend-api'
 import type { RuntimeCollectionPlan } from './use-workbench-backend'
 
 const draftPlan: RuntimeCollectionPlan = {
@@ -43,6 +44,36 @@ const draftPlan: RuntimeCollectionPlan = {
   budget: 35,
   status: '等待确认',
   missing: [],
+}
+
+const sourceAwareAccountCapability: AccountCollectionCapabilityView = {
+  catalog_version: 1,
+  platform: 'douyin',
+  display_name: '抖音',
+  account_sources: [],
+  field_groups: [],
+  fields: [
+    {
+      key: 'bio', group: 'profile', display_name: '简介', description: '',
+      value_type: 'text', availability: 'enrichment', default_selected: true,
+      required_operation_keys: ['enrich.profile'], covered_by_source_keys: ['user_search'],
+    },
+    {
+      key: 'age', group: 'demographics', display_name: '年龄', description: '',
+      value_type: 'integer', availability: 'enrichment', default_selected: false,
+      required_operation_keys: ['enrich.extended_demographics'], covered_by_source_keys: [],
+    },
+    {
+      key: 'followers_count', group: 'statistics', display_name: '粉丝数', description: '',
+      value_type: 'integer', availability: 'enrichment', default_selected: true,
+      required_operation_keys: ['enrich.profile'], covered_by_source_keys: ['user_search'],
+    },
+    {
+      key: 'last_posted_at', group: 'activity', display_name: '最近发文', description: '',
+      value_type: 'timestamp', availability: 'enrichment', default_selected: true,
+      required_operation_keys: ['enrich.account_posts'], covered_by_source_keys: [],
+    },
+  ],
 }
 
 type MountedBuilder = {
@@ -152,6 +183,7 @@ describe('CollectionPlanPreview', () => {
     const markup = renderToStaticMarkup(
       createElement(CollectionPlanPreview, {
         actionMessage: '等待确认',
+        accountCapability: sourceAwareAccountCapability,
         isBusy: false,
         onConfirmPlan: vi.fn(),
         plan: draftPlan,
@@ -165,6 +197,7 @@ describe('CollectionPlanPreview', () => {
     const markup = renderToStaticMarkup(
       createElement(CollectionPlanPreview, {
         actionMessage: '等待确认',
+        accountCapability: sourceAwareAccountCapability,
         isBusy: false,
         onConfirmPlan: vi.fn(),
         plan: draftPlan,
@@ -306,6 +339,7 @@ describe('CollectionPlanPreview', () => {
     const markup = renderToStaticMarkup(
       createElement(CollectionPlanPreview, {
         actionMessage: '等待确认',
+        accountCapability: sourceAwareAccountCapability,
         isBusy: false,
         onConfirmPlan: vi.fn(),
         plan: {
@@ -324,7 +358,8 @@ describe('CollectionPlanPreview', () => {
       }),
     )
 
-    expect(markup).toContain('补全字段分类：账号资料、人口属性、账号统计、账号活跃')
+    expect(markup).toContain('补全字段分类：人口属性、账号活跃')
+    expect(markup).not.toContain('补全字段分类：账号资料')
     expect(markup).toContain('账号来源')
     expect(markup).toContain('搜索用户')
     expect(markup).toContain('4 个扩展字段')
