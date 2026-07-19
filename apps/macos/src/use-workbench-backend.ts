@@ -93,6 +93,8 @@ export type RuntimeCollectionPlan = Omit<CollectionFormPayload, 'dataTypes'> & {
   costEstimate?: string
   pricingEndpoints?: string[]
   requestCountEstimate?: number
+  discoveryRequestCount?: number
+  enrichmentRequestCount?: number
   budgetMicros?: number
   pricingReady?: boolean
   pricingBlocker?: string
@@ -518,6 +520,13 @@ export function planFromBackend(values: CollectionFormPayload, plan: CollectionP
   const recordLimit = positiveNumber(plan.plan_json.record_limit)
   const budgetMicros = amountMicros(plan.plan_json.budget_limit)
   const requestCountEstimate = numberFromJson(plan.cost_estimate_json)
+  const selectedFields = stringArrayFromJson(plan.plan_json.selected_fields)
+  const discoveryRequestCount = nonNegativeNumber(
+    plan.cost_estimate_json.discovery_request_count,
+  )
+  const enrichmentRequestCount = nonNegativeNumber(
+    plan.cost_estimate_json.enrichment_request_count,
+  )
   const useSubmittedLimits = plan.source === 'form_generated'
   const genders = stringArrayFromJson(plan.plan_json.gender_filter).filter(
     (value): value is 'male' | 'female' | 'other' => ['male', 'female', 'other'].includes(value),
@@ -530,6 +539,10 @@ export function planFromBackend(values: CollectionFormPayload, plan: CollectionP
     dataTypes,
     platform: platforms[0] ?? values.platform,
     dataType: dataTypes[0] ?? values.dataType,
+    accountSource: accountSourceFromPlan(plan.plan_json.account_source) ?? values.accountSource,
+    selectedFields: Array.isArray(plan.plan_json.selected_fields)
+      ? selectedFields
+      : values.selectedFields,
     regionCode: regionFromPlan(plan.plan_json.region),
     keyword: targetFromPlan(plan.plan_json) || '未提供采集对象',
     range: nonEmptyString(plan.plan_json.time_range) ?? '未提供时间范围',
@@ -545,6 +558,8 @@ export function planFromBackend(values: CollectionFormPayload, plan: CollectionP
     costEstimate: `${requestCountEstimate} 次请求`,
     pricingEndpoints: pricingEndpointsForPlan(plan.plan_json),
     requestCountEstimate,
+    discoveryRequestCount,
+    enrichmentRequestCount,
     budgetMicros,
     pricingReady: false,
   }
@@ -594,6 +609,26 @@ function toBackendDataType(dataType: DataType) {
 
 function positiveNumber(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined
+}
+
+function nonNegativeNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
+function accountSourceFromPlan(value: unknown): AccountSourceKey | undefined {
+  const source = nonEmptyString(value)
+  if (!source) return undefined
+  if ([
+    'user_search',
+    'content_search_authors',
+    'direct_account',
+    'item_author',
+    'comment_authors',
+    'followers',
+    'followings',
+    'similar_accounts',
+  ].includes(source)) return source as AccountSourceKey
+  return undefined
 }
 
 function amountMicros(value: unknown) {

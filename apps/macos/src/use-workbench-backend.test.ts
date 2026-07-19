@@ -1394,6 +1394,49 @@ describe('planFromBackend', () => {
     expect(result.pricingReady).toBe(false)
   })
 
+  it('保留账号来源、所选字段和发现补全请求分项', () => {
+    const plan: CollectionPlanView = {
+      id: 'plan-account-facts',
+      task_id: 'task-account',
+      source: 'form_generated',
+      schema_version: 4,
+      plan_json: {
+        platforms: ['douyin'],
+        account_source: 'user_search',
+        selected_fields: ['avatar_url', 'gender', 'age'],
+        record_limit: 10,
+        budget_limit: { currency: 'USD', amount_micros: 1_000_000 },
+        steps: [],
+      },
+      validation_status: 'valid',
+      validation_errors_json: [],
+      cost_estimate_json: {
+        request_count_estimate: 11,
+        discovery_request_count: 1,
+        enrichment_request_count: 10,
+      },
+      confirmed_by_user: false,
+      created_at: '2026-07-20T00:00:00Z',
+      updated_at: '2026-07-20T00:00:00Z',
+    }
+
+    const result = planFromBackend({
+      platform: '抖音',
+      dataType: '账号公开信息',
+      regionCode: '',
+      keyword: '汽车',
+      range: '',
+      maxRecords: 10,
+      budget: 1,
+    }, plan)
+
+    expect(result.accountSource).toBe('user_search')
+    expect(result.selectedFields).toEqual(['avatar_url', 'gender', 'age'])
+    expect(result.discoveryRequestCount).toBe(1)
+    expect(result.enrichmentRequestCount).toBe(10)
+    expect(result.requestCountEstimate).toBe(11)
+  })
+
   it('确认视图使用后端多平台计划且不虚构记录数和金额预算', () => {
     const plan: CollectionPlanView = {
       id: 'plan-1',
