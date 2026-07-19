@@ -113,9 +113,14 @@ function TaskQueue({
 }: TaskQueueProps) {
   const { t, i18n } = useTranslation('tasks')
   const [activeMode, setActiveMode] = useState<ActiveTaskMode>()
+  const [previewTaskId, setPreviewTaskId] = useState<string>()
   const [draftName, setDraftName] = useState('')
   const [exportFormats, setExportFormats] = useState<Record<string, TaskExportInput['format']>>({})
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({})
+  const previewTask = previewTaskId
+    ? tasks.find((task) => task.id === previewTaskId)
+    : undefined
+  const visibleTasks = previewTask ? [previewTask] : tasks
   const numberLocale = i18n.resolvedLanguage ?? i18n.language
   const showRawDiagnostics = numberLocale.toLowerCase().startsWith('zh')
   const runTimeFormatter = new Intl.DateTimeFormat(numberLocale, {
@@ -162,6 +167,7 @@ function TaskQueue({
     try {
       if (action.type === 'confirm-run') {
         await onConfirmTask(action.taskId)
+        setPreviewTaskId(action.taskId)
       } else if (action.type === 'confirm-cancel') {
         await onCancelTask(action.taskId)
       } else {
@@ -192,15 +198,26 @@ function TaskQueue({
       <header className="task-queue__heading">
         <div>
           <p className="eyebrow">{t('taskQueue.eyebrow')}</p>
-          <h2 id="task-queue-heading">{t('taskQueue.title')}</h2>
+          <h2 id="task-queue-heading">{previewTask?.name ?? t('taskQueue.title')}</h2>
           <p className="task-queue__intro">{t('taskQueue.intro')}</p>
         </div>
-        <span className="task-queue__count">
-          {t('taskQueue.taskCount', {
-            count: tasks.length,
-            formattedCount: tasks.length.toLocaleString(numberLocale),
-          })}
-        </span>
+        {previewTask ? (
+          <button
+            aria-label={t('taskQueue.backToList')}
+            className="ghost-button"
+            type="button"
+            onClick={() => setPreviewTaskId(undefined)}
+          >
+            {t('taskQueue.backToList')}
+          </button>
+        ) : (
+          <span className="task-queue__count">
+            {t('taskQueue.taskCount', {
+              count: tasks.length,
+              formattedCount: tasks.length.toLocaleString(numberLocale),
+            })}
+          </span>
+        )}
       </header>
 
       {tasks.length === 0 ? (
@@ -213,7 +230,7 @@ function TaskQueue({
         </div>
       ) : (
         <div className="task-queue__list" role="list">
-          {tasks.map((task) => {
+          {visibleTasks.map((task) => {
             const taskMode = activeMode?.taskId === task.id ? activeMode : undefined
             const isEditing = taskMode?.type === 'edit'
             const confirmation = taskMode?.type === 'confirm-run'

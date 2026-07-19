@@ -29,14 +29,17 @@ const waitingTask: WorkbenchRuntimeData['tasks'][number] = {
 
 const mountedQueues = new Set<{ container: HTMLDivElement; root: Root }>()
 
-function mountQueue(onConfirmTask: (taskId: string) => Promise<unknown>) {
+function mountQueue(
+  onConfirmTask: (taskId: string) => Promise<unknown>,
+  tasks: WorkbenchRuntimeData['tasks'] = [waitingTask],
+) {
   const container = document.createElement('div')
   const root = createRoot(container)
   const mounted = { container, root }
   document.body.append(container)
   mountedQueues.add(mounted)
   act(() => root.render(createElement(TaskQueue, {
-    tasks: [waitingTask],
+    tasks,
     isBusy: false,
     onUpdateTask: vi.fn(),
     onCancelTask: vi.fn(),
@@ -151,6 +154,36 @@ describe('TaskQueue', () => {
     expect(mounted.container.textContent).toContain(
       '任务尚未入队：实时计价请求过于频繁，请稍后重试',
     )
+  })
+
+  it('确认运行成功后进入该任务独立预览，并可返回完整任务列表', async () => {
+    const otherTask = {
+      ...waitingTask,
+      id: 'task-other',
+      name: '其他等待任务',
+    }
+    const onConfirmTask = vi.fn(async () => undefined)
+    const mounted = mountQueue(onConfirmTask, [waitingTask, otherTask])
+    const openConfirmation = Array.from(mounted.container.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('确认运行'))
+
+    act(() => openConfirmation?.click())
+    const submitConfirmation = mounted.container.querySelector<HTMLButtonElement>(
+      '.task-card__confirmation .primary-button',
+    )
+    await act(async () => submitConfirmation?.click())
+
+    expect(onConfirmTask).toHaveBeenCalledWith(waitingTask.id)
+    expect(mounted.container.textContent).toContain(waitingTask.name)
+    expect(mounted.container.textContent).not.toContain(otherTask.name)
+
+    const backToList = Array.from(mounted.container.querySelectorAll('button'))
+      .find((button) => button.getAttribute('aria-label') === '返回任务列表')
+    expect(backToList).toBeTruthy()
+
+    act(() => backToList?.click())
+    expect(mounted.container.textContent).toContain(waitingTask.name)
+    expect(mounted.container.textContent).toContain(otherTask.name)
   })
 
   it('无效计划明确显示计划需修正，且不提供确认运行入口', () => {
