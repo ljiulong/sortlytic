@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Ban, Download, ListTodo, Pencil, Play, Save, Table2, Trash2, X } from 'lucide-react'
+import { Ban, Download, ListChecks, ListTodo, Pencil, Play, Save, Table2, Trash2, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import AppSelect from './AppSelect'
 import { backendErrorMessage, type ExportJobView } from './backend-api'
@@ -64,6 +64,7 @@ function TaskQueue({
   const [exportFormats, setExportFormats] = useState<Record<string, TaskExportInput['format']>>({})
   const [exportFeedback, setExportFeedback] = useState<Record<string, TaskExportFeedback>>({})
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({})
+  const [bulkMode, setBulkMode] = useState(false)
   const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([])
   const [bulkDeleteConfirmationOpen, setBulkDeleteConfirmationOpen] = useState(false)
   const [bulkDeleteFailure, setBulkDeleteFailure] = useState<BulkDeleteFailure>()
@@ -202,6 +203,13 @@ function TaskQueue({
       : [...taskIds, taskId])
   }
 
+  const exitBulkMode = () => {
+    setBulkMode(false)
+    setSelectedTaskIds([])
+    setBulkDeleteConfirmationOpen(false)
+    setBulkDeleteFailure(undefined)
+  }
+
   const toggleAllDeletableTasks = () => {
     setBulkDeleteFailure(undefined)
     setSelectedTaskIds(allDeletableTasksSelected ? [] : deletableTaskIds)
@@ -235,6 +243,7 @@ function TaskQueue({
       })
     } else {
       setBulkDeleteConfirmationOpen(false)
+      setBulkMode(false)
     }
     setIsBulkDeleting(false)
   }
@@ -260,16 +269,33 @@ function TaskQueue({
             {t('taskQueue.backToList')}
           </button>
         ) : (
-          <span className="task-queue__count">
-            {t('taskQueue.taskCount', {
-              count: tasks.length,
-              formattedCount: tasks.length.toLocaleString(numberLocale),
-            })}
-          </span>
+          <div className="task-queue__heading-actions">
+            <span className="task-queue__count">
+              {t('taskQueue.taskCount', {
+                count: tasks.length,
+                formattedCount: tasks.length.toLocaleString(numberLocale),
+              })}
+            </span>
+            {tasks.length > 0 ? (
+              <button
+                aria-label={t(bulkMode ? 'taskQueue.exitBulkMode' : 'taskQueue.enterBulkMode')}
+                aria-pressed={bulkMode}
+                className="ghost-button"
+                type="button"
+                onClick={() => {
+                  if (bulkMode) exitBulkMode()
+                  else setBulkMode(true)
+                }}
+              >
+                <ListChecks size={15} aria-hidden="true" />
+                {t(bulkMode ? 'taskQueue.exitBulkMode' : 'taskQueue.enterBulkMode')}
+              </button>
+            ) : null}
+          </div>
         )}
       </header>
 
-      {tasks.length > 0 && !previewTask ? (
+      {tasks.length > 0 && !previewTask && bulkMode ? (
         <div
           aria-label={t('taskQueue.bulkToolbarAriaLabel')}
           className="task-queue__bulk-toolbar"
@@ -405,7 +431,7 @@ function TaskQueue({
                 role="listitem"
               >
                 <header className="task-card__header">
-                  {!previewTask ? (
+                  {!previewTask && bulkMode ? (
                     <label
                       className="task-card__selection"
                       title={capabilities.canDelete
@@ -610,6 +636,7 @@ function TaskQueue({
                             type="button"
                             onClick={() => {
                               setActiveMode(undefined)
+                              exitBulkMode()
                               setResultsTaskId(task.id)
                               setPreviewTaskId(task.id)
                             }}

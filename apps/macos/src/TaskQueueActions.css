@@ -1,3 +1,10 @@
+.task-queue__heading-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .task-queue__bulk-toolbar {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -219,6 +226,11 @@
 }
 
 @media (max-width: 560px) {
+  .task-queue__heading-actions {
+    align-items: flex-end;
+    flex-direction: column;
+  }
+
   .task-queue__bulk-toolbar {
     grid-template-columns: minmax(0, 1fr) auto;
   }

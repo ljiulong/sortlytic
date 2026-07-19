@@ -260,6 +260,10 @@ describe('TaskQueue', () => {
       vi.fn(),
       onDeleteTask,
     )
+    expect(mounted.container.querySelector('input[type="checkbox"]')).toBeNull()
+    act(() => mounted.container.querySelector<HTMLButtonElement>(
+      'button[aria-label="批量管理"]',
+    )?.click())
     const selectAll = mounted.container.querySelector<HTMLInputElement>(
       'input[aria-label="选择全部可删除任务"]',
     )
@@ -325,6 +329,9 @@ describe('TaskQueue', () => {
       onDeleteTask,
     )
 
+    act(() => mounted.container.querySelector<HTMLButtonElement>(
+      'button[aria-label="批量管理"]',
+    )?.click())
     act(() => mounted.container.querySelector<HTMLInputElement>(
       'input[aria-label="选择全部可删除任务"]',
     )?.click())
@@ -343,6 +350,36 @@ describe('TaskQueue', () => {
     expect(mounted.container.querySelector<HTMLInputElement>(
       'input[aria-label="选择任务 删除失败任务"]',
     )?.checked).toBe(true)
+  })
+
+  it('删除选择框只在批量管理模式显示，退出时清空选择', () => {
+    const mounted = mountQueue(vi.fn(async () => undefined), [{
+      ...waitingTask,
+      status: '成功',
+      name: '可批量管理任务',
+    }])
+
+    expect(mounted.container.querySelector('input[type="checkbox"]')).toBeNull()
+    act(() => mounted.container.querySelector<HTMLButtonElement>(
+      'button[aria-label="批量管理"]',
+    )?.click())
+
+    const taskSelection = mounted.container.querySelector<HTMLInputElement>(
+      'input[aria-label="选择任务 可批量管理任务"]',
+    )
+    expect(taskSelection).toBeTruthy()
+    act(() => taskSelection?.click())
+    expect(mounted.container.textContent).toContain('已选择 1 条任务')
+
+    act(() => mounted.container.querySelector<HTMLButtonElement>(
+      'button[aria-label="完成"]',
+    )?.click())
+    expect(mounted.container.querySelector('input[type="checkbox"]')).toBeNull()
+
+    act(() => mounted.container.querySelector<HTMLButtonElement>(
+      'button[aria-label="批量管理"]',
+    )?.click())
+    expect(mounted.container.textContent).toContain('已选择 0 条任务')
   })
 
   it('每条任务可选择 Excel 或 PDF，未完成任务不允许提前导出', () => {
