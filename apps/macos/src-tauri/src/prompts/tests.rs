@@ -34,15 +34,15 @@ fn seed_builtin_prompts_is_idempotent() {
   assert_eq!(templates.len(), 3);
   assert_eq!(
     collection_template.output_schema_id.as_deref(),
-    Some("collection_plan_v3")
+    Some("collection_plan_v4")
   );
   assert_eq!(versions[0].status, "active");
-  assert!(versions[0].content.contains("collection_plan_v3"));
+  assert!(versions[0].content.contains("collection_plan_v4"));
   assert!(versions[0].content.contains("证据"));
   assert_eq!(first_cases.len(), 3);
   assert!(first_cases
     .iter()
-    .all(|case| case.expected_schema_id == "collection_plan_v3"));
+    .all(|case| case.expected_schema_id == "collection_plan_v4"));
   assert_eq!(second_cases.len(), first_cases.len());
   assert_eq!(
     second_cases
@@ -94,11 +94,11 @@ fn seeding_upgrades_a_legacy_collection_prompt_without_losing_history() {
 
   assert_eq!(
     upgraded_template.output_schema_id.as_deref(),
-    Some("collection_plan_v3")
+    Some("collection_plan_v4")
   );
   assert_eq!(upgraded_versions.len(), 2);
   assert_eq!(upgraded_versions[0].status, "active");
-  assert!(upgraded_versions[0].content.contains("collection_plan_v3"));
+  assert!(upgraded_versions[0].content.contains("collection_plan_v4"));
   assert_eq!(upgraded_versions[1].status, "archived");
   assert_eq!(upgraded_versions[1].content, "legacy v1");
 
@@ -155,7 +155,7 @@ fn builtin_upgrade_preserves_the_user_activated_prompt_version() {
     .expect("custom version should remain");
   let current_builtin = versions
     .iter()
-    .find(|version| version.content.contains("collection_plan_v3"))
+    .find(|version| version.content.contains("collection_plan_v4"))
     .expect("current builtin should be added");
 
   assert_eq!(custom.status, "active");
@@ -301,10 +301,11 @@ fn evaluator_result_changes_when_case_input_violates_expected_rules() {
     template_id: "template-1".to_string(),
     name: "预期完整输入".to_string(),
     input_json: serde_json::json!({ "text": "采集汽车评论" }),
-    expected_schema_id: "collection_plan_v3".to_string(),
+    expected_schema_id: "collection_plan_v4".to_string(),
     expected_rules_json: serde_json::json!({
       "expected_platforms": ["tiktok"],
-      "expected_data_types": ["comments"],
+      "expected_account_source": "comment_authors",
+      "expected_selected_fields": [],
       "expected_missing_fields": [],
       "expected_plan_valid": false
     }),
@@ -461,13 +462,25 @@ fn serve_prompt_regressions(
       let (mut stream, _) = listener.accept().expect("test server should accept");
       let request = read_http_request(&mut stream);
       assert!(request.contains("input_json.text"));
-      assert!(request.contains("collection_plan_v3"));
+      assert!(request.contains("collection_plan_v4"));
       let mut plan = if request.contains("新能源汽车") {
-        valid_keyword_plan("douyin", "180", None, 100, 3_000_000)
+        valid_account_plan(
+          "douyin",
+          &["avatar_url", "gender", "age", "followers_count"],
+          3_000_000,
+        )
       } else if request.contains("智能汽车") {
-        valid_keyword_plan("xiaohongshu", "180", None, 80, 4_000_000)
+        valid_account_plan(
+          "xiaohongshu",
+          &["avatar_url", "bio", "followers_count", "posts_count"],
+          4_000_000,
+        )
       } else {
-        valid_keyword_plan("tiktok", "7", Some("US"), 50, 2_000_000)
+        valid_account_plan(
+          "tiktok",
+          &["avatar_url", "bio", "country_region", "followers_count"],
+          2_000_000,
+        )
       };
       if omit_output_selected {
         plan["steps"][0]
@@ -521,57 +534,47 @@ fn read_http_request(stream: &mut std::net::TcpStream) -> String {
   String::from_utf8_lossy(&request).into_owned()
 }
 
-fn valid_keyword_plan(
-  platform: &str,
-  time_range: &str,
-  region: Option<&str>,
-  record_limit: i64,
-  budget_micros: i64,
-) -> Value {
-  let params = serde_json::json!({
-    "keyword": "car",
-    "item_id": null,
-    "account_id": null,
-    "region": region,
-    "time_range": time_range,
-    "page_size": null
-  });
-  serde_json::json!({
-    "schema_version": 3,
-    "platforms": [platform],
-    "data_types": ["keyword_search"],
-    "internal_data_types": [],
-    "region": region,
-    "keywords": ["car"],
-    "accounts": [],
-    "time_range": time_range,
-    "age_range": null,
-    "gender_filter": null,
-    "steps": [{
-      "step_key": "keyword_search",
-      "role": "entry",
-      "depends_on_step_key": null,
-      "input_binding": null,
-      "endpoint_key": format!("{platform}.keyword_search"),
-      "platform": platform,
-      "data_type": "keyword_search",
-      "params": params,
-      "request_limit": 1,
-      "output_selected": true
-    }],
-    "record_limit": record_limit,
-    "request_limit": 1,
-    "budget_limit": { "currency": "USD", "amount_micros": budget_micros },
-    "output_rules": {
-      "entity": "account",
-      "dedupe_key": ["platform", "platform_user_id"],
-      "fallback_dedupe_key": ["platform", "normalized_account"],
-      "selected_data_types": ["keyword_search"]
+fn valid_account_plan(platform: &str, selected_fields: &[&str], budget_micros: i64) -> Value {
+  let mut plan = crate::collection::generate_account_collection_plan(
+    crate::collection::AccountFormCollectionPlanRequest {
+      platform: platform.to_string(),
+      account_source: "user_search".to_string(),
+      selected_fields: selected_fields
+        .iter()
+        .map(|field| (*field).to_string())
+        .collect(),
+      enrichment_policy: "auto_costed".to_string(),
+      params: serde_json::json!({ "keyword": "car" }),
+      age_range: None,
+      gender_filter: None,
+      request_limit: Some(1),
+      record_limit: Some(20),
+      budget_limit_micros: Some(budget_micros),
     },
-    "missing_fields": [],
-    "confidence": 0.98,
-    "requires_user_confirmation": true
-  })
+  )
+  .expect("account plan fixture should generate")
+  .plan_json;
+  for step in plan["steps"]
+    .as_array_mut()
+    .expect("account plan steps should be an array")
+  {
+    let params = step["params"]
+      .as_object_mut()
+      .expect("account plan params should be an object");
+    for key in [
+      "keyword",
+      "item_id",
+      "account_id",
+      "region",
+      "time_range",
+      "page_size",
+    ] {
+      params.entry(key.to_string()).or_insert(Value::Null);
+    }
+  }
+  plan["confidence"] = serde_json::json!(0.98);
+  plan["missing_fields"] = serde_json::json!([]);
+  plan
 }
 
 fn unique_temp_workspace(label: &str) -> std::path::PathBuf {
