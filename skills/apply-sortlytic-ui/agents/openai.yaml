@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sortlytic UI 设计规范"
+  short_description: "统一设计、实现和验收 Sortlytic 前端界面风格"
+  default_prompt: "使用 $apply-sortlytic-ui 设计或审查一个符合 Sortlytic 视觉与交互规范的界面。"
