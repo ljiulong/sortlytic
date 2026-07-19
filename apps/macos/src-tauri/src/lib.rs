@@ -29,8 +29,9 @@ use api_profile_commands::{
 use app_runtime::workspace_context_from_summary;
 use app_state::{AppState, BackendStatus, WorkspaceContext};
 use collection::{
-  AccountCollectionCapabilityView, CollectionParamValidationResult, CollectionPlanDraftView,
-  DataTypeCapabilityView, FormCollectionPlanRequest, PlatformCapabilityView,
+  AccountCollectionCapabilityView, AccountFormCollectionPlanRequest,
+  CollectionParamValidationResult, CollectionPlanDraftView, DataTypeCapabilityView,
+  FormCollectionPlanRequest, PlatformCapabilityView,
 };
 use config_commands::quote_tikhub_connector_price;
 use domain::{AppError, AppErrorStage, AppResult};
@@ -195,6 +196,13 @@ fn generate_form_collection_plan(
   request: FormCollectionPlanRequest,
 ) -> AppResult<CollectionPlanDraftView> {
   collection::generate_form_collection_plan(request)
+}
+
+#[tauri::command]
+fn generate_account_collection_plan(
+  request: AccountFormCollectionPlanRequest,
+) -> AppResult<CollectionPlanDraftView> {
+  collection::generate_account_collection_plan(request)
 }
 
 #[tauri::command]
@@ -449,6 +457,7 @@ pub fn run() {
       get_account_collection_capabilities,
       validate_collection_params,
       generate_form_collection_plan,
+      generate_account_collection_plan,
       preview_collection_plan,
       seed_builtin_prompts,
       list_prompt_templates,
