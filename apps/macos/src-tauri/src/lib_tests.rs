@@ -109,6 +109,20 @@ fn packaged_app_includes_the_noto_sans_sc_license() {
 }
 
 #[test]
+fn packaged_macos_app_seals_resources_with_an_ad_hoc_signature() {
+  let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+    .expect("Tauri config must be valid JSON");
+
+  assert_eq!(
+    config
+      .pointer("/bundle/macOS/signingIdentity")
+      .and_then(serde_json::Value::as_str),
+    Some("-"),
+    "unsigned release builds still need a complete ad-hoc app bundle signature"
+  );
+}
+
+#[test]
 fn prompt_activation_keeps_real_model_regressions_off_the_ui_thread() {
   let source = include_str!("lib.rs");
   let command = source

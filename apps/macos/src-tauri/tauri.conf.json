@@ -66,6 +66,9 @@
     "resources": {
       "assets/fonts/OFL.txt": "licenses/NotoSansSC-OFL.txt"
     },
+    "macOS": {
+      "signingIdentity": "-"
+    },
     "android": {
       "debugApplicationIdSuffix": ".debug"
     }
