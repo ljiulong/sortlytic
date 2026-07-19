@@ -344,6 +344,148 @@ pub fn build_collection_request(
         required_string(&params, "item_id")?,
       );
     }
+    ("tiktok", "user_search") => {
+      request
+        .paths
+        .push("/api/v1/tiktok/app/v3/fetch_user_search_result".to_string());
+      push_query(
+        &mut request,
+        "keyword",
+        required_string(&params, "keyword")?,
+      );
+      push_query(
+        &mut request,
+        "offset",
+        cursor_primary(cursor, &["offset", "cursor"])
+          .and_then(|value| value_to_text(&value))
+          .unwrap_or_else(|| "0".to_string()),
+      );
+      push_query(&mut request, "count", page_size(&params, 20)?.to_string());
+    }
+    ("tiktok", "followers" | "followings") => {
+      let path = if data_type.trim() == "followers" {
+        "/api/v1/tiktok/app/v3/fetch_user_follower_list"
+      } else {
+        "/api/v1/tiktok/app/v3/fetch_user_following_list"
+      };
+      request.paths.push(path.to_string());
+      push_tiktok_account_identifier(&mut request, required_string(&params, "account_id")?);
+      push_query(&mut request, "count", page_size(&params, 20)?.to_string());
+      push_query(
+        &mut request,
+        "min_time",
+        cursor_primary(cursor, &["min_time"])
+          .and_then(|value| value_to_text(&value))
+          .unwrap_or_else(|| "0".to_string()),
+      );
+      push_query(
+        &mut request,
+        "page_token",
+        cursor_primary(cursor, &["page_token"])
+          .and_then(|value| value_to_text(&value))
+          .unwrap_or_default(),
+      );
+    }
+    ("tiktok", "similar_accounts") => {
+      request
+        .paths
+        .push("/api/v1/tiktok/app/v3/fetch_similar_user_recommendations".to_string());
+      push_query(
+        &mut request,
+        "sec_uid",
+        required_string(&params, "account_id")?,
+      );
+      if let Some(page_token) =
+        cursor_primary(cursor, &["page_token"]).and_then(|value| value_to_text(&value))
+      {
+        push_query(&mut request, "page_token", page_token);
+      }
+    }
+    ("tiktok", "account_country") => {
+      request
+        .paths
+        .push("/api/v1/tiktok/app/v3/fetch_user_country_by_username".to_string());
+      push_query(
+        &mut request,
+        "username",
+        required_string(&params, "account_id")?,
+      );
+    }
+    ("douyin", "user_search") => {
+      request.method = RequestMethod::Post;
+      request
+        .paths
+        .push("/api/v1/douyin/search/fetch_user_search".to_string());
+      let mut body = Map::from_iter([
+        (
+          "keyword".to_string(),
+          Value::String(required_string(&params, "keyword")?),
+        ),
+        (
+          "cursor".to_string(),
+          cursor_primary(cursor, &["cursor"]).unwrap_or_else(|| Value::from(0)),
+        ),
+        ("douyin_user_fans".to_string(), Value::String(String::new())),
+        ("douyin_user_type".to_string(), Value::String(String::new())),
+        ("search_id".to_string(), Value::String(String::new())),
+      ]);
+      copy_cursor_field(cursor, "search_id", &mut body);
+      request.body = Some(Value::Object(body));
+    }
+    ("douyin", "followers" | "followings") => {
+      let path = if data_type.trim() == "followers" {
+        "/api/v1/douyin/web/fetch_user_fans_list"
+      } else {
+        "/api/v1/douyin/web/fetch_user_following_list"
+      };
+      request.paths.push(path.to_string());
+      push_query(
+        &mut request,
+        "sec_user_id",
+        required_string(&params, "account_id")?,
+      );
+      push_query(
+        &mut request,
+        "max_time",
+        cursor_primary(cursor, &["max_time"])
+          .and_then(|value| value_to_text(&value))
+          .unwrap_or_else(|| "0".to_string()),
+      );
+      push_query(&mut request, "count", page_size(&params, 20)?.to_string());
+      push_query(
+        &mut request,
+        "source_type",
+        if cursor.is_none() { "2" } else { "1" }.to_string(),
+      );
+    }
+    ("douyin", "extended_demographics") => {
+      request
+        .paths
+        .push("/api/v1/douyin/web/handler_user_profile_v4".to_string());
+      push_query(
+        &mut request,
+        "sec_user_id",
+        required_string(&params, "account_id")?,
+      );
+    }
+    ("xiaohongshu", "user_search") => {
+      request
+        .paths
+        .push("/api/v1/xiaohongshu/app_v2/search_users".to_string());
+      push_query(
+        &mut request,
+        "keyword",
+        required_string(&params, "keyword")?,
+      );
+      push_query(
+        &mut request,
+        "page",
+        cursor_primary(cursor, &["page", "cursor"])
+          .and_then(|value| value_to_text(&value))
+          .unwrap_or_else(|| "1".to_string()),
+      );
+      copy_cursor_query(cursor, "search_id", &mut request);
+    }
     _ => {
       return Err(AppError::validation(
         "平台或数据类型不受支持",
@@ -383,6 +525,18 @@ fn page_size(params: &Value, default: i64) -> AppResult<i64> {
 
 fn push_query(request: &mut TikHubCollectionRequest, key: &str, value: String) {
   request.query.push((key.to_string(), value));
+}
+
+fn push_tiktok_account_identifier(request: &mut TikHubCollectionRequest, account_id: String) {
+  let key = if account_id
+    .chars()
+    .all(|character| character.is_ascii_digit())
+  {
+    "user_id"
+  } else {
+    "sec_user_id"
+  };
+  push_query(request, key, account_id);
 }
 
 fn relative_days(params: &Value) -> Option<String> {

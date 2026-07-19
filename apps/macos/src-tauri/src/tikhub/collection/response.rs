@@ -31,14 +31,18 @@ pub fn parse_collection_page(
 
   let data = response.get("data").unwrap_or(&Value::Null);
   let records = extract_records(request, data)?;
-  let has_more = match data
-    .get("has_more")
-    .or_else(|| data.get("data").and_then(|value| value.get("has_more")))
-    .or_else(|| response.get("has_more"))
-  {
-    Some(value) => boolish(value)
-      .ok_or_else(|| response_shape_error("invalid_has_more", "has_more 不是布尔值或 0/1"))?,
-    None => xiaohongshu_search_has_more(request, data)?,
+  let has_more = if douyin_relation_bootstrap_has_more(request, data) {
+    true
+  } else {
+    match data
+      .get("has_more")
+      .or_else(|| data.get("data").and_then(|value| value.get("has_more")))
+      .or_else(|| response.get("has_more"))
+    {
+      Some(value) => boolish(value)
+        .ok_or_else(|| response_shape_error("invalid_has_more", "has_more 不是布尔值或 0/1"))?,
+      None => inferred_has_more(request, data)?,
+    }
   };
   let next_cursor = if has_more {
     let raw_cursor = extract_next_cursor(request, data, &response).ok_or_else(|| {
@@ -108,6 +112,45 @@ fn business_response_error(code: i64) -> AppError {
 fn extract_records(request: &TikHubCollectionRequest, data: &Value) -> AppResult<Vec<Value>> {
   match request.data_type.as_str() {
     "comments" => required_array_field(data, &["comments", "comment_list"]),
+    "user_search" => {
+      let search_data = data
+        .get("data")
+        .filter(|value| value.is_object())
+        .unwrap_or(data);
+      let keys: &[&str] = match request.platform.as_str() {
+        "douyin" => &["user_list", "users"],
+        "tiktok" => &["user_list", "users", "user_info_list"],
+        "xiaohongshu" => &["users", "user_list", "items"],
+        _ => &[],
+      };
+      Ok(
+        required_array_field(search_data, keys)?
+          .into_iter()
+          .map(unwrap_user_record)
+          .collect(),
+      )
+    }
+    "followers" => Ok(
+      required_array_field(data, &["followers", "follower_list", "user_list", "users"])?
+        .into_iter()
+        .map(unwrap_user_record)
+        .collect(),
+    ),
+    "followings" => Ok(
+      required_array_field(
+        data,
+        &["followings", "following_list", "user_list", "users"],
+      )?
+      .into_iter()
+      .map(unwrap_user_record)
+      .collect(),
+    ),
+    "similar_accounts" => Ok(
+      required_array_field(data, &["user_list", "users", "suggested_users"])?
+        .into_iter()
+        .map(unwrap_user_record)
+        .collect(),
+    ),
     "keyword_search" => {
       if request.platform == "douyin" {
         return Ok(
@@ -167,10 +210,18 @@ fn extract_records(request: &TikHubCollectionRequest, data: &Value) -> AppResult
       required_array_field(data, &["aweme_list", "items", "notes", "item_list"])
     }
     "account_posts" => required_array_field(data, &["aweme_list", "items", "notes", "item_list"]),
-    "account_profile" | "item_detail" if is_non_empty_record(data) => Ok(vec![data.clone()]),
+    "account_profile" | "account_country" | "extended_demographics" | "item_detail"
+      if is_non_empty_record(data) =>
+    {
+      Ok(vec![data.clone()])
+    }
     "account_profile" => Err(response_shape_error(
       "empty_record_data",
       "账号响应缺少非空 data",
+    )),
+    "account_country" | "extended_demographics" => Err(response_shape_error(
+      "empty_record_data",
+      "账号补全响应缺少非空 data",
     )),
     "item_detail" => Err(response_shape_error(
       "empty_detail_data",
@@ -184,7 +235,9 @@ fn extract_records(request: &TikHubCollectionRequest, data: &Value) -> AppResult
 }
 
 fn xiaohongshu_search_has_more(request: &TikHubCollectionRequest, data: &Value) -> AppResult<bool> {
-  if request.platform != "xiaohongshu" || request.data_type != "keyword_search" {
+  if request.platform != "xiaohongshu"
+    || !matches!(request.data_type.as_str(), "keyword_search" | "user_search")
+  {
     return Ok(false);
   }
   let Some(next_page) = data.get("next_page") else {
@@ -207,6 +260,56 @@ fn xiaohongshu_search_has_more(request: &TikHubCollectionRequest, data: &Value) 
     .filter(|value| *value > 0)
     .ok_or_else(|| response_shape_error("invalid_continuation", "响应缺少有效的当前页码"))?;
   Ok(next_page > current_page)
+}
+
+fn inferred_has_more(request: &TikHubCollectionRequest, data: &Value) -> AppResult<bool> {
+  if request.platform == "xiaohongshu"
+    && matches!(request.data_type.as_str(), "keyword_search" | "user_search")
+  {
+    return xiaohongshu_search_has_more(request, data);
+  }
+  let continuation_exists = match (request.platform.as_str(), request.data_type.as_str()) {
+    ("tiktok", "followers" | "followings") => {
+      nonempty_text(data.get("page_token")) || nonzero_number(data.get("min_time"))
+    }
+    ("tiktok", "similar_accounts") => {
+      nonempty_text(data.get("next_page_token")) || nonempty_text(data.get("page_token"))
+    }
+    _ => false,
+  };
+  Ok(continuation_exists)
+}
+
+fn douyin_relation_bootstrap_has_more(request: &TikHubCollectionRequest, data: &Value) -> bool {
+  request.platform == "douyin"
+    && matches!(request.data_type.as_str(), "followers" | "followings")
+    && request.input_cursor.is_none()
+    && (nonempty_text(data.get("max_time")) || nonzero_number(data.get("max_time")))
+}
+
+fn nonempty_text(value: Option<&Value>) -> bool {
+  value
+    .and_then(Value::as_str)
+    .is_some_and(|value| !value.trim().is_empty() && value.trim() != "0")
+}
+
+fn nonzero_number(value: Option<&Value>) -> bool {
+  value
+    .and_then(|value| {
+      value
+        .as_i64()
+        .or_else(|| value.as_str().and_then(|value| value.parse().ok()))
+    })
+    .is_some_and(|value| value > 0)
+}
+
+fn unwrap_user_record(record: Value) -> Value {
+  record
+    .get("user_info")
+    .or_else(|| record.get("user"))
+    .filter(|value| value.is_object())
+    .cloned()
+    .unwrap_or(record)
 }
 
 fn required_array_field(data: &Value, keys: &[&str]) -> AppResult<Vec<Value>> {

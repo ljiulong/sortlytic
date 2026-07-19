@@ -911,6 +911,254 @@ fn rejects_empty_detail_data_so_xiaohongshu_can_try_video_fallback() {
   );
 }
 
+#[test]
+fn maps_verified_account_sources_and_enrichment_endpoints() {
+  let tiktok_search = build_collection_request(
+    "tiktok",
+    "user_search",
+    &serde_json::json!({ "keyword": "car", "page_size": 20 }),
+    None,
+  )
+  .unwrap();
+  assert_eq!(
+    tiktok_search.paths(),
+    ["/api/v1/tiktok/app/v3/fetch_user_search_result"]
+  );
+  assert!(tiktok_search
+    .query()
+    .contains(&("offset".to_string(), "0".to_string())));
+
+  let douyin_search = build_collection_request(
+    "douyin",
+    "user_search",
+    &serde_json::json!({ "keyword": "汽车" }),
+    None,
+  )
+  .unwrap();
+  assert_eq!(douyin_search.method(), RequestMethod::Post);
+  assert_eq!(
+    douyin_search.paths(),
+    ["/api/v1/douyin/search/fetch_user_search"]
+  );
+  assert_eq!(douyin_search.body().unwrap()["cursor"], 0);
+  assert_eq!(douyin_search.body().unwrap()["search_id"], "");
+
+  let xiaohongshu_search = build_collection_request(
+    "xiaohongshu",
+    "user_search",
+    &serde_json::json!({ "keyword": "露营" }),
+    None,
+  )
+  .unwrap();
+  assert_eq!(
+    xiaohongshu_search.paths(),
+    ["/api/v1/xiaohongshu/app_v2/search_users"]
+  );
+  assert!(xiaohongshu_search
+    .query()
+    .contains(&("page".to_string(), "1".to_string())));
+
+  for (platform, data_type, expected_path) in [
+    (
+      "tiktok",
+      "followers",
+      "/api/v1/tiktok/app/v3/fetch_user_follower_list",
+    ),
+    (
+      "tiktok",
+      "followings",
+      "/api/v1/tiktok/app/v3/fetch_user_following_list",
+    ),
+    (
+      "tiktok",
+      "similar_accounts",
+      "/api/v1/tiktok/app/v3/fetch_similar_user_recommendations",
+    ),
+    (
+      "tiktok",
+      "account_country",
+      "/api/v1/tiktok/app/v3/fetch_user_country_by_username",
+    ),
+    (
+      "douyin",
+      "followers",
+      "/api/v1/douyin/web/fetch_user_fans_list",
+    ),
+    (
+      "douyin",
+      "followings",
+      "/api/v1/douyin/web/fetch_user_following_list",
+    ),
+    (
+      "douyin",
+      "extended_demographics",
+      "/api/v1/douyin/web/handler_user_profile_v4",
+    ),
+  ] {
+    let request = build_collection_request(
+      platform,
+      data_type,
+      &serde_json::json!({ "account_id": "MS4w.test", "page_size": 20 }),
+      None,
+    );
+    let request = if matches!(
+      data_type,
+      "similar_accounts" | "account_country" | "extended_demographics"
+    ) {
+      build_collection_request(
+        platform,
+        data_type,
+        &serde_json::json!({ "account_id": "MS4w.test" }),
+        None,
+      )
+      .unwrap()
+    } else {
+      request.unwrap()
+    };
+    assert_eq!(request.paths(), [expected_path]);
+  }
+}
+
+#[test]
+fn douyin_relation_bootstrap_continues_with_returned_max_time() {
+  let first = build_collection_request(
+    "douyin",
+    "followers",
+    &serde_json::json!({ "account_id": "MS4w.seed", "page_size": 20 }),
+    None,
+  )
+  .unwrap();
+  assert!(first
+    .query()
+    .contains(&("max_time".to_string(), "0".to_string())));
+  assert!(first
+    .query()
+    .contains(&("source_type".to_string(), "2".to_string())));
+
+  let first_page = parse_collection_page(
+    &first,
+    serde_json::json!({
+      "code": 200,
+      "data": {
+        "followers": [],
+        "max_time": "1720000000",
+        "has_more": 0
+      }
+    }),
+  )
+  .expect("初始化空页必须提供下一次真实列表请求");
+  assert!(first_page.has_more);
+  let cursor = first_page.next_cursor.unwrap();
+  assert_eq!(
+    cursor,
+    cursor_for(
+      "douyin.followers",
+      serde_json::json!({ "max_time": "1720000000" })
+    )
+  );
+
+  let second = build_collection_request(
+    "douyin",
+    "followers",
+    &serde_json::json!({ "account_id": "MS4w.seed", "page_size": 20 }),
+    Some(&cursor),
+  )
+  .unwrap();
+  assert!(second
+    .query()
+    .contains(&("max_time".to_string(), "1720000000".to_string())));
+  assert!(second
+    .query()
+    .contains(&("source_type".to_string(), "1".to_string())));
+}
+
+#[test]
+fn account_source_parsers_prioritize_and_unwrap_user_arrays() {
+  for (platform, response, expected_id) in [
+    (
+      "tiktok",
+      serde_json::json!({
+        "code": 200,
+        "data": {
+          "aweme_list": [],
+          "user_list": [{ "user_info": { "uid": "tt-1" } }],
+          "has_more": false
+        }
+      }),
+      "tt-1",
+    ),
+    (
+      "douyin",
+      serde_json::json!({
+        "code": 200,
+        "data": {
+          "user_list": [{ "user_info": { "uid": "dy-1", "gender": 0 } }],
+          "cursor": 20,
+          "search_id": "search-1",
+          "has_more": false
+        }
+      }),
+      "dy-1",
+    ),
+    (
+      "xiaohongshu",
+      serde_json::json!({
+        "code": 200,
+        "data": {
+          "users": [{ "user": { "user_id": "xhs-1" } }],
+          "page": 1,
+          "has_more": false
+        }
+      }),
+      "xhs-1",
+    ),
+  ] {
+    let request = build_collection_request(
+      platform,
+      "user_search",
+      &serde_json::json!({ "keyword": "car" }),
+      None,
+    )
+    .unwrap();
+    let page = parse_collection_page(&request, response).unwrap();
+    let record = &page.records[0];
+    assert!(record
+      .get("uid")
+      .or_else(|| record.get("user_id"))
+      .is_some_and(|value| value == expected_id));
+  }
+}
+
+#[test]
+fn account_enrichment_parsers_keep_detail_payloads() {
+  for (platform, data_type, data) in [
+    (
+      "tiktok",
+      "account_country",
+      serde_json::json!({ "username": "tiktok", "country": "US" }),
+    ),
+    (
+      "douyin",
+      "extended_demographics",
+      serde_json::json!({
+        "user": { "age": -1 },
+        "live_user": { "gender": 0, "level": 10 }
+      }),
+    ),
+  ] {
+    let request = build_collection_request(
+      platform,
+      data_type,
+      &serde_json::json!({ "account_id": "seed" }),
+      None,
+    )
+    .unwrap();
+    let page =
+      parse_collection_page(&request, serde_json::json!({ "code": 200, "data": data })).unwrap();
+    assert_eq!(page.records.len(), 1);
+  }
+}
+
 fn cursor_for(endpoint_key: &str, value: Value) -> Value {
   serde_json::json!({
     "endpoint_key": endpoint_key,
