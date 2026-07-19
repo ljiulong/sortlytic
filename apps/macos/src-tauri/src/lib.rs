@@ -148,6 +148,23 @@ fn list_task_record_counts(
 }
 
 #[tauri::command]
+fn list_task_results(
+  task_id: String,
+  limit: Option<i64>,
+  offset: Option<i64>,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<records::TaskResultsPageView> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  records::list_task_results(
+    root_path,
+    &task_id,
+    limit.unwrap_or(100),
+    offset.unwrap_or(0),
+  )
+}
+
+#[tauri::command]
 fn list_supported_platforms() -> AppResult<Vec<PlatformCapabilityView>> {
   Ok(collection::list_supported_platforms())
 }
@@ -419,6 +436,7 @@ pub fn run() {
       list_latest_task_runs,
       list_task_logs,
       list_task_record_counts,
+      list_task_results,
       list_supported_platforms,
       list_platform_data_types,
       validate_collection_params,

@@ -51,6 +51,24 @@ fn stored_record_counts_are_exposed_as_an_active_workspace_command() {
 }
 
 #[test]
+fn task_results_are_exposed_as_an_active_workspace_command() {
+  let source = include_str!("lib.rs");
+  let handler = source
+    .split(".invoke_handler(tauri::generate_handler![")
+    .nth(1)
+    .expect("Tauri invoke handler should exist");
+  let command = source
+    .split("fn list_task_results(")
+    .nth(1)
+    .and_then(|tail| tail.split("#[tauri::command]").next())
+    .expect("task results command should exist");
+
+  assert!(handler.contains("\n      list_task_results,"));
+  assert!(command.contains("resolve_workspace_root"));
+  assert!(command.contains("records::list_task_results"));
+}
+
+#[test]
 fn packaged_app_can_open_a_completed_export_path() {
   let capability: serde_json::Value =
     serde_json::from_str(include_str!("../capabilities/default.json"))
