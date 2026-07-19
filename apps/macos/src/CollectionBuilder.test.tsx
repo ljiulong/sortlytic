@@ -398,6 +398,12 @@ describe('collection form controls', () => {
     await choose('platform', 'platform-option-TikTok')
     await act(async () => undefined)
     expect(mounted.container.querySelector<HTMLButtonElement>('#account-source')?.disabled).toBe(false)
+    expect(mounted.container.querySelector<HTMLInputElement>('input[name="ageRangeEnabled"]')?.disabled)
+      .toBe(true)
+    expect(mounted.container.querySelector<HTMLInputElement>('input[name="genderFilterEnabled"]')?.disabled)
+      .toBe(true)
+    expect(mounted.container.textContent).toContain('当前平台没有可验证的公开年龄来源')
+    expect(mounted.container.textContent).toContain('当前平台没有可验证的公开性别来源')
     await choose('account-source', 'account-source-option-user_search')
     expect(mounted.container.querySelector('#source-input')).not.toBeNull()
     await enter('#source-input', '新能源汽车')
@@ -419,6 +425,54 @@ describe('collection form controls', () => {
       dataTypes: ['keyword_search'],
       selectedFields: ['avatar_url'],
     }))
+  })
+
+  it('抖音能力声明人口属性可用时启用年龄和性别筛选', async () => {
+    backendApiMocks.getAccountCollectionCapabilities.mockResolvedValue({
+      catalog_version: 1,
+      platform: 'douyin',
+      display_name: '抖音',
+      account_sources: [],
+      field_groups: [{ key: 'demographics', display_name: '人口属性' }],
+      fields: [
+        {
+          key: 'age',
+          group: 'demographics',
+          display_name: '年龄',
+          description: '公开年龄。',
+          value_type: 'number',
+          availability: 'enrichment',
+          default_selected: false,
+          required_operation_keys: ['enrich.extended_demographics'],
+        },
+        {
+          key: 'gender',
+          group: 'demographics',
+          display_name: '性别',
+          description: '公开性别。',
+          value_type: 'text',
+          availability: 'direct',
+          default_selected: false,
+          required_operation_keys: [],
+        },
+      ],
+    })
+    const mounted = mountBuilder({
+      onGenerateNaturalPlan: vi.fn(async () => draftPlan),
+    })
+
+    await act(async () => mounted.container.querySelector<HTMLButtonElement>('#platform')?.click())
+    await act(async () => Array.from(
+      mounted.container.querySelectorAll<HTMLButtonElement>('.app-select__option'),
+    ).find((option) => option.textContent?.includes('抖音'))?.click())
+    await act(async () => undefined)
+
+    expect(mounted.container.querySelector<HTMLInputElement>('input[name="ageRangeEnabled"]')?.disabled)
+      .toBe(false)
+    expect(mounted.container.querySelector<HTMLInputElement>('input[name="genderFilterEnabled"]')?.disabled)
+      .toBe(false)
+    expect(mounted.container.textContent).toContain('单一闭区间，不接收未知、异常或推断年龄')
+    expect(mounted.container.textContent).toContain('不根据头像、姓名或简介推断，仅使用明确公开性别')
   })
 
   it('时间范围只接受平台能力中的规范值，不再接受任意文本', () => {

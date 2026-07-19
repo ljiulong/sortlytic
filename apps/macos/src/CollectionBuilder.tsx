@@ -15,9 +15,10 @@ import { useTranslation } from 'react-i18next'
 import type { z } from 'zod'
 import AccountSourceFields from './AccountSourceFields'
 import AppSelect from './AppSelect'
+import type { AccountCollectionCapabilityView } from './backend-api'
 import './CollectionBuilder.css'
+import CollectionFilterFields from './CollectionFilterFields'
 import {
-  AGE_RANGE_LIMITS,
   collectionFormSchema,
   countryRegionOptions,
   createCollectionFormSchema,
@@ -77,9 +78,9 @@ export function CollectionBuilder({
 }) {
   const { t } = useTranslation('collection', { i18n })
   const [naturalText, setNaturalText] = useState(naturalIntentDefault)
+  const [accountCapability, setAccountCapability] = useState<AccountCollectionCapabilityView>()
   const planSubmissionInFlightRef = useRef(false)
   const formSchema = useMemo(() => createCollectionFormSchema(t), [t])
-  const localizedGenderFilterOptions = useMemo(() => getGenderFilterOptions(t), [t])
   const {
     control,
     register,
@@ -101,6 +102,22 @@ export function CollectionBuilder({
   const selectedRange = watch('range')
   const ageRangeEnabled = watch('ageRangeEnabled')
   const genderFilterEnabled = watch('genderFilterEnabled')
+  const selectedBackendPlatform = selectedPlatform === 'TikTok'
+    ? 'tiktok'
+    : selectedPlatform === '抖音'
+      ? 'douyin'
+      : selectedPlatform === '小红书'
+        ? 'xiaohongshu'
+        : undefined
+  const capabilityReady = Boolean(
+    selectedBackendPlatform && accountCapability?.platform === selectedBackendPlatform,
+  )
+  const ageFilterSupported = capabilityReady && accountCapability?.fields.some(
+    (field) => field.key === 'age' && field.availability !== 'unsupported',
+  ) === true
+  const genderFilterSupported = capabilityReady && accountCapability?.fields.some(
+    (field) => field.key === 'gender' && field.availability !== 'unsupported',
+  ) === true
   const timeRanges = useCollectionTimeRanges(selectedPlatform)
   const timeRangeOptions = useMemo(() => timeRanges.values.map((value) => ({
     value,
@@ -114,6 +131,17 @@ export function CollectionBuilder({
   useEffect(() => {
     if (!regionEnabled) setValue('regionCode', '')
   }, [regionEnabled, setValue])
+
+  useEffect(() => {
+    if (!ageFilterSupported && ageRangeEnabled) setValue('ageRangeEnabled', false)
+    if (!genderFilterSupported && genderFilterEnabled) setValue('genderFilterEnabled', false)
+  }, [
+    ageFilterSupported,
+    ageRangeEnabled,
+    genderFilterEnabled,
+    genderFilterSupported,
+    setValue,
+  ])
 
   useEffect(() => {
     if (selectedRange && !timeRanges.values.includes(selectedRange)) {
@@ -189,6 +217,7 @@ export function CollectionBuilder({
                   sourceInput: errors.keyword?.message,
                 }}
                 onAccountSourceChange={setAccountSource}
+                onCapabilityChange={setAccountCapability}
                 onPlatformChange={platformField.onChange}
                 onSelectedFieldsChange={selectedFieldsField.onChange}
                 platform={selectedPlatform}
@@ -312,71 +341,16 @@ export function CollectionBuilder({
               title={t('groups.filters.title')}
               description={t('groups.filters.description')}
             >
-              <div className="collection-builder__filter-grid">
-                <fieldset className="collection-builder__filter-block" data-enabled={ageRangeEnabled}>
-                  <legend className="collection-builder__visually-hidden">{t('fields.ageRange')}</legend>
-                  <label className="collection-builder__filter-toggle">
-                    <input type="checkbox" {...register('ageRangeEnabled')} />
-                    <span>
-                      <strong>{t('fields.ageRange')}</strong>
-                      <small>{t('fields.ageRangeDescription')}</small>
-                    </span>
-                  </label>
-                  {ageRangeEnabled ? (
-                    <div className="collection-builder__age-inputs">
-                      <label>
-                        <span>{t('fields.minimumAge')}</span>
-                        <input
-                          aria-describedby={errors.ageMin ? 'age-min-error' : undefined}
-                          aria-invalid={Boolean(errors.ageMin)}
-                          min={AGE_RANGE_LIMITS.min}
-                          max={AGE_RANGE_LIMITS.max}
-                          placeholder={t('placeholders.minimumAge')}
-                          type="number"
-                          {...register('ageMin', { valueAsNumber: true })}
-                        />
-                      </label>
-                      <span aria-hidden="true">{t('fields.ageRangeSeparator')}</span>
-                      <label>
-                        <span>{t('fields.maximumAge')}</span>
-                        <input
-                          aria-describedby={errors.ageMax ? 'age-max-error' : undefined}
-                          aria-invalid={Boolean(errors.ageMax)}
-                          min={AGE_RANGE_LIMITS.min}
-                          max={AGE_RANGE_LIMITS.max}
-                          placeholder={t('placeholders.maximumAge')}
-                          type="number"
-                          {...register('ageMax', { valueAsNumber: true })}
-                        />
-                      </label>
-                    </div>
-                  ) : null}
-                  <FormError id="age-min-error" message={errors.ageMin?.message} />
-                  <FormError id="age-max-error" message={errors.ageMax?.message} />
-                </fieldset>
-
-                <fieldset className="collection-builder__filter-block" data-enabled={genderFilterEnabled}>
-                  <legend className="collection-builder__visually-hidden">{t('fields.gender')}</legend>
-                  <label className="collection-builder__filter-toggle">
-                    <input type="checkbox" {...register('genderFilterEnabled')} />
-                    <span>
-                      <strong>{t('fields.gender')}</strong>
-                      <small>{t('fields.genderDescription')}</small>
-                    </span>
-                  </label>
-                  {genderFilterEnabled ? (
-                    <div className="collection-builder__gender-options">
-                      {localizedGenderFilterOptions.map((item) => (
-                        <label key={item.value}>
-                          <input type="checkbox" value={item.value} {...register('genders')} />
-                          <span>{item.label}</span>
-                        </label>
-                      ))}
-                    </div>
-                  ) : null}
-                  <FormError id="genders-error" message={errors.genders?.message} />
-                </fieldset>
-              </div>
+              <CollectionFilterFields
+                ageFilterSupported={ageFilterSupported}
+                ageRangeEnabled={ageRangeEnabled}
+                capabilityReady={capabilityReady}
+                errors={errors}
+                genderFilterEnabled={genderFilterEnabled}
+                genderFilterSupported={genderFilterSupported}
+                platformSelected={Boolean(selectedPlatform)}
+                register={register}
+              />
             </FormGroup>
 
             <div className="collection-builder__form-footer">
