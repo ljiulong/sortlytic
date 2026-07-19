@@ -57,6 +57,8 @@ describe('TaskResultsPanel', () => {
       task_id: 'task-1',
       task_run_id: 'run-1',
       run_status: 'success',
+      age_filter_configured: true,
+      gender_filter_configured: true,
       total_count: 1,
       offset: 0,
       limit: 50,
@@ -96,6 +98,8 @@ describe('TaskResultsPanel', () => {
         task_id: 'task-1',
         task_run_id: 'run-1',
         run_status: 'success',
+        age_filter_configured: false,
+        gender_filter_configured: false,
         total_count: 0,
         offset: 0,
         limit: 50,
@@ -112,5 +116,68 @@ describe('TaskResultsPanel', () => {
     )?.click())
     expect(listTaskResultsMock).toHaveBeenCalledTimes(2)
     expect(mounted.container.textContent).toContain('这次运行没有可展示的结果')
+  })
+
+  it('区分任务未设置、未采集到和明确数值零', async () => {
+    listTaskResultsMock.mockResolvedValue({
+      task_id: 'task-1',
+      task_run_id: 'run-1',
+      run_status: 'success',
+      age_filter_configured: false,
+      gender_filter_configured: false,
+      total_count: 1,
+      offset: 0,
+      limit: 50,
+      items: [{
+        id: 'account-missing',
+        platform: 'tiktok',
+        username: '字段口径测试',
+        gender: null,
+        age: null,
+        followers_count: null,
+        posts_count: 0,
+        profile_text: null,
+        data_source: 'TikHub API',
+        collected_at: '2026-07-19T14:32:17Z',
+      }],
+    })
+    const mounted = mountPanel()
+
+    await act(async () => Promise.resolve())
+
+    expect(mounted.container.textContent).toContain('性别：任务未设置')
+    expect(mounted.container.textContent).toContain('年龄：任务未设置')
+    expect(mounted.container.textContent).toContain('未采集到')
+    expect(mounted.container.textContent).toContain('0')
+    expect(mounted.container.textContent).not.toContain('未提供')
+  })
+
+  it('已设置性别和年龄条件但接口缺值时显示未采集到', async () => {
+    listTaskResultsMock.mockResolvedValue({
+      task_id: 'task-1',
+      task_run_id: 'run-1',
+      run_status: 'success',
+      age_filter_configured: true,
+      gender_filter_configured: true,
+      total_count: 1,
+      offset: 0,
+      limit: 50,
+      items: [{
+        id: 'account-missing-filtered-fields',
+        platform: 'tiktok',
+        username: '缺失筛选字段测试',
+        gender: null,
+        age: null,
+        data_source: 'TikHub API',
+        collected_at: '2026-07-19T14:32:17Z',
+      }],
+    })
+    const mounted = mountPanel()
+
+    await act(async () => Promise.resolve())
+
+    expect(mounted.container.textContent).toContain('性别：未采集到')
+    expect(mounted.container.textContent).toContain('年龄：未采集到')
+    expect(mounted.container.textContent).not.toContain('任务未设置')
   })
 })

@@ -47,9 +47,10 @@ function TaskResultsPanel({ taskId, taskName }: TaskResultsPanelProps) {
     }
   }, [offset, retryVersion, taskId])
 
-  const unknown = t('taskQueue.results.unknown')
+  const notConfigured = t('taskQueue.results.notConfigured')
+  const notCollected = t('taskQueue.results.notCollected')
   const formatNumber = (value?: number | null) => value == null
-    ? unknown
+    ? notCollected
     : value.toLocaleString(numberLocale)
   const formatDate = (value: string) => {
     const date = new Date(value)
@@ -129,23 +130,28 @@ function TaskResultsPanel({ taskId, taskName }: TaskResultsPanelProps) {
               <tbody>
                 {state.page.items.map((item) => {
                   const account = item.account?.trim()
-                  const genderAge = [item.gender?.trim(), item.age?.toString()]
-                    .filter(Boolean)
-                    .join(' / ')
+                  const gender = item.gender?.trim()
+                    || (state.page.gender_filter_configured ? notCollected : notConfigured)
+                  const age = item.age == null
+                    ? (state.page.age_filter_configured ? notCollected : notConfigured)
+                    : item.age.toString()
                   return (
                     <tr key={item.id}>
                       <td className="task-results__identity">
-                        <strong>{item.username?.trim() || account || unknown}</strong>
+                        <strong>{item.username?.trim() || account || notCollected}</strong>
                         {account ? <span>@{account.replace(/^@/, '')}</span> : null}
                         {item.platform_user_id ? <small>{item.platform_user_id}</small> : null}
                       </td>
                       <td>{platformName(item.platform)}</td>
-                      <td>{item.country_region?.trim() || unknown}</td>
-                      <td>{genderAge || unknown}</td>
+                      <td>{item.country_region?.trim() || notCollected}</td>
+                      <td>
+                        <div>{t('taskQueue.results.genderLabel')}：{gender}</div>
+                        <div>{t('taskQueue.results.ageLabel')}：{age}</div>
+                      </td>
                       <td className="task-results__number">{formatNumber(item.followers_count)}</td>
                       <td className="task-results__number">{formatNumber(item.posts_count)}</td>
                       <td className="task-results__profile">
-                        {item.profile_text?.trim() || item.notes?.trim() || unknown}
+                        {item.profile_text?.trim() || item.notes?.trim() || notCollected}
                       </td>
                       <td>
                         <time dateTime={item.collected_at}>{formatDate(item.collected_at)}</time>

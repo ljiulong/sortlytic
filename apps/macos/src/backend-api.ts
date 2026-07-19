@@ -164,6 +164,8 @@ export type TaskResultsPageView = {
   task_id: string
   task_run_id: string
   run_status: string
+  age_filter_configured: boolean
+  gender_filter_configured: boolean
   total_count: number
   offset: number
   limit: number
