@@ -167,7 +167,7 @@ pub fn normalize_account_with_evidence(
       ));
     }
   };
-  let platform_user_id = first_identifier(
+  let (platform_user_id, platform_user_id_path) = first_identifier_with_path(
     value,
     &[
       "/platform_user_id",
@@ -184,7 +184,7 @@ pub fn normalize_account_with_evidence(
       "/user/sec_user_id",
     ],
   );
-  let account = first_text(
+  let (account, account_path) = first_text_with_path(
     value,
     &[
       "/unique_id",
@@ -217,6 +217,51 @@ pub fn normalize_account_with_evidence(
     })?;
   let priority = source_kind.priority();
   let extracted = fields::extract_account_fields(value, endpoint_key, collected_at);
+  let (username, username_path) = first_text_with_path(
+    value,
+    &[
+      "/nickname",
+      "/display_name",
+      "/name",
+      "/author/nickname",
+      "/user/nickname",
+    ],
+  );
+  let mut account_fields = extracted.values;
+  let mut field_evidence = extracted.evidence;
+  for (field, field_value, raw_path) in [
+    ("platform", Some(platform.clone()), Some("$context.platform")),
+    ("display_name", username.clone(), username_path),
+    ("account_handle", account.clone(), account_path),
+    (
+      "platform_user_id",
+      platform_user_id.clone(),
+      platform_user_id_path,
+    ),
+    (
+      "data_source",
+      Some(endpoint_key.to_string()),
+      Some("$context.endpoint_key"),
+    ),
+    (
+      "collected_at",
+      Some(collected_at.to_string()),
+      Some("$context.collected_at"),
+    ),
+  ] {
+    let Some(field_value) = field_value else {
+      continue;
+    };
+    account_fields.insert(field.to_string(), Value::String(field_value));
+    field_evidence.insert(
+      field.to_string(),
+      FieldEvidence {
+        endpoint_key: endpoint_key.to_string(),
+        raw_path: raw_path.unwrap_or("$context.unknown").to_string(),
+        collected_at: collected_at.to_string(),
+      },
+    );
+  }
   let account_posts = endpoint_key.ends_with(".account_posts");
   let mut field_priorities = BTreeMap::new();
   for field in [
@@ -241,7 +286,7 @@ pub fn normalize_account_with_evidence(
       },
     );
   }
-  for field in extracted.values.keys() {
+  for field in account_fields.keys() {
     field_priorities.insert(field.clone(), priority);
   }
 
@@ -249,16 +294,7 @@ pub fn normalize_account_with_evidence(
     platform,
     identity_key,
     platform_user_id,
-    username: first_text(
-      value,
-      &[
-        "/nickname",
-        "/display_name",
-        "/name",
-        "/author/nickname",
-        "/user/nickname",
-      ],
-    ),
+    username,
     account,
     profile_text: first_text(
       value,
@@ -303,8 +339,7 @@ pub fn normalize_account_with_evidence(
       ],
     ),
     last_posted_at: first_text(value, &["/last_posted_at", "/latest_posted_at"]).or_else(|| {
-      extracted
-        .values
+      account_fields
         .get("last_posted_at")
         .and_then(timestamp_text)
     }),
@@ -317,8 +352,8 @@ pub fn normalize_account_with_evidence(
         "/user/share_url",
       ],
     ),
-    account_fields: extracted.values,
-    field_evidence: extracted.evidence,
+    account_fields,
+    field_evidence,
     field_priorities,
   })
 }
@@ -517,18 +552,39 @@ fn first_text(value: &Value, paths: &[&str]) -> Option<String> {
     })
 }
 
-fn first_identifier(value: &Value, paths: &[&str]) -> Option<String> {
+fn first_identifier_with_path<'a>(
+  value: &Value,
+  paths: &'a [&str],
+) -> (Option<String>, Option<&'a str>) {
   paths
     .iter()
-    .filter_map(|path| value.pointer(path))
-    .find_map(|value| {
-      value
+    .find_map(|path| {
+      let text = value
+        .pointer(path)?
         .as_str()
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .map(ToString::to_string)
-        .or_else(|| value.as_i64().map(|number| number.to_string()))
+        .or_else(|| value.pointer(path)?.as_i64().map(|number| number.to_string()))?;
+      Some((text, *path))
     })
+    .map_or((None, None), |(text, path)| (Some(text), Some(path)))
+}
+
+fn first_text_with_path<'a>(
+  value: &Value,
+  paths: &'a [&str],
+) -> (Option<String>, Option<&'a str>) {
+  paths
+    .iter()
+    .find_map(|path| {
+      let text = value
+        .pointer(path)?
+        .as_str()?
+        .trim();
+      (!text.is_empty()).then(|| (text.to_string(), *path))
+    })
+    .map_or((None, None), |(text, path)| (Some(text), Some(path)))
 }
 
 fn normalized_account_name(value: &str) -> String {

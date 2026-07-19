@@ -243,17 +243,17 @@ fn full_public_account_catalog_records_value_path_endpoint_and_time() {
     "live_level",
     "live_badge",
   ];
-  assert_eq!(
-    account
-      .account_fields
-      .keys()
-      .map(String::as_str)
-      .collect::<BTreeSet<_>>(),
-    expected.into_iter().collect::<BTreeSet<_>>()
-  );
+  let expected = expected.into_iter().collect::<BTreeSet<_>>();
+  let actual = account
+    .account_fields
+    .keys()
+    .map(String::as_str)
+    .collect::<BTreeSet<_>>();
+  assert!(expected.is_subset(&actual));
   assert_eq!(account.account_fields["followers_count"], 0);
   assert_eq!(account.account_fields["live_status"], false);
-  assert!(account.field_evidence.values().all(|evidence| {
+  assert!(expected.iter().all(|field| {
+    let evidence = &account.field_evidence[*field];
     evidence.endpoint_key == "douyin.extended_demographics"
       && evidence.collected_at == "2026-07-20T08:00:00+08:00"
       && evidence.raw_path.starts_with('/')
@@ -493,6 +493,8 @@ fn persisted_account_fields_keep_zero_and_latest_field_evidence() {
         data_type: data_type.to_string(),
         records: vec![json!({
           "user_id": "user-evidence",
+          "unique_id": "account-evidence",
+          "nickname": "证据账号",
           "follower_count": follower_count
         })],
         output_selected: true,
@@ -504,17 +506,40 @@ fn persisted_account_fields_keep_zero_and_latest_field_evidence() {
     .unwrap();
   }
 
-  let (fields, evidence) = connection
+  let (fields, evidence, data_source) = connection
     .query_row(
-      "SELECT account_fields_json, field_evidence_json
+      "SELECT account_fields_json, field_evidence_json, data_source
        FROM collected_account WHERE task_run_id = 'run-evidence'",
       [],
-      |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+      |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, String>(1)?,
+          row.get::<_, String>(2)?,
+        ))
+      },
     )
     .unwrap();
   let fields: Value = serde_json::from_str(&fields).unwrap();
   let evidence: Value = serde_json::from_str(&evidence).unwrap();
   assert_eq!(fields["followers_count"], 0);
+  assert_eq!(fields["platform"], "tiktok");
+  assert_eq!(fields["display_name"], "证据账号");
+  assert_eq!(fields["account_handle"], "account-evidence");
+  assert_eq!(fields["platform_user_id"], "user-evidence");
+  assert_eq!(fields["data_source"], "tiktok.account_profile");
+  assert_eq!(
+    evidence["platform_user_id"]["raw_path"],
+    "/user_id"
+  );
+  assert_eq!(evidence["display_name"]["raw_path"], "/nickname");
+  assert_eq!(evidence["account_handle"]["raw_path"], "/unique_id");
+  assert_eq!(
+    evidence["data_source"]["endpoint_key"],
+    "tiktok.account_profile"
+  );
+  assert!(data_source.contains("tiktok.account_profile"));
+  assert!(data_source.contains("tiktok.comments"));
   assert_eq!(
     evidence["followers_count"]["endpoint_key"],
     "tiktok.account_profile"

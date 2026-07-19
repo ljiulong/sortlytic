@@ -171,10 +171,18 @@ fn persist_account(
   let merged_json = serde_json::to_string(&merged).map_err(json_error)?;
   let account_fields_json = serde_json::to_string(&merged.account_fields).map_err(json_error)?;
   let field_evidence_json = serde_json::to_string(&merged.field_evidence).map_err(json_error)?;
-  let data_source = format!(
-    "TikHub API ({})",
-    data_types.into_iter().collect::<Vec<_>>().join(", ")
-  );
+  let endpoint_sources = data_types
+    .iter()
+    .map(|data_type| format!("{}.{}", merged.platform, data_type))
+    .collect::<BTreeSet<_>>();
+  let data_source = if endpoint_sources.is_empty() {
+    format!(
+      "TikHub API ({})",
+      data_types.into_iter().collect::<Vec<_>>().join(", ")
+    )
+  } else {
+    endpoint_sources.into_iter().collect::<Vec<_>>().join(", ")
+  };
   let region_source = merged.country_region.as_ref().map(|_| "TikHub API");
   let region_confidence = merged.country_region.as_ref().map(|_| "高");
 
