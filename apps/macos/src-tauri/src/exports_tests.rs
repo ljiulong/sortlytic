@@ -47,7 +47,7 @@ fn pdf_export_embeds_its_font_and_does_not_copy_raw_accounts() {
   connection
     .execute(
       "INSERT INTO task_run (id, task_id, status, started_at, ended_at, current_stage)
-       VALUES ('pdf-run', ?1, 'success', ?2, ?2, '已完成')",
+       VALUES ('43ffcb9a-a0bd-4f1e-b5a8-42039682db67', ?1, 'success', ?2, ?2, '已完成')",
       params![report.task_id, "2026-07-19T14:32:17+00:00"],
     )
     .expect("run should insert");
@@ -57,11 +57,22 @@ fn pdf_export_embeds_its_font_and_does_not_copy_raw_accounts() {
          id, task_run_id, platform, identity_key, username, account, profile_text,
          country_region, followers_count, posts_count, data_source, collected_at,
          output_included, created_at, updated_at
-       ) VALUES ('pdf-account', 'pdf-run', 'tiktok', 'id:verified-user', '测试账号',
-         'verified_user', '公开简介', 'US', NULL, 0, 'TikHub API', ?1, 1, ?1, ?1)",
+       ) VALUES ('pdf-account', '43ffcb9a-a0bd-4f1e-b5a8-42039682db67', 'tiktok', 'id:verified-user', '测试账号',
+         'verified_user', '公开简介', 'US', NULL, 0, 'TikHub API (keyword_search)', ?1, 1, ?1, ?1)",
       params!["2026-07-19T14:32:17+00:00"],
     )
     .expect("account should insert");
+  connection
+    .execute(
+      "INSERT INTO collected_account (
+         id, task_run_id, platform, identity_key, username, account, profile_text,
+         country_region, followers_count, posts_count, data_source, collected_at,
+         output_included, created_at, updated_at
+       ) VALUES ('pdf-account-2', '43ffcb9a-a0bd-4f1e-b5a8-42039682db67', 'tiktok', 'id:second-user', '第二个测试账号',
+         'second_user', '第二条公开简介', 'US', NULL, 0, 'TikHub API (keyword_search)', ?1, 1, ?1, ?1)",
+      params!["2026-07-19T14:32:18+00:00"],
+    )
+    .expect("second account should insert");
 
   let analysis = build_report_model(&root_path, &report.task_id, "analysis")
     .expect("analysis report should build");
@@ -79,6 +90,14 @@ fn pdf_export_embeds_its_font_and_does_not_copy_raw_accounts() {
   assert!(!text.contains("See XLSX export for full structured data."));
   assert!(bytes.starts_with(b"%PDF-"));
   assert!(bytes.windows(b"%%EOF".len()).any(|value| value == b"%%EOF"));
+  assert_eq!(
+    bytes
+      .windows(b"/Type/Page".len())
+      .filter(|value| *value == b"/Type/Page")
+      .count(),
+    2,
+    "短分析报告应只有一个 Page 对象和一个 Pages 对象"
+  );
 
   std::fs::remove_dir_all(root_path).ok();
 }

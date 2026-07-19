@@ -261,7 +261,7 @@ fn flow(
 }
 
 fn heading(text: &str) -> FlowLine {
-  flow(text, 13.0, TextTone::Accent, 0.0, 5.0, 2.0, 60)
+  flow(text, 13.0, TextTone::Accent, 0.0, 3.5, 1.5, 60)
 }
 
 fn body(text: &str) -> FlowLine {
