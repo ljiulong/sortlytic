@@ -99,6 +99,7 @@ export type AccountFieldValueType = 'text' | 'integer' | 'boolean' | 'text_list'
 
 export type AccountSourceCapabilityView = {
   key: string
+  label?: string
   display_name: string
   description: string
   input_kind: AccountSourceInputKind
@@ -116,6 +117,7 @@ export type AccountFieldGroupView = {
 export type AccountFieldCapabilityView = {
   key: string
   group: string
+  label?: string
   display_name: string
   description: string
   value_type: AccountFieldValueType
@@ -123,6 +125,7 @@ export type AccountFieldCapabilityView = {
   default_selected: boolean
   required_operation_keys: string[]
   missing_reason?: string | null
+  supported_platforms?: string[]
 }
 
 export type AccountCollectionCapabilityView = {
