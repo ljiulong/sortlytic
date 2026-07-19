@@ -166,7 +166,12 @@ fn single_endpoints_expose_a_single_request_contract() {
       assert_eq!(serialized["region_filter"], "unsupported");
       assert_eq!(serialized["time_range_filter"], "unsupported");
       assert_eq!(serialized["max_request_count"], 1);
-      assert!(capability.optional_params.is_empty());
+      if platform == "xiaohongshu" {
+        assert!(capability.optional_params.iter().any(|value| value == "share_text"));
+        assert_eq!(capability.optional_params.len(), 2);
+      } else {
+        assert!(capability.optional_params.is_empty());
+      }
     }
   }
 }
