@@ -39,6 +39,17 @@ fn v8_backup_precedes_cleanup_and_only_fresh_queue_snapshots_are_removed() {
   );
 
   let backup_path = only_v8_backup(&root);
+  let manifest_path = backup_path.with_extension("manifest.json");
+  let manifest: serde_json::Value = serde_json::from_slice(
+    &fs::read(&manifest_path).expect("rollback manifest should exist"),
+  )
+  .expect("rollback manifest should be valid JSON");
+  assert_eq!(manifest["from_schema_version"], 7);
+  assert_eq!(manifest["to_schema_version"], 8);
+  assert_eq!(
+    manifest["backup_file_name"],
+    backup_path.file_name().unwrap().to_str().unwrap()
+  );
   let mode = fs::symlink_metadata(&backup_path)
     .unwrap()
     .permissions()
@@ -269,7 +280,7 @@ fn v8_backups(root: &Path) -> Vec<PathBuf> {
       path
         .file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with("app-v7-before-v8-"))
+        .is_some_and(|name| name.starts_with("app-v7-before-v8-") && name.ends_with(".sqlite"))
     })
     .collect()
 }

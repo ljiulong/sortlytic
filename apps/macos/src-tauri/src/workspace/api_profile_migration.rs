@@ -1,5 +1,5 @@
 use std::fs::{self, DirBuilder, File, OpenOptions};
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -93,7 +93,7 @@ pub(super) fn apply_api_profile_migration(connection: &mut Connection) -> AppRes
     return Ok(());
   }
 
-  let backup_path = create_consistent_v7_backup(connection)?;
+  let backup_path = create_consistent_migration_backup(connection, 7, 8)?;
   let transaction = connection
     .transaction_with_behavior(TransactionBehavior::Immediate)
     .map_err(database_error)?;
@@ -148,38 +148,63 @@ fn record_migration(connection: &Connection) -> AppResult<()> {
   update_workspace_schema_version(connection, 8)
 }
 
-fn create_consistent_v7_backup(connection: &Connection) -> AppResult<PathBuf> {
+pub(super) fn create_consistent_migration_backup(
+  connection: &Connection,
+  from_version: i64,
+  to_version: i64,
+) -> AppResult<PathBuf> {
   let registered_root: String = connection
     .query_row("SELECT root_path FROM workspace", [], |row| row.get(0))
     .map_err(database_error)?;
   let root_path = fs::canonicalize(&registered_root)
-    .map_err(|error| workspace_error(format!("无法解析 v8 迁移备份工作区路径：{error}")))?;
+    .map_err(|error| workspace_error(format!("无法解析迁移备份工作区路径：{error}")))?;
   let backup_directory = ensure_private_backup_directory(&root_path)?;
   let backup_path = backup_directory.join(format!(
-    "app-v7-before-v8-{}-{}.sqlite",
+    "app-v{from_version}-before-v{to_version}-{}-{}.sqlite",
     Utc::now().timestamp_millis(),
     Uuid::new_v4()
   ));
+  let manifest_path = backup_path.with_extension("manifest.json");
   let result = (|| -> AppResult<()> {
     let file = OpenOptions::new()
       .write(true)
       .create_new(true)
       .mode(PRIVATE_FILE_MODE)
       .open(&backup_path)
-      .map_err(|error| workspace_error(format!("无法创建 v8 迁移备份：{error}")))?;
+      .map_err(|error| workspace_error(format!("无法创建迁移备份：{error}")))?;
     file
       .set_permissions(fs::Permissions::from_mode(PRIVATE_FILE_MODE))
-      .map_err(|error| workspace_error(format!("无法设置 v8 迁移备份权限：{error}")))?;
+      .map_err(|error| workspace_error(format!("无法设置迁移备份权限：{error}")))?;
     drop(file);
     connection
       .execute("VACUUM INTO ?1", params![backup_path.to_string_lossy()])
-      .map_err(|error| database_error(format!("无法生成 v8 迁移一致性备份：{error}")))?;
+      .map_err(|error| database_error(format!("无法生成迁移一致性备份：{error}")))?;
     fs::set_permissions(&backup_path, fs::Permissions::from_mode(PRIVATE_FILE_MODE))
-      .map_err(|error| workspace_error(format!("无法固定 v8 迁移备份权限：{error}")))?;
+      .map_err(|error| workspace_error(format!("无法固定迁移备份权限：{error}")))?;
     validate_private_regular_file(&backup_path)?;
     File::open(&backup_path)
       .and_then(|file| file.sync_all())
-      .map_err(|error| workspace_error(format!("无法同步 v8 迁移备份：{error}")))?;
+      .map_err(|error| workspace_error(format!("无法同步迁移备份：{error}")))?;
+    let manifest = serde_json::to_vec_pretty(&serde_json::json!({
+      "backup_file_name": backup_path.file_name().and_then(|name| name.to_str()),
+      "created_at": Utc::now().to_rfc3339(),
+      "from_schema_version": from_version,
+      "restore_boundary": "关闭 Sortlytic 后，用该 SQLite 副本替换工作区 app.sqlite；旧二进制不得写入升级后的工作区",
+      "to_schema_version": to_version,
+      "workspace_root": root_path,
+    }))
+    .map_err(|error| workspace_error(format!("无法生成迁移恢复清单：{error}")))?;
+    let mut manifest_file = OpenOptions::new()
+      .write(true)
+      .create_new(true)
+      .mode(PRIVATE_FILE_MODE)
+      .open(&manifest_path)
+      .map_err(|error| workspace_error(format!("无法创建迁移恢复清单：{error}")))?;
+    manifest_file
+      .write_all(&manifest)
+      .and_then(|_| manifest_file.sync_all())
+      .map_err(|error| workspace_error(format!("无法同步迁移恢复清单：{error}")))?;
+    validate_private_regular_file(&manifest_path)?;
     File::open(&backup_directory)
       .and_then(|file| file.sync_all())
       .map_err(|error| workspace_error(format!("无法同步 v8 迁移备份目录：{error}")))?;
@@ -187,6 +212,7 @@ fn create_consistent_v7_backup(connection: &Connection) -> AppResult<PathBuf> {
   })();
   if result.is_err() {
     fs::remove_file(&backup_path).ok();
+    fs::remove_file(&manifest_path).ok();
   }
   result.map(|_| backup_path)
 }
