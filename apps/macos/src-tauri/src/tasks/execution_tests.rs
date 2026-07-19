@@ -68,6 +68,85 @@ fn failed_run_can_create_a_new_retry_run() {
 }
 
 #[test]
+fn budget_stop_preserves_persisted_results_as_partial_success() {
+  let (root_path, task, _) = prepared_task_workspace("execution-budget-partial");
+  enqueue_task(&root_path, &task.id).expect("task should enqueue");
+  let running = claim_next_task(&root_path)
+    .expect("claim should succeed")
+    .expect("queued task should be claimed");
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  connection
+    .execute(
+      "INSERT INTO collected_account (
+         id, task_run_id, platform, identity_key, username, data_source, collected_at,
+         output_included, created_at, updated_at
+       ) VALUES ('budget-account', ?1, 'tiktok', 'id:budget-account', '预算内结果',
+                 'TikHub API', ?2, 1, ?2, ?2)",
+      params![running.id, "2026-07-20T00:00:00+00:00"],
+    )
+    .expect("persisted result should insert");
+  drop(connection);
+
+  let stopped = fail_task_run(
+    &root_path,
+    &running.id,
+    "COST_LIMIT_ERROR",
+    "TikHub 本次报价将超过任务预算，已停止请求",
+    false,
+  )
+  .expect("budget stop with results should settle the run");
+  let stopped_task = get_task(&root_path, &task.id).expect("task should load");
+  let page = crate::records::list_task_results(&root_path, &task.id, 50, 0)
+    .expect("budget-limited results should remain readable");
+  let connection = open_workspace_connection(&root_path).expect("database should reopen");
+  let step_state = connection
+    .query_row(
+      "SELECT status, stop_reason FROM task_run_step WHERE task_run_id = ?1",
+      [&running.id],
+      |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+    )
+    .expect("run step should remain auditable");
+
+  assert_eq!(stopped.status, "partial_success");
+  assert_eq!(stopped.current_stage_code, "PARTIAL_SUCCESS");
+  assert_eq!(stopped.error_code.as_deref(), Some("COST_LIMIT_ERROR"));
+  assert!(!stopped.retryable);
+  assert_eq!(stopped_task.status, "partial_success");
+  assert!(stopped_task.completed_at.is_some());
+  assert_eq!(page.total_count, 1);
+  assert_eq!(page.items[0].username.as_deref(), Some("预算内结果"));
+  assert_eq!(
+    step_state,
+    ("success".to_string(), Some("budget_limit".to_string()))
+  );
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn budget_stop_without_results_remains_failed() {
+  let (root_path, task, _) = prepared_task_workspace("execution-budget-empty");
+  enqueue_task(&root_path, &task.id).expect("task should enqueue");
+  let running = claim_next_task(&root_path)
+    .expect("claim should succeed")
+    .expect("queued task should be claimed");
+
+  let stopped = fail_task_run(
+    &root_path,
+    &running.id,
+    "COST_LIMIT_ERROR",
+    "TikHub 免费额度与充值余额合计不足，已停止请求",
+    false,
+  )
+  .expect("empty budget stop should settle the run");
+  let stopped_task = get_task(&root_path, &task.id).expect("task should load");
+
+  assert_eq!(stopped.status, "failed");
+  assert_eq!(stopped_task.status, "failed");
+  assert!(crate::records::list_task_results(&root_path, &task.id, 50, 0).is_err());
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn latest_task_runs_returns_only_the_newest_attempt_per_task() {
   let (root_path, task, _) = prepared_task_workspace("latest-task-runs");
   let first = enqueue_task(&root_path, &task.id).expect("task should enqueue");
