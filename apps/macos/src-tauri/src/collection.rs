@@ -4,6 +4,7 @@ use serde_json::Value;
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 use crate::tasks::CostEstimateView;
 
+mod account_capabilities;
 mod capabilities;
 mod form_plan;
 pub(crate) mod plan_estimate;
@@ -11,46 +12,14 @@ mod plan_validation;
 
 use capabilities::{endpoint_for, find_endpoint};
 
+pub use account_capabilities::{
+  AccountCollectionCapabilityView, AccountFieldAvailability, AccountFieldCapabilityView,
+  AccountFieldGroupView, AccountFieldValueType, AccountSourceCapabilityView,
+  AccountSourceInputKind, DataTypeCapabilityView, FilterExecution, PaginationMode,
+  PlatformCapabilityView,
+};
 pub use form_plan::generate_form_collection_plan;
 pub use plan_validation::validate_collection_plan;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PlatformCapabilityView {
-  pub platform: String,
-  pub display_name: String,
-  pub data_types: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum PaginationMode {
-  Single,
-  Cursor,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum FilterExecution {
-  Provider,
-  Local,
-  Unsupported,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DataTypeCapabilityView {
-  pub platform: String,
-  pub data_type: String,
-  pub display_name: String,
-  pub endpoint_key: String,
-  pub required_params: Vec<String>,
-  pub optional_params: Vec<String>,
-  pub pagination_mode: PaginationMode,
-  pub region_filter: FilterExecution,
-  pub time_range_filter: FilterExecution,
-  pub provider_time_ranges: Vec<String>,
-  pub max_page_size: i64,
-  pub max_request_count: i64,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FormCollectionPlanRequest {
@@ -102,6 +71,12 @@ pub fn list_supported_platforms() -> Vec<PlatformCapabilityView> {
 
 pub fn list_platform_data_types(platform: &str) -> AppResult<Vec<DataTypeCapabilityView>> {
   capabilities::list_platform_data_types(platform)
+}
+
+pub fn get_account_collection_capabilities(
+  platform: &str,
+) -> AppResult<AccountCollectionCapabilityView> {
+  account_capabilities::get_account_collection_capabilities(platform)
 }
 
 pub fn validate_collection_params(

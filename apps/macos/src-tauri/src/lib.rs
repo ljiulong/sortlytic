@@ -29,8 +29,8 @@ use api_profile_commands::{
 use app_runtime::workspace_context_from_summary;
 use app_state::{AppState, BackendStatus, WorkspaceContext};
 use collection::{
-  CollectionParamValidationResult, CollectionPlanDraftView, DataTypeCapabilityView,
-  FormCollectionPlanRequest, PlatformCapabilityView,
+  AccountCollectionCapabilityView, CollectionParamValidationResult, CollectionPlanDraftView,
+  DataTypeCapabilityView, FormCollectionPlanRequest, PlatformCapabilityView,
 };
 use config_commands::quote_tikhub_connector_price;
 use domain::{AppError, AppErrorStage, AppResult};
@@ -172,6 +172,13 @@ fn list_supported_platforms() -> AppResult<Vec<PlatformCapabilityView>> {
 #[tauri::command]
 fn list_platform_data_types(platform: String) -> AppResult<Vec<DataTypeCapabilityView>> {
   collection::list_platform_data_types(&platform)
+}
+
+#[tauri::command]
+fn get_account_collection_capabilities(
+  platform: String,
+) -> AppResult<AccountCollectionCapabilityView> {
+  collection::get_account_collection_capabilities(&platform)
 }
 
 #[tauri::command]
@@ -439,6 +446,7 @@ pub fn run() {
       list_task_results,
       list_supported_platforms,
       list_platform_data_types,
+      get_account_collection_capabilities,
       validate_collection_params,
       generate_form_collection_plan,
       preview_collection_plan,
