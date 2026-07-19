@@ -246,6 +246,55 @@ mod tests {
   }
 
   #[test]
+  fn low_budget_matrix_repeats_budget_and_balance_boundaries_three_rounds() {
+    const REQUEST_QUOTE_MICROS: i64 = 10_000;
+
+    for round in 1..=3 {
+      for tenths in 1_i64..=10 {
+        let limit_micros = tenths * 100_000;
+        let label = format!("第 {round} 轮 ${:.1}", tenths as f64 / 10.0);
+        let exact_budget = evaluate_gate(
+          limit_micros,
+          limit_micros - REQUEST_QUOTE_MICROS,
+          REQUEST_QUOTE_MICROS,
+          limit_micros * 2,
+        )
+        .unwrap_or_else(|error| panic!("{label} 精确到达设定上限应允许：{}", error.message));
+        assert_eq!(
+          exact_budget.accumulated_after, limit_micros,
+          "{label} 累计报价应精确等于设定上限"
+        );
+
+        let budget_error = evaluate_gate(
+          limit_micros,
+          limit_micros,
+          REQUEST_QUOTE_MICROS,
+          limit_micros * 2,
+        )
+        .unwrap_err();
+        assert!(
+          budget_error.message.contains("预算"),
+          "{label} 下一次请求将超过设定上限时必须停止"
+        );
+
+        let exact_balance = evaluate_gate(limit_micros * 2, 0, limit_micros, limit_micros)
+          .unwrap_or_else(|error| panic!("{label} 精确用完实时余额应允许：{}", error.message));
+        assert_eq!(
+          exact_balance.accumulated_after, limit_micros,
+          "{label} 余额边界的累计报价应正确"
+        );
+
+        let balance_error =
+          evaluate_gate(limit_micros * 2, 0, limit_micros + 1, limit_micros).unwrap_err();
+        assert!(
+          balance_error.message.contains("余额"),
+          "{label} 报价比实时余额多 1 微美元时必须停止"
+        );
+      }
+    }
+  }
+
+  #[test]
   fn usd_values_convert_to_exact_micros() {
     assert_eq!(usd_to_micros(0.05, "额度").expect("金额应转换"), 50_000);
     assert!(usd_to_micros(f64::NAN, "额度").is_err());
