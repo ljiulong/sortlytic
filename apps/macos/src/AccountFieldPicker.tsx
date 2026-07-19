@@ -214,7 +214,11 @@ function AccountFieldPicker({
                           : t('accountFields.selectGroup')}
                       </button>
                     </header>
-                    <div className="account-field-picker__rows" id={`${contentId}-${group.key}`}>
+                    <div
+                      className="account-field-picker__rows"
+                      hidden={collapsed}
+                      id={`${contentId}-${group.key}`}
+                    >
                       {visibleFields.map((field) => {
                         const unsupported = field.availability === 'unsupported'
                         return (

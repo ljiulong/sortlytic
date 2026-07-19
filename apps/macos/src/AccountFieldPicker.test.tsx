@@ -105,6 +105,20 @@ describe('AccountFieldPicker', () => {
     expect(container.textContent).toContain('需补全，会增加请求')
   })
 
+  it('分类折叠状态与 aria-expanded 和字段可见性保持一致', async () => {
+    const { container } = await mountPicker()
+    await act(async () => buttonByText(container, '配置字段')?.click())
+    const panel = container.querySelector<HTMLElement>('.account-field-picker__panel[data-active="true"]')
+    const toggle = panel?.querySelector<HTMLButtonElement>('.account-field-picker__group-header > button:first-child')
+    const rows = panel?.querySelector<HTMLElement>('.account-field-picker__rows')
+
+    expect(toggle?.getAttribute('aria-expanded')).toBe('true')
+    expect(rows?.hasAttribute('hidden')).toBe(false)
+    await act(async () => toggle?.click())
+    expect(toggle?.getAttribute('aria-expanded')).toBe('false')
+    expect(rows?.hasAttribute('hidden')).toBe(true)
+  })
+
   it('全部可用不会选择不支持字段，恢复操作使用核心预设', async () => {
     const { container, onChange } = await mountPicker([])
     await act(async () => buttonByText(container, '配置字段')?.click())

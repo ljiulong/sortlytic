@@ -219,7 +219,7 @@
   min-width: 0;
   padding: 0;
   text-align: left;
-  cursor: default;
+  cursor: pointer;
 }
 
 .account-field-picker__group-header > button:first-child > span {
@@ -240,13 +240,21 @@
 }
 
 .account-field-picker__group-header svg {
-  display: none;
+  display: block;
   color: var(--text-muted);
   transition: transform 120ms ease;
 }
 
 .account-field-picker__rows {
   display: grid;
+}
+
+.account-field-picker__rows[hidden] {
+  display: none;
+}
+
+.account-field-picker__panel[data-collapsed='true'] .account-field-picker__group-header svg {
+  transform: rotate(-90deg);
 }
 
 .account-field-picker__row {
