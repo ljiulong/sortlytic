@@ -42,11 +42,14 @@ pub(super) fn normalize_provider_cursor(
 
 fn canonical_cursor_value(platform: &str, data_type: &str, cursor: &Value) -> Option<Value> {
   match (platform.trim(), data_type.trim()) {
-    ("tiktok", "keyword_search") => canonical_scalar(cursor, &["offset", "cursor"]),
+    ("tiktok", "keyword_search" | "user_search") => canonical_scalar(cursor, &["offset", "cursor"]),
+    ("tiktok", "followers" | "followings") => canonical_tiktok_relation(cursor),
+    ("tiktok", "similar_accounts") => canonical_text_cursor(cursor, &["page_token"]),
     ("tiktok" | "douyin", "account_posts") => canonical_scalar(cursor, &["max_cursor", "cursor"]),
     ("tiktok" | "douyin", "comments") => canonical_scalar(cursor, &["cursor"]),
-    ("douyin", "keyword_search") => canonical_douyin_search(cursor),
-    ("xiaohongshu", "keyword_search") => canonical_xiaohongshu_search(cursor),
+    ("douyin", "keyword_search" | "user_search") => canonical_douyin_search(cursor),
+    ("douyin", "followers" | "followings") => canonical_douyin_relation(cursor),
+    ("xiaohongshu", "keyword_search" | "user_search") => canonical_xiaohongshu_search(cursor),
     ("xiaohongshu", "comments") => canonical_xiaohongshu_comments(cursor),
     ("xiaohongshu", "account_posts") => canonical_text_or_integer(cursor, &["cursor"]),
     _ => None,
@@ -56,12 +59,20 @@ fn canonical_cursor_value(platform: &str, data_type: &str, cursor: &Value) -> Op
 fn endpoint_key(platform: &str, data_type: &str) -> Option<&'static str> {
   match (platform.trim(), data_type.trim()) {
     ("tiktok", "keyword_search") => Some("tiktok.keyword_search"),
+    ("tiktok", "user_search") => Some("tiktok.user_search"),
+    ("tiktok", "followers") => Some("tiktok.followers"),
+    ("tiktok", "followings") => Some("tiktok.followings"),
+    ("tiktok", "similar_accounts") => Some("tiktok.similar_accounts"),
     ("tiktok", "comments") => Some("tiktok.comments"),
     ("tiktok", "account_posts") => Some("tiktok.account_posts"),
     ("douyin", "keyword_search") => Some("douyin.keyword_search"),
+    ("douyin", "user_search") => Some("douyin.user_search"),
+    ("douyin", "followers") => Some("douyin.followers"),
+    ("douyin", "followings") => Some("douyin.followings"),
     ("douyin", "comments") => Some("douyin.comments"),
     ("douyin", "account_posts") => Some("douyin.account_posts"),
     ("xiaohongshu", "keyword_search") => Some("xiaohongshu.keyword_search"),
+    ("xiaohongshu", "user_search") => Some("xiaohongshu.user_search"),
     ("xiaohongshu", "comments") => Some("xiaohongshu.comments"),
     ("xiaohongshu", "account_posts") => Some("xiaohongshu.account_posts"),
     _ => None,
@@ -104,6 +115,42 @@ fn canonical_text_or_integer(cursor: &Value, object_keys: &[&str]) -> Option<Val
     return Some(Value::from(number));
   }
   nonempty_string(cursor).map(Value::String)
+}
+
+fn canonical_text_cursor(cursor: &Value, object_keys: &[&str]) -> Option<Value> {
+  let cursor = match cursor {
+    Value::Object(object)
+      if object.len() == 1 && object.keys().all(|key| object_keys.contains(&key.as_str())) =>
+    {
+      object_keys.iter().find_map(|key| object.get(*key))?
+    }
+    value => value,
+  };
+  nonempty_string(cursor).map(Value::String)
+}
+
+fn canonical_tiktok_relation(cursor: &Value) -> Option<Value> {
+  let object = cursor.as_object()?;
+  if !has_only_keys(object, &["min_time", "page_token"]) {
+    return None;
+  }
+  let mut normalized = Map::from_iter([(
+    "min_time".to_string(),
+    Value::from(nonnegative_integer(object.get("min_time")?)?),
+  )]);
+  copy_optional_string(object, "page_token", &mut normalized)?;
+  Some(Value::Object(normalized))
+}
+
+fn canonical_douyin_relation(cursor: &Value) -> Option<Value> {
+  let object = cursor.as_object()?;
+  if object.len() != 1 || !has_only_keys(object, &["max_time"]) {
+    return None;
+  }
+  let max_time = object.get("max_time")?;
+  let max_time = nonempty_string(max_time)
+    .or_else(|| nonnegative_integer(max_time).map(|value| value.to_string()))?;
+  Some(serde_json::json!({ "max_time": max_time }))
 }
 
 fn canonical_douyin_search(cursor: &Value) -> Option<Value> {
@@ -244,10 +291,14 @@ pub(super) fn extract_next_cursor(
   if request.data_type == "comments" && request.platform == "xiaohongshu" {
     return required_continuation_object(data, response, &["cursor", "index"]);
   }
-  if request.data_type == "keyword_search" && request.platform == "douyin" {
+  if matches!(request.data_type.as_str(), "keyword_search" | "user_search")
+    && request.platform == "douyin"
+  {
     return continuation_object(data, response, &["cursor", "search_id", "backtrace"]);
   }
-  if request.data_type == "keyword_search" && request.platform == "xiaohongshu" {
+  if matches!(request.data_type.as_str(), "keyword_search" | "user_search")
+    && request.platform == "xiaohongshu"
+  {
     let mut cursor = Map::new();
     let current_page = request_query_i64(request, "page").unwrap_or(1);
     cursor.insert(
@@ -264,7 +315,24 @@ pub(super) fn extract_next_cursor(
     }
     return Some(Value::Object(cursor));
   }
-  if request.data_type == "keyword_search" {
+  if request.platform == "tiktok"
+    && matches!(request.data_type.as_str(), "followers" | "followings")
+  {
+    return continuation_object(data, response, &["min_time", "page_token"]);
+  }
+  if request.platform == "tiktok" && request.data_type == "similar_accounts" {
+    return continuation_field(data, response, "next_page_token")
+      .or_else(|| continuation_field(data, response, "page_token"))
+      .cloned();
+  }
+  if request.platform == "douyin"
+    && matches!(request.data_type.as_str(), "followers" | "followings")
+  {
+    return continuation_field(data, response, "max_time")
+      .cloned()
+      .map(|value| serde_json::json!({ "max_time": value }));
+  }
+  if matches!(request.data_type.as_str(), "keyword_search" | "user_search") {
     return continuation_field(data, response, "cursor")
       .or_else(|| continuation_field(data, response, "offset"))
       .cloned()
@@ -333,4 +401,63 @@ fn request_query_value(request: &TikHubCollectionRequest, key: &str) -> Option<V
     .iter()
     .find(|(candidate, _)| candidate == key)
     .map(|(_, value)| Value::String(value.clone()))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn relation_cursor_contracts_preserve_all_provider_pagination_fields() {
+    assert_eq!(
+      normalize_provider_cursor(
+        "tiktok",
+        "followers",
+        &serde_json::json!({ "min_time": 10, "page_token": "next" }),
+      )
+      .unwrap(),
+      serde_json::json!({
+        "endpoint_key": "tiktok.followers",
+        "value": { "min_time": 10, "page_token": "next" }
+      })
+    );
+    assert_eq!(
+      normalize_provider_cursor(
+        "douyin",
+        "followings",
+        &serde_json::json!({ "max_time": 123 }),
+      )
+      .unwrap(),
+      serde_json::json!({
+        "endpoint_key": "douyin.followings",
+        "value": { "max_time": "123" }
+      })
+    );
+  }
+
+  #[test]
+  fn search_and_similar_cursor_contracts_reject_wrong_endpoint_or_shape() {
+    assert!(normalize_provider_cursor("tiktok", "user_search", &Value::from(20)).is_ok());
+    assert!(normalize_provider_cursor(
+      "xiaohongshu",
+      "user_search",
+      &serde_json::json!({ "page": 2, "search_id": "search-1" }),
+    )
+    .is_ok());
+    assert!(normalize_provider_cursor(
+      "tiktok",
+      "similar_accounts",
+      &serde_json::json!({ "page_token": 2 }),
+    )
+    .is_err());
+    assert!(normalize_input_cursor(
+      "tiktok",
+      "user_search",
+      Some(&serde_json::json!({
+        "endpoint_key": "tiktok.keyword_search",
+        "value": 20
+      })),
+    )
+    .is_err());
+  }
 }

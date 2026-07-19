@@ -24,6 +24,13 @@ pub(super) struct EndpointDefinition {
 const NO_TIME_RANGES: &[&str] = &[];
 const TIKTOK_TIME_RANGES: &[&str] = &["1", "7", "30", "180"];
 const DOUYIN_XIAOHONGSHU_TIME_RANGES: &[&str] = &["1", "7", "180"];
+const LEGACY_DATA_TYPES: &[&str] = &[
+  "keyword_search",
+  "comments",
+  "account_profile",
+  "account_posts",
+  "item_detail",
+];
 
 const ENDPOINTS: &[EndpointDefinition] = &[
   EndpointDefinition {
@@ -251,6 +258,156 @@ const ENDPOINTS: &[EndpointDefinition] = &[
     max_page_size: 1,
     max_request_count: 1,
   },
+  EndpointDefinition {
+    platform: "tiktok",
+    platform_name: "TikTok",
+    data_type: "user_search",
+    data_type_name: "搜索用户",
+    endpoint_key: "tiktok.user_search",
+    required_params: &["keyword"],
+    optional_params: &["page_size"],
+    pagination_mode: PaginationMode::Cursor,
+    region_filter: FilterExecution::Unsupported,
+    time_range_filter: FilterExecution::Unsupported,
+    provider_time_ranges: NO_TIME_RANGES,
+    max_page_size: 20,
+    max_request_count: 100,
+  },
+  EndpointDefinition {
+    platform: "tiktok",
+    platform_name: "TikTok",
+    data_type: "followers",
+    data_type_name: "账号粉丝",
+    endpoint_key: "tiktok.followers",
+    required_params: &["account_id"],
+    optional_params: &["page_size"],
+    pagination_mode: PaginationMode::Cursor,
+    region_filter: FilterExecution::Unsupported,
+    time_range_filter: FilterExecution::Unsupported,
+    provider_time_ranges: NO_TIME_RANGES,
+    max_page_size: 20,
+    max_request_count: 200,
+  },
+  EndpointDefinition {
+    platform: "tiktok",
+    platform_name: "TikTok",
+    data_type: "followings",
+    data_type_name: "账号关注",
+    endpoint_key: "tiktok.followings",
+    required_params: &["account_id"],
+    optional_params: &["page_size"],
+    pagination_mode: PaginationMode::Cursor,
+    region_filter: FilterExecution::Unsupported,
+    time_range_filter: FilterExecution::Unsupported,
+    provider_time_ranges: NO_TIME_RANGES,
+    max_page_size: 20,
+    max_request_count: 200,
+  },
+  EndpointDefinition {
+    platform: "tiktok",
+    platform_name: "TikTok",
+    data_type: "similar_accounts",
+    data_type_name: "相似账号推荐",
+    endpoint_key: "tiktok.similar_accounts",
+    required_params: &["account_id"],
+    optional_params: &[],
+    pagination_mode: PaginationMode::Cursor,
+    region_filter: FilterExecution::Unsupported,
+    time_range_filter: FilterExecution::Unsupported,
+    provider_time_ranges: NO_TIME_RANGES,
+    max_page_size: 20,
+    max_request_count: 100,
+  },
+  EndpointDefinition {
+    platform: "tiktok",
+    platform_name: "TikTok",
+    data_type: "account_country",
+    data_type_name: "账号国家或地区",
+    endpoint_key: "tiktok.account_country",
+    required_params: &["account_id"],
+    optional_params: &[],
+    pagination_mode: PaginationMode::Single,
+    region_filter: FilterExecution::Unsupported,
+    time_range_filter: FilterExecution::Unsupported,
+    provider_time_ranges: NO_TIME_RANGES,
+    max_page_size: 1,
+    max_request_count: 1,
+  },
+  EndpointDefinition {
+    platform: "douyin",
+    platform_name: "抖音",
+    data_type: "user_search",
+    data_type_name: "搜索用户",
+    endpoint_key: "douyin.user_search",
+    required_params: &["keyword"],
+    optional_params: &[],
+    pagination_mode: PaginationMode::Cursor,
+    region_filter: FilterExecution::Unsupported,
+    time_range_filter: FilterExecution::Unsupported,
+    provider_time_ranges: NO_TIME_RANGES,
+    max_page_size: 20,
+    max_request_count: 100,
+  },
+  EndpointDefinition {
+    platform: "douyin",
+    platform_name: "抖音",
+    data_type: "followers",
+    data_type_name: "账号粉丝",
+    endpoint_key: "douyin.followers",
+    required_params: &["account_id"],
+    optional_params: &["page_size"],
+    pagination_mode: PaginationMode::Cursor,
+    region_filter: FilterExecution::Unsupported,
+    time_range_filter: FilterExecution::Unsupported,
+    provider_time_ranges: NO_TIME_RANGES,
+    max_page_size: 20,
+    max_request_count: 200,
+  },
+  EndpointDefinition {
+    platform: "douyin",
+    platform_name: "抖音",
+    data_type: "followings",
+    data_type_name: "账号关注",
+    endpoint_key: "douyin.followings",
+    required_params: &["account_id"],
+    optional_params: &["page_size"],
+    pagination_mode: PaginationMode::Cursor,
+    region_filter: FilterExecution::Unsupported,
+    time_range_filter: FilterExecution::Unsupported,
+    provider_time_ranges: NO_TIME_RANGES,
+    max_page_size: 20,
+    max_request_count: 200,
+  },
+  EndpointDefinition {
+    platform: "douyin",
+    platform_name: "抖音",
+    data_type: "extended_demographics",
+    data_type_name: "人口属性与直播资料",
+    endpoint_key: "douyin.extended_demographics",
+    required_params: &["account_id"],
+    optional_params: &[],
+    pagination_mode: PaginationMode::Single,
+    region_filter: FilterExecution::Unsupported,
+    time_range_filter: FilterExecution::Unsupported,
+    provider_time_ranges: NO_TIME_RANGES,
+    max_page_size: 1,
+    max_request_count: 1,
+  },
+  EndpointDefinition {
+    platform: "xiaohongshu",
+    platform_name: "小红书",
+    data_type: "user_search",
+    data_type_name: "搜索用户",
+    endpoint_key: "xiaohongshu.user_search",
+    required_params: &["keyword"],
+    optional_params: &[],
+    pagination_mode: PaginationMode::Cursor,
+    region_filter: FilterExecution::Unsupported,
+    time_range_filter: FilterExecution::Unsupported,
+    provider_time_ranges: NO_TIME_RANGES,
+    max_page_size: 20,
+    max_request_count: 100,
+  },
 ];
 
 pub(super) fn list_supported_platforms() -> Vec<PlatformCapabilityView> {
@@ -259,7 +416,9 @@ pub(super) fn list_supported_platforms() -> Vec<PlatformCapabilityView> {
     .filter_map(|platform| {
       let endpoints = ENDPOINTS
         .iter()
-        .filter(|endpoint| endpoint.platform == *platform)
+        .filter(|endpoint| {
+          endpoint.platform == *platform && LEGACY_DATA_TYPES.contains(&endpoint.data_type)
+        })
         .collect::<Vec<_>>();
       endpoints.first().map(|first| PlatformCapabilityView {
         platform: (*platform).to_string(),
@@ -277,7 +436,9 @@ pub(super) fn list_platform_data_types(platform: &str) -> AppResult<Vec<DataType
   let platform = normalize_platform(platform)?;
   let items = ENDPOINTS
     .iter()
-    .filter(|endpoint| endpoint.platform == platform)
+    .filter(|endpoint| {
+      endpoint.platform == platform && LEGACY_DATA_TYPES.contains(&endpoint.data_type)
+    })
     .map(endpoint_to_view)
     .collect::<Vec<_>>();
 
