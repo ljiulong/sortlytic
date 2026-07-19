@@ -54,6 +54,7 @@ function CollectionFilterFields({
         <legend className="collection-builder__visually-hidden">{t('fields.ageRange')}</legend>
         <label className="collection-builder__filter-toggle">
           <input
+            data-ui="sortlytic-checkbox"
             disabled={!ageFilterSupported}
             type="checkbox"
             {...register('ageRangeEnabled')}
@@ -109,6 +110,7 @@ function CollectionFilterFields({
         <legend className="collection-builder__visually-hidden">{t('fields.gender')}</legend>
         <label className="collection-builder__filter-toggle">
           <input
+            data-ui="sortlytic-checkbox"
             disabled={!genderFilterSupported}
             type="checkbox"
             {...register('genderFilterEnabled')}
@@ -126,7 +128,12 @@ function CollectionFilterFields({
           <div className="collection-builder__gender-options">
             {genderOptions.map((item) => (
               <label key={item.value}>
-                <input type="checkbox" value={item.value} {...register('genders')} />
+                <input
+                  data-ui="sortlytic-checkbox"
+                  type="checkbox"
+                  value={item.value}
+                  {...register('genders')}
+                />
                 <span>{item.label}</span>
               </label>
             ))}

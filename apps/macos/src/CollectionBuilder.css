@@ -218,10 +218,41 @@
 
 .collection-builder__filter-toggle > input,
 .collection-builder__gender-options input {
+  position: relative;
   width: 16px;
   height: 16px;
   margin: 0;
-  accent-color: var(--focus);
+  appearance: none;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.collection-builder__filter-grid input[data-ui='sortlytic-checkbox']::after {
+  position: absolute;
+  top: 1px;
+  left: 4px;
+  width: 4px;
+  height: 8px;
+  content: '';
+  border: solid var(--primary-ink);
+  border-width: 0 2px 2px 0;
+  opacity: 0;
+  transform: rotate(45deg);
+}
+
+.collection-builder__filter-grid input[data-ui='sortlytic-checkbox']:checked {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.collection-builder__filter-grid input[data-ui='sortlytic-checkbox']:checked::after {
+  opacity: 1;
+}
+
+.collection-builder__filter-grid input[data-ui='sortlytic-checkbox']:disabled {
+  cursor: not-allowed;
 }
 
 .collection-builder__filter-toggle strong {

@@ -555,6 +555,14 @@ describe('collection form controls', () => {
       mounted.container.querySelector<HTMLInputElement>('input[name="genderFilterEnabled"]')?.click()
     })
 
+    const filterCheckboxes = mounted.container.querySelectorAll<HTMLInputElement>(
+      '.collection-builder__filter-grid input[type="checkbox"]',
+    )
+    expect(filterCheckboxes.length).toBeGreaterThan(2)
+    expect(Array.from(filterCheckboxes).every(
+      (input) => input.dataset.ui === 'sortlytic-checkbox',
+    )).toBe(true)
+
     expect(mounted.container.textContent).toContain('6 个基础字段 + 2 个扩展字段')
     await act(async () => findButton(mounted.container, '配置字段')?.click())
     expect(mounted.container.textContent).toContain('人口属性2/2')
