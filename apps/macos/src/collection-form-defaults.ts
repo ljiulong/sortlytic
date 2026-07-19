@@ -2,6 +2,8 @@ import type { CollectionFormInput } from './CollectionBuilder'
 
 export const newCollectionFormDefaults = {
   platform: undefined,
+  accountSource: undefined,
+  selectedFields: [],
   dataType: undefined,
   dataTypes: [],
   regionCode: '',

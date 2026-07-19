@@ -34,6 +34,19 @@ export const collectionDataTypeOptions = [
 export type CollectionDataType = (typeof collectionDataTypeOptions)[number]['value']
 export type CollectionTranslator = TFunction<'collection'>
 
+export const accountSourceKeys = [
+  'user_search',
+  'content_search_authors',
+  'direct_account',
+  'item_author',
+  'comment_authors',
+  'followers',
+  'followings',
+  'similar_accounts',
+] as const
+
+export type AccountSourceKey = (typeof accountSourceKeys)[number]
+
 export function getCollectionDataTypeOptions(t: CollectionTranslator) {
   return collectionDataTypeOptions.map(({ value, labelKey, descriptionKey }) => ({
     value,
@@ -125,6 +138,8 @@ export function createCollectionFormSchema(t: CollectionTranslator) {
   return z
     .object({
       platform: z.enum(platformOptions, { error: t('validation.platformRequired') }),
+      accountSource: z.enum(accountSourceKeys).optional(),
+      selectedFields: z.array(z.string()).default([]),
       dataType: z.enum(dataTypeOptions, { error: t('validation.dataTypeRequired') }),
       dataTypes: z.array(collectionDataTypeSchema).min(1, t('validation.dataTypesRequired')),
       regionCode: z
