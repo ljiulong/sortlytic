@@ -137,7 +137,7 @@ export function createCollectionFormSchema(t: CollectionTranslator) {
         .min(10, t('validation.maxRecordsMin'))
         .max(5000, t('validation.maxRecordsMax')),
       budget: z.coerce.number()
-        .min(1, t('validation.budgetMin'))
+        .min(0.1, t('validation.budgetMin'))
         .max(500, t('validation.budgetMax')),
       ageRangeEnabled: z.boolean(),
       ageMin: optionalAge,

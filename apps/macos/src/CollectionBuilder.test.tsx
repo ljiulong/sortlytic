@@ -336,6 +336,21 @@ describe('collection form controls', () => {
     }).success).toBe(false)
   })
 
+  it('0.1 至 1.0 美元每 0.1 一档都可设置，并重复验证三轮', () => {
+    const markup = renderBuilder()
+
+    expect(markup).toMatch(/<input[^>]*id="budget"[^>]*min="0.1"/)
+    for (let round = 1; round <= 3; round += 1) {
+      for (let tenths = 1; tenths <= 10; tenths += 1) {
+        const budget = tenths / 10
+        expect(
+          collectionFormSchema.safeParse({ ...baseInput, budget }).success,
+          `第 ${round} 轮 $${budget.toFixed(1)} 应通过`,
+        ).toBe(true)
+      }
+    }
+  })
+
   it('自然语言入口不预填具体任务，并在提交前去除首尾空白', () => {
     expect(naturalIntentDefault).toBe('')
     expect(normalizeNaturalIntent('  采集公开账号  ')).toBe('采集公开账号')

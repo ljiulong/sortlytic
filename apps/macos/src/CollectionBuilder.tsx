@@ -329,7 +329,7 @@ export function CollectionBuilder({
                     id="budget"
                     aria-describedby={errors.budget ? 'budget-error' : undefined}
                     aria-invalid={Boolean(errors.budget)}
-                    min="0"
+                    min="0.1"
                     placeholder={t('placeholders.budget')}
                     step="0.01"
                     type="number"
