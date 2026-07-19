@@ -23,6 +23,7 @@
         { "url": "https://tikhub.io/pricing" }
       ]
     },
+    "opener:allow-open-path",
     "process:default",
     "updater:default"
   ]

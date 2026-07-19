@@ -51,6 +51,16 @@ fn stored_record_counts_are_exposed_as_an_active_workspace_command() {
 }
 
 #[test]
+fn packaged_app_can_open_a_completed_export_path() {
+  let capability = include_str!("../capabilities/default.json");
+
+  assert!(
+    capability.contains("\"opener:allow-open-path\""),
+    "export files need the narrow opener command permission"
+  );
+}
+
+#[test]
 fn prompt_activation_keeps_real_model_regressions_off_the_ui_thread() {
   let source = include_str!("lib.rs");
   let command = source
