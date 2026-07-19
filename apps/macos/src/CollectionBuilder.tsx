@@ -189,6 +189,7 @@ export function CollectionBuilder({
 
   const setAccountSource = (source?: AccountSourceKey) => {
     accountSourceField.onChange(source)
+    setValue('keyword', '', { shouldDirty: true, shouldValidate: true })
     const legacy = source ? legacySourceTypes[source] : undefined
     dataTypeField.onChange(legacy?.dataType)
     dataTypesField.onChange(legacy ? [legacy.dataTypeCode] : [])

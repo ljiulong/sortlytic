@@ -98,6 +98,15 @@ beforeEach(async () => {
       pagination_mode: 'cursor',
       max_page_size: 20,
       max_request_count: 100,
+    }, {
+      key: 'direct_account',
+      display_name: '指定账号',
+      description: '读取指定公开账号。',
+      input_kind: 'account',
+      endpoint_key: 'tiktok.account_profile',
+      pagination_mode: 'single',
+      max_page_size: 1,
+      max_request_count: 1,
     }],
     field_groups: [{ key: 'profile', display_name: '账号资料' }],
     fields: [{
@@ -460,6 +469,10 @@ describe('collection form controls', () => {
     expect(mounted.container.textContent).toContain('当前平台没有可验证的公开性别来源')
     await choose('account-source', 'account-source-option-user_search')
     expect(mounted.container.querySelector('#source-input')).not.toBeNull()
+    await enter('#source-input', '新能源汽车')
+    await choose('account-source', 'account-source-option-direct_account')
+    expect(mounted.container.querySelector<HTMLInputElement>('#source-input')?.value).toBe('')
+    await choose('account-source', 'account-source-option-user_search')
     await enter('#source-input', '新能源汽车')
     await choose('range', 'range-option-7')
     await enter('#max-records', '20')
