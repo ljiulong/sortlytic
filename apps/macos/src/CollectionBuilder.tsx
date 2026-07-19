@@ -545,6 +545,10 @@ export function CollectionPlanPreview({
   const budget = plan.budget > 0 ? `$${plan.budget}` : t('preview.budgetLimitUnset')
   const costEstimate = localizedCostEstimate(t, plan.costEstimate, i18n.language)
   const statusLabel = localizedPlanStatus(t, plan.status)
+  const accountSourceLabel = plan.accountSource
+    ? t(`accountSources.options.${plan.accountSource}.label`)
+    : undefined
+  const selectedFieldCount = plan.selectedFields?.length ?? 0
   const selectedFieldSet = new Set(plan.selectedFields ?? [])
   const enrichmentGroups = (plan.pricingEndpoints?.length ?? 0) > 1
     ? accountFieldGroups
@@ -567,6 +571,15 @@ export function CollectionPlanPreview({
         <dl className="collection-plan__facts">
           <PlanFact label={t('preview.platform')} value={platforms} />
           <PlanFact label={t('preview.dataType')} value={dataTypes} />
+          {accountSourceLabel ? (
+            <PlanFact label={t('preview.accountSource')} value={accountSourceLabel} />
+          ) : null}
+          {plan.accountSource ? (
+            <PlanFact
+              label={t('preview.selectedFields')}
+              value={t('preview.selectedFieldCount', { count: selectedFieldCount })}
+            />
+          ) : null}
           <PlanFact label={t('preview.region')} value={regionLabel ?? t('preview.regionUnavailable')} />
           <PlanFact label={t('preview.range')} value={range} />
         </dl>
@@ -590,6 +603,12 @@ export function CollectionPlanPreview({
               <p>{plan.pricingReady === true ? t('preview.pricingReady') : t('preview.pricingPending')}</p>
             </div>
             <strong>{costEstimate}</strong>
+            {plan.discoveryRequestCount !== undefined ? (
+              <span>{t('preview.discoveryRequests', { count: plan.discoveryRequestCount })}</span>
+            ) : null}
+            {plan.enrichmentRequestCount !== undefined ? (
+              <span>{t('preview.enrichmentRequests', { count: plan.enrichmentRequestCount })}</span>
+            ) : null}
             <span>{t('preview.budgetLimit', { budget })}</span>
             {enrichmentGroups.length ? (
               <span>{t('preview.enrichmentGroups', {

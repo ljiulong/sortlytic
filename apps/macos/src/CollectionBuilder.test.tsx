@@ -310,7 +310,11 @@ describe('CollectionPlanPreview', () => {
         onConfirmPlan: vi.fn(),
         plan: {
           ...draftPlan,
+          accountSource: 'user_search',
           selectedFields: ['bio', 'age', 'followers_count', 'last_posted_at'],
+          discoveryRequestCount: 1,
+          enrichmentRequestCount: 40,
+          requestCountEstimate: 41,
           pricingEndpoints: [
             '/api/v1/douyin/search/fetch_user_search',
             '/api/v1/douyin/web/handler_user_profile_v4',
@@ -321,6 +325,11 @@ describe('CollectionPlanPreview', () => {
     )
 
     expect(markup).toContain('补全字段分类：账号资料、人口属性、账号统计、账号活跃')
+    expect(markup).toContain('账号来源')
+    expect(markup).toContain('搜索用户')
+    expect(markup).toContain('4 个扩展字段')
+    expect(markup).toContain('账号发现：1 次请求')
+    expect(markup).toContain('字段补全：40 次请求')
     expect(markup).toContain('涉及端点：/api/v1/douyin/search/fetch_user_search')
     expect(markup).toContain('/api/v1/douyin/web/handler_user_profile_v4')
   })
