@@ -7,7 +7,7 @@ pub(super) fn estimate_from_plan_json(plan_json: &Value) -> CostEstimateView {
     .get("platforms")
     .and_then(Value::as_array)
     .map_or(0, |items| items.len() as i64);
-  let data_type_count = plan_json
+  let mut data_type_count = plan_json
     .get("data_types")
     .and_then(Value::as_array)
     .map_or(0, |items| items.len() as i64);
@@ -20,7 +20,16 @@ pub(super) fn estimate_from_plan_json(plan_json: &Value) -> CostEstimateView {
     .and_then(Value::as_i64)
     .unwrap_or(1)
     .max(1);
-  let request_count_estimate = crate::collection::plan_estimate::estimate_request_count(plan_json)
+  if plan_json.get("schema_version").and_then(Value::as_i64) == Some(4) {
+    data_type_count = step_count;
+  }
+  let embedded_request_count = plan_json
+    .get("cost_estimate")
+    .and_then(|cost| cost.get("request_count_estimate"))
+    .and_then(Value::as_i64)
+    .filter(|value| *value > 0);
+  let request_count_estimate = embedded_request_count
+    .or_else(|| crate::collection::plan_estimate::estimate_request_count(plan_json))
     .unwrap_or_else(|| step_count.saturating_mul(request_limit));
   let requires_confirmation =
     request_count_estimate > 1 || platform_count > 1 || data_type_count > 1;
@@ -64,7 +73,11 @@ pub(super) fn validate_plan_for_task(task: &CollectionTaskView, plan_json: &Valu
   if task_platforms != plan_platforms {
     errors.push("计划 platforms 与任务范围不一致".to_string());
   }
-  if task_data_types != plan_data_types {
+  if plan_json.get("schema_version").and_then(Value::as_i64) == Some(4) {
+    if task_data_types != ["account"] {
+      errors.push("v4 账号计划要求任务实体为 account".to_string());
+    }
+  } else if task_data_types != plan_data_types {
     errors.push("计划 data_types 与任务范围不一致".to_string());
   }
   errors.sort();

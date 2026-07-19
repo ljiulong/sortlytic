@@ -320,6 +320,82 @@ fn version_three_multi_target_plan_saves_confirms_and_persists_step_limits() {
 }
 
 #[test]
+fn version_four_account_plan_saves_scope_cost_and_confirmation() {
+  let root_path = unique_temp_workspace("tasks-v4-account");
+  create_workspace("v4 账号任务测试", &root_path).expect("workspace should be created");
+  let task = create_collection_task(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "TikTok 账号搜索".to_string(),
+      source_type: "form".to_string(),
+      platforms: vec!["tiktok".to_string()],
+      data_types: vec!["account".to_string()],
+    },
+  )
+  .expect("v4 account task should create");
+  let draft = crate::collection::generate_account_collection_plan(
+    crate::collection::AccountFormCollectionPlanRequest {
+      platform: "tiktok".to_string(),
+      account_source: "user_search".to_string(),
+      selected_fields: vec!["avatar_url".to_string(), "country_region".to_string()],
+      enrichment_policy: "auto_costed".to_string(),
+      params: serde_json::json!({ "keyword": "electric car" }),
+      age_range: None,
+      gender_filter: None,
+      request_limit: Some(1),
+      record_limit: Some(20),
+      budget_limit_micros: Some(10_000_000),
+    },
+  )
+  .expect("v4 account draft should generate");
+  let plan = save_collection_plan(
+    &root_path,
+    SaveCollectionPlanInput {
+      task_id: task.id.clone(),
+      source: draft.source,
+      plan_json: draft.plan_json,
+      validation_status: draft.validation_status,
+      validation_errors_json: Some(draft.validation_errors_json),
+      cost_estimate_json: Some(draft.cost_estimate_json),
+    },
+  )
+  .expect("v4 account plan should save");
+
+  assert_eq!(plan.schema_version, 4);
+  assert_eq!(
+    plan.validation_status, "valid",
+    "{:?}",
+    plan.validation_errors_json
+  );
+  assert_eq!(plan.cost_estimate_json["request_count_estimate"], 21);
+  confirm_collection_plan(&root_path, &task.id, &plan.id).expect("v4 plan should confirm");
+  let connection = open_workspace_connection(&root_path).unwrap();
+  let scope = connection
+    .query_row(
+      "SELECT account_source, selected_fields_json FROM collection_task WHERE id = ?1",
+      [task.id],
+      |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    )
+    .unwrap();
+  assert_eq!(scope.0, "user_search");
+  assert_eq!(
+    serde_json::from_str::<Value>(&scope.1).unwrap(),
+    serde_json::json!(["avatar_url", "country_region"])
+  );
+  assert_eq!(
+    connection
+      .query_row(
+        "SELECT COUNT(*) FROM api_call_step WHERE plan_id = ?1 AND status = 'planned'",
+        [plan.id],
+        |row| row.get::<_, i64>(0),
+      )
+      .unwrap(),
+    2
+  );
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn persisted_cost_estimate_counts_the_confirmed_request_limit() {
   let root_path = unique_temp_workspace("request-limit-cost");
   create_workspace("任务测试", &root_path).expect("workspace should be created");

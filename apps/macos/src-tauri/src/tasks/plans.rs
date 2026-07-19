@@ -5,7 +5,9 @@ use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::collection::{validate_collection_plan_v2, validate_collection_plan_v3};
+use crate::collection::{
+  validate_collection_plan_v2, validate_collection_plan_v3, validate_collection_plan_v4,
+};
 use crate::domain::AppResult;
 
 use super::validation::{estimate_from_plan_json, validate_plan_for_task};
@@ -47,6 +49,19 @@ pub fn save_collection_plan(
   };
   let validation_errors = serde_json::json!(validation_errors);
   let cost_estimate = estimate_from_plan_json(&input.plan_json).cost_estimate_json;
+  let account_source = (schema_version == 4)
+    .then(|| {
+      input
+        .plan_json
+        .get("account_source")
+        .and_then(Value::as_str)
+    })
+    .flatten()
+    .map(ToString::to_string);
+  let selected_fields_json = (schema_version == 4)
+    .then(|| input.plan_json.get("selected_fields").cloned())
+    .flatten()
+    .map(|value| value.to_string());
 
   transaction
     .execute(
@@ -84,9 +99,19 @@ pub fn save_collection_plan(
     .execute(
       "UPDATE collection_task
        SET status = ?1, confirmed_at = NULL,
-           cost_estimate_json = ?2, updated_at = ?3
-       WHERE id = ?4",
-      params![task_status, cost_estimate.to_string(), now, input.task_id],
+           cost_estimate_json = ?2, updated_at = ?3,
+           account_source = CASE WHEN ?4 = 4 THEN ?5 ELSE account_source END,
+           selected_fields_json = CASE WHEN ?4 = 4 THEN ?6 ELSE selected_fields_json END
+       WHERE id = ?7",
+      params![
+        task_status,
+        cost_estimate.to_string(),
+        now,
+        schema_version,
+        account_source,
+        selected_fields_json,
+        input.task_id
+      ],
     )
     .map_err(database_error)?;
 
@@ -204,7 +229,7 @@ pub fn confirm_collection_plan(
   }
 
   let validation_errors = validate_plan_for_schema(&task, &plan.plan_json, plan.schema_version);
-  if !matches!(plan.schema_version, 2 | 3) || !validation_errors.is_empty() {
+  if !matches!(plan.schema_version, 2..=4) || !validation_errors.is_empty() {
     let error_message = confirmation_error_message(plan.schema_version);
     let now = Utc::now().to_rfc3339();
     transaction
@@ -300,11 +325,12 @@ fn validate_plan_for_schema(
 ) -> Vec<String> {
   let mut errors = validate_plan_for_task(task, plan_json);
   match schema_version {
+    4 => errors.extend(validate_collection_plan_v4(plan_json).errors),
     3 => errors.extend(validate_collection_plan_v3(plan_json).errors),
     2 => errors.extend(validate_collection_plan_v2(plan_json).errors),
     1 => errors.push(LEGACY_PLAN_ERROR.to_string()),
     version => errors.push(format!(
-      "schema_version={version} 不受支持，只有 v2/v3 采集计划可以确认/执行"
+      "schema_version={version} 不受支持，只有 v2/v3/v4 采集计划可以确认/执行"
     )),
   }
   errors.sort();
@@ -314,10 +340,11 @@ fn validate_plan_for_schema(
 
 fn confirmation_error_message(schema_version: i64) -> String {
   match schema_version {
+    4 => "采集计划未通过后端校验（v4），不能确认".to_string(),
     3 => "采集计划未通过后端校验（v3），不能确认".to_string(),
     2 => "采集计划未通过后端校验（v2），不能确认".to_string(),
     1 => LEGACY_PLAN_ERROR.to_string(),
-    version => format!("schema_version={version} 不受支持，只有 v2/v3 采集计划可以确认/执行"),
+    version => format!("schema_version={version} 不受支持，只有 v2/v3/v4 采集计划可以确认/执行"),
   }
 }
 
