@@ -219,8 +219,8 @@ const ENDPOINTS: &[EndpointDefinition] = &[
     data_type: "account_profile",
     data_type_name: "账号公开信息",
     endpoint_key: "xiaohongshu.account_profile",
-    required_params: &["account_id"],
-    optional_params: &[],
+    required_params: &[],
+    optional_params: &["account_id", "share_text"],
     pagination_mode: PaginationMode::Single,
     region_filter: FilterExecution::Unsupported,
     time_range_filter: FilterExecution::Unsupported,
@@ -249,8 +249,8 @@ const ENDPOINTS: &[EndpointDefinition] = &[
     data_type: "item_detail",
     data_type_name: "笔记详情",
     endpoint_key: "xiaohongshu.item_detail",
-    required_params: &["item_id"],
-    optional_params: &[],
+    required_params: &[],
+    optional_params: &["item_id", "share_text"],
     pagination_mode: PaginationMode::Single,
     region_filter: FilterExecution::Unsupported,
     time_range_filter: FilterExecution::Unsupported,
@@ -520,6 +520,22 @@ mod tests {
       assert_eq!(account_posts.required_params, vec!["account_id"]);
       assert_eq!(account_posts.pagination_mode, super::PaginationMode::Cursor);
       assert!(account_posts.max_request_count > 1);
+    }
+  }
+
+  #[test]
+  fn xiaohongshu_single_record_endpoints_accept_id_or_share_text() {
+    let capabilities = list_platform_data_types("xiaohongshu").unwrap();
+    for data_type in ["account_profile", "item_detail"] {
+      let capability = capabilities
+        .iter()
+        .find(|capability| capability.data_type == data_type)
+        .unwrap();
+      assert!(capability.required_params.is_empty());
+      assert!(capability.optional_params.iter().any(|value| value == "share_text"));
+      assert!(capability.optional_params.iter().any(|value| {
+        value == if data_type == "account_profile" { "account_id" } else { "item_id" }
+      }));
     }
   }
 }
