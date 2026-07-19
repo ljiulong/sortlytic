@@ -244,6 +244,7 @@ pub fn validate_collection_plan_v4(plan_json: &Value) -> CollectionPlanValidatio
   let mut expected_operations = Vec::new();
   let mut expected_endpoints = BTreeMap::new();
   let mut expected_source_param = None;
+  let mut source_limits = None;
   if let (Some(capability), Some(account_source), Some(selected_fields)) =
     (&capability, account_source, &selected_fields)
   {
@@ -254,6 +255,11 @@ pub fn validate_collection_plan_v4(plan_json: &Value) -> CollectionPlanValidatio
     {
       let discovery = format!("discover.{account_source}");
       expected_source_param = Some(source_param_key(source.input_kind));
+      source_limits = Some((
+        source.pagination_mode,
+        source.max_page_size,
+        source.max_request_count,
+      ));
       expected_endpoints.insert(discovery.clone(), source.endpoint_key.clone());
       expected_operations.push(discovery);
       match normalize_account_fields(capability, selected_fields) {
@@ -284,9 +290,44 @@ pub fn validate_collection_plan_v4(plan_json: &Value) -> CollectionPlanValidatio
     .and_then(Value::as_i64)
     .unwrap_or(0)
     .max(0);
+  let request_limit = plan_json
+    .get("request_limit")
+    .and_then(Value::as_i64)
+    .unwrap_or(0)
+    .max(0);
+  let expected_discovery_request_count =
+    source_limits.map(|(pagination_mode, max_page_size, max_request_count)| {
+      if request_limit > max_request_count {
+        errors.push(format!(
+          "request_limit 超过当前账号来源上限 {max_request_count}"
+        ));
+      }
+      match pagination_mode {
+        PaginationMode::Single => {
+          if record_limit != 1 || request_limit != 1 {
+            errors.push("单账号或单作品来源的记录和请求上限必须为 1".to_string());
+          }
+          1
+        }
+        PaginationMode::Cursor => {
+          let capacity = max_page_size.saturating_mul(request_limit);
+          if record_limit > capacity {
+            errors.push(format!(
+              "record_limit 超过当前请求上限最多可发现的 {capacity} 条账号"
+            ));
+          }
+          record_limit
+            .saturating_add(max_page_size - 1)
+            .saturating_div(max_page_size)
+            .clamp(1, request_limit.max(1))
+        }
+      }
+    });
   let mut actual_operations = Vec::new();
   let mut actual_step_keys = BTreeSet::new();
-  let mut calculated_request_count = 0_i64;
+  let mut discovery_request_count = 0_i64;
+  let mut enrichment_request_count = 0_i64;
+  let mut enrichment_operation_count = 0_i64;
   match plan_json.get("steps").and_then(Value::as_array) {
     Some(steps) if !steps.is_empty() => {
       for (index, step) in steps.iter().enumerate() {
@@ -345,17 +386,14 @@ pub fn validate_collection_plan_v4(plan_json: &Value) -> CollectionPlanValidatio
           if step.get("role").and_then(Value::as_str) != Some("discovery") {
             errors.push(format!("{prefix}.role 必须为 discovery"));
           }
-          if !step
-            .get("depends_on_step_key")
-            .is_some_and(Value::is_null)
-          {
+          if !step.get("depends_on_step_key").is_some_and(Value::is_null) {
             errors.push(format!("{prefix}.depends_on_step_key 必须为 null"));
           }
           if !step.get("input_binding").is_some_and(Value::is_null) {
             errors.push(format!("{prefix}.input_binding 必须为 null"));
           }
-          calculated_request_count =
-            calculated_request_count.saturating_add(step_request_limit.unwrap_or_default());
+          discovery_request_count =
+            discovery_request_count.saturating_add(step_request_limit.unwrap_or_default());
           if step
             .get("params")
             .and_then(|params| expected_source_param.and_then(|key| params.get(key)))
@@ -366,10 +404,11 @@ pub fn validate_collection_plan_v4(plan_json: &Value) -> CollectionPlanValidatio
             errors.push(format!("{prefix}.params 缺少账号来源输入"));
           }
         } else {
+          enrichment_operation_count = enrichment_operation_count.saturating_add(1);
           if step.get("role").and_then(Value::as_str) != Some("enrichment") {
             errors.push(format!("{prefix}.role 必须为 enrichment"));
           }
-          calculated_request_count = calculated_request_count
+          enrichment_request_count = enrichment_request_count
             .saturating_add(record_limit.saturating_mul(step_request_limit.unwrap_or_default()));
           if step.get("depends_on_step_key").and_then(Value::as_str) != Some("discover") {
             errors.push(format!("{prefix}.depends_on_step_key 必须引用 discover"));
@@ -429,20 +468,47 @@ pub fn validate_collection_plan_v4(plan_json: &Value) -> CollectionPlanValidatio
   {
     errors.push("steps 必须按发现和补全依赖顺序排列".to_string());
   }
-  if plan_json
-    .get("cost_estimate")
-    .and_then(|cost| cost.get("request_count_estimate"))
-    .and_then(Value::as_i64)
-    != Some(calculated_request_count)
-  {
-    errors.push("cost_estimate.request_count_estimate 与步骤计价不一致".to_string());
+  if expected_discovery_request_count != Some(discovery_request_count) {
+    errors.push("发现步骤请求数与来源容量和 record_limit 不一致".to_string());
   }
-  if plan_json
-    .get("output_rules")
-    .and_then(|rules| rules.get("selected_fields"))
-    != plan_json.get("selected_fields")
+  let calculated_request_count = discovery_request_count.saturating_add(enrichment_request_count);
+  let cost_estimate = plan_json.get("cost_estimate");
+  for (field, expected) in [
+    ("request_count_estimate", calculated_request_count),
+    ("discovery_request_count", discovery_request_count),
+    ("enrichment_request_count", enrichment_request_count),
+    ("enrichment_operation_count", enrichment_operation_count),
+  ] {
+    if cost_estimate
+      .and_then(|cost| cost.get(field))
+      .and_then(Value::as_i64)
+      != Some(expected)
+    {
+      errors.push(format!("cost_estimate.{field} 与步骤计价不一致"));
+    }
+  }
+  if cost_estimate
+    .and_then(|cost| cost.get("requires_confirmation"))
+    .and_then(Value::as_bool)
+    != Some(true)
   {
-    errors.push("output_rules.selected_fields 必须与顶层一致".to_string());
+    errors.push("cost_estimate.requires_confirmation 必须为 true".to_string());
+  }
+  let expected_output_rules = serde_json::json!({
+    "entity": "account",
+    "required_fields": [
+      "platform", "display_name", "account_handle", "platform_user_id",
+      "data_source", "collected_at"
+    ],
+    "selected_fields": plan_json.get("selected_fields").cloned().unwrap_or(Value::Null),
+    "dedupe_key": ["platform", "platform_user_id"],
+    "fallback_dedupe_key": ["platform", "account_handle"],
+    "unselected_value_label": "任务未设置",
+    "missing_value_label": "未采集到",
+    "evidence_required": true
+  });
+  if plan_json.get("output_rules") != Some(&expected_output_rules) {
+    errors.push("output_rules 与账号输出契约不一致".to_string());
   }
   if plan_json
     .get("requires_user_confirmation")

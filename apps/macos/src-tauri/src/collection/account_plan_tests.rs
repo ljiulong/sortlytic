@@ -36,7 +36,10 @@ fn materializes_discovery_minimal_enrichment_and_cost_breakdown() {
     plan.plan_json["steps"][0]["operation_key"],
     "discover.content_search_authors"
   );
-  assert_eq!(plan.plan_json["steps"][1]["operation_key"], "enrich.profile");
+  assert_eq!(
+    plan.plan_json["steps"][1]["operation_key"],
+    "enrich.profile"
+  );
   assert_eq!(
     plan.plan_json["steps"][2]["operation_key"],
     "enrich.account_country"
@@ -123,13 +126,41 @@ fn rejects_tampered_step_roles_keys_bindings_and_output_selection() {
     .plan_json;
 
   let tampered = [
-    ("discovery role", serde_json::json!("enrichment"), "/steps/0/role"),
-    ("duplicate step key", serde_json::json!("discover"), "/steps/1/step_key"),
-    ("enrichment role", serde_json::json!("discovery"), "/steps/1/role"),
-    ("dependency", serde_json::json!("other"), "/steps/1/depends_on_step_key"),
-    ("input binding", serde_json::json!("platform_user_id"), "/steps/1/input_binding/account_id"),
-    ("params binding", serde_json::json!("platform_user_id"), "/steps/1/params/account_id"),
-    ("output selection", serde_json::json!(false), "/steps/1/output_selected"),
+    (
+      "discovery role",
+      serde_json::json!("enrichment"),
+      "/steps/0/role",
+    ),
+    (
+      "duplicate step key",
+      serde_json::json!("discover"),
+      "/steps/1/step_key",
+    ),
+    (
+      "enrichment role",
+      serde_json::json!("discovery"),
+      "/steps/1/role",
+    ),
+    (
+      "dependency",
+      serde_json::json!("other"),
+      "/steps/1/depends_on_step_key",
+    ),
+    (
+      "input binding",
+      serde_json::json!("platform_user_id"),
+      "/steps/1/input_binding/account_id",
+    ),
+    (
+      "params binding",
+      serde_json::json!("platform_user_id"),
+      "/steps/1/params/account_id",
+    ),
+    (
+      "output selection",
+      serde_json::json!(false),
+      "/steps/1/output_selected",
+    ),
   ];
 
   for (label, value, pointer) in tampered {
@@ -140,4 +171,97 @@ fn rejects_tampered_step_roles_keys_bindings_and_output_selection() {
     let validation = validate_collection_plan_v4(&candidate);
     assert!(!validation.valid, "tampered {label} must be rejected");
   }
+}
+
+#[test]
+fn rejects_tampered_output_rules_cost_breakdown_and_source_capacity() {
+  let mut plan_request = request("douyin", "user_search");
+  plan_request.params = serde_json::json!({ "keyword": "汽车" });
+  plan_request.selected_fields = vec!["age".to_string()];
+  let plan = generate_account_collection_plan(plan_request)
+    .expect("plan should generate")
+    .plan_json;
+
+  let tampered = [
+    (
+      "output entity",
+      serde_json::json!("content"),
+      "/output_rules/entity",
+    ),
+    (
+      "required fields",
+      serde_json::json!([]),
+      "/output_rules/required_fields",
+    ),
+    (
+      "dedupe key",
+      serde_json::json!(["platform"]),
+      "/output_rules/dedupe_key",
+    ),
+    (
+      "fallback key",
+      serde_json::json!(["account_handle"]),
+      "/output_rules/fallback_dedupe_key",
+    ),
+    (
+      "unselected label",
+      serde_json::json!("未提供"),
+      "/output_rules/unselected_value_label",
+    ),
+    (
+      "missing label",
+      serde_json::json!("未知"),
+      "/output_rules/missing_value_label",
+    ),
+    (
+      "evidence",
+      serde_json::json!(false),
+      "/output_rules/evidence_required",
+    ),
+    (
+      "discovery cost",
+      serde_json::json!(99),
+      "/cost_estimate/discovery_request_count",
+    ),
+    (
+      "enrichment cost",
+      serde_json::json!(99),
+      "/cost_estimate/enrichment_request_count",
+    ),
+    (
+      "operation cost",
+      serde_json::json!(99),
+      "/cost_estimate/enrichment_operation_count",
+    ),
+    (
+      "cost confirmation",
+      serde_json::json!(false),
+      "/cost_estimate/requires_confirmation",
+    ),
+    (
+      "source capacity",
+      serde_json::json!(10_000),
+      "/request_limit",
+    ),
+  ];
+
+  for (label, value, pointer) in tampered {
+    let mut candidate = plan.clone();
+    *candidate
+      .pointer_mut(pointer)
+      .unwrap_or_else(|| panic!("{label} pointer should exist")) = value;
+    let validation = validate_collection_plan_v4(&candidate);
+    assert!(!validation.valid, "tampered {label} must be rejected");
+  }
+
+  let mut inflated_discovery = plan;
+  inflated_discovery["request_limit"] = serde_json::json!(2);
+  inflated_discovery["steps"][0]["request_limit"] = serde_json::json!(2);
+  inflated_discovery["cost_estimate"]["discovery_request_count"] = serde_json::json!(2);
+  inflated_discovery["cost_estimate"]["request_count_estimate"] = serde_json::json!(3);
+  let validation = validate_collection_plan_v4(&inflated_discovery);
+  assert!(
+    !validation.valid,
+    "discovery requests above the record capacity must be rejected"
+  );
 }
