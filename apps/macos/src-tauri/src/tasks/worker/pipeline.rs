@@ -77,7 +77,9 @@ where
   let mut request_limited = false;
 
   while let Some(mut target) = queue.pop_front() {
-    if output_count(&connection, &run_id)? >= step.record_limit {
+    if step.depends_on_step_key.is_none()
+      && output_count(&connection, &run_id)? >= step.record_limit
+    {
       stop_remaining_targets(&connection, &run_id, &step.step_key)?;
       return mark_step_stopped(
         &connection,

@@ -728,5 +728,9 @@ fn serialized_error_code(code: &AppErrorCode) -> String {
 mod tests;
 
 #[cfg(test)]
+#[path = "worker_v4_tests.rs"]
+mod v4_tests;
+
+#[cfg(test)]
 #[path = "worker_snapshot_tests.rs"]
 mod snapshot_tests;
