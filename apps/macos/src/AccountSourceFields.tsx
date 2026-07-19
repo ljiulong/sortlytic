@@ -197,6 +197,7 @@ function AccountSourceFields({
       ) : null}
 
       <AccountFieldPicker
+        accountSource={accountSource}
         capability={capability}
         error={error}
         isLoading={isLoading}

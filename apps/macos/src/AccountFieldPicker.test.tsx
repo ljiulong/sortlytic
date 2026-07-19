@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AccountCollectionCapabilityView } from './backend-api'
 import AccountFieldPicker from './AccountFieldPicker'
+import type { AccountSourceKey } from './collection-options'
 import { i18n } from './i18n'
 
 const mountedRoots = new Set<{ container: HTMLDivElement; root: Root }>()
@@ -25,9 +26,10 @@ const capability: AccountCollectionCapabilityView = {
       display_name: '头像',
       description: '账号公开头像地址。',
       value_type: 'text',
-      availability: 'direct',
+      availability: 'enrichment',
       default_selected: true,
-      required_operation_keys: [],
+      required_operation_keys: ['enrich.profile'],
+      covered_by_source_keys: ['user_search', 'direct_account'],
     },
     {
       key: 'country_region',
@@ -54,7 +56,10 @@ const capability: AccountCollectionCapabilityView = {
   ],
 }
 
-async function mountPicker(selectedFields = ['avatar_url', 'country_region']) {
+async function mountPicker(
+  selectedFields = ['avatar_url', 'country_region'],
+  accountSource: AccountSourceKey | null = 'user_search',
+) {
   const container = document.createElement('div')
   const root = createRoot(container)
   const onChange = vi.fn()
@@ -63,6 +68,7 @@ async function mountPicker(selectedFields = ['avatar_url', 'country_region']) {
   await act(async () => {
     root.render(
       <AccountFieldPicker
+        accountSource={accountSource ?? undefined}
         capability={capability}
         onChange={onChange}
         selectedFields={selectedFields}
@@ -104,6 +110,18 @@ describe('AccountFieldPicker', () => {
     await act(async () => configure?.click())
     expect(buttonByText(container, '收起字段')?.getAttribute('aria-expanded')).toBe('true')
     expect(container.textContent).toContain('需补全，会增加请求')
+  })
+
+  it('未选择来源时等待来源，选择后只计算未被来源覆盖的字段', async () => {
+    const pending = await mountPicker(undefined, null)
+    expect(pending.container.textContent).toContain('选择账号来源后计算补全请求')
+
+    const sourced = await mountPicker()
+    expect(sourced.container.textContent).toContain('其中 1 项需要补全请求')
+    await act(async () => buttonByText(sourced.container, '配置字段')?.click())
+    const avatar = [...sourced.container.querySelectorAll('label')]
+      .find((label) => label.textContent?.includes('avatar_url'))
+    expect(avatar?.textContent).toContain('直接提供')
   })
 
   it('分类折叠状态与 aria-expanded 和字段可见性保持一致', async () => {

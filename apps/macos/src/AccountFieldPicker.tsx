@@ -6,11 +6,13 @@ import type {
   AccountFieldCapabilityView,
 } from './backend-api'
 import './AccountFieldPicker.css'
+import type { AccountSourceKey } from './collection-options'
 import { i18n } from './i18n'
 
 const baseFieldCount = 6
 
 type AccountFieldPickerProps = {
+  accountSource?: AccountSourceKey
   capability?: AccountCollectionCapabilityView
   error?: string
   isLoading?: boolean
@@ -19,6 +21,7 @@ type AccountFieldPickerProps = {
 }
 
 function AccountFieldPicker({
+  accountSource,
   capability,
   error,
   isLoading = false,
@@ -79,7 +82,9 @@ function AccountFieldPicker({
     : undefined
   const effectiveGroup = searchedGroup || activeGroup || capability?.field_groups[0]?.key || ''
   const enrichmentCount = availableFields.filter(
-    (field) => selected.has(field.key) && field.required_operation_keys.length > 0,
+    (field) => selected.has(field.key)
+      && field.required_operation_keys.length > 0
+      && !field.covered_by_source_keys?.includes(accountSource ?? ''),
   ).length
   const isCorePreset = selectedFields.length === defaultFields.length
     && defaultFields.every((field) => selected.has(field))
@@ -126,9 +131,11 @@ function AccountFieldPicker({
         </div>
         <div className="account-field-picker__summary-meta">
           <span>{t(isCorePreset ? 'accountFields.corePreset' : 'accountFields.customPreset')}</span>
-          <span>{enrichmentCount > 0
-            ? t('accountFields.enrichmentCount', { count: enrichmentCount })
-            : t('accountFields.noEnrichment')}</span>
+          <span>{!accountSource
+            ? t('accountFields.enrichmentPendingSource')
+            : enrichmentCount > 0
+              ? t('accountFields.enrichmentCount', { count: enrichmentCount })
+              : t('accountFields.noEnrichment')}</span>
         </div>
         <button
           type="button"
@@ -257,7 +264,7 @@ function AccountFieldPicker({
                               <small>{fieldDescription(field)}</small>
                               {unsupported ? <small>{unsupportedDetail(field)}</small> : null}
                             </span>
-                            <FieldStatus field={field} />
+                            <FieldStatus accountSource={accountSource} field={field} />
                           </label>
                         )
                       })}
@@ -279,9 +286,16 @@ function AccountFieldPicker({
   )
 }
 
-function FieldStatus({ field }: { field: AccountFieldCapabilityView }) {
+function FieldStatus({
+  accountSource,
+  field,
+}: {
+  accountSource?: AccountSourceKey
+  field: AccountFieldCapabilityView
+}) {
   const { t } = useTranslation('collection', { i18n })
-  if (field.availability === 'enrichment') {
+  const covered = field.covered_by_source_keys?.includes(accountSource ?? '') === true
+  if (field.availability === 'enrichment' && !covered) {
     return <span className="account-field-picker__status" data-tone="warning">{t('accountFields.status.enrichment')}</span>
   }
   if (field.availability === 'conditional') {
