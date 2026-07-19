@@ -138,6 +138,7 @@ describe('TaskResultsPanel', () => {
     expect(mounted.container.textContent).toContain('KiMeBeauty')
     expect(mounted.container.textContent).toContain('@kimebeauty')
     expect(mounted.container.textContent).toContain('TikTok')
+    expect(mounted.container.textContent).toContain('TikHub API')
     expect(mounted.container.textContent).toContain('US')
     expect(mounted.container.textContent).toContain('1,234')
     expect(mounted.container.textContent).toContain('公开账号简介')

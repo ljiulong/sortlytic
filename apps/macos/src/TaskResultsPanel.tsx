@@ -178,7 +178,12 @@ function TaskResultsPanel({ taskId, taskName }: TaskResultsPanelProps) {
                           {account ? <span>@{account.replace(/^@/, '')}</span> : null}
                           {item.platform_user_id ? <small>{item.platform_user_id}</small> : null}
                         </td>
-                        <td>{platformName(item.platform, t)}</td>
+                        <td>
+                          <span className="task-results__platform">
+                            <strong>{platformName(item.platform, t)}</strong>
+                            <small>{item.data_source?.trim() || notCollected}</small>
+                          </span>
+                        </td>
                         <td>{item.country_region?.trim() || missingValue('country_region')}</td>
                         <td>
                           <div>{t('taskQueue.results.genderLabel')}{t('taskQueue.results.labelSeparator')}{gender}</div>
