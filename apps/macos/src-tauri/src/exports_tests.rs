@@ -42,10 +42,47 @@ fn report_exports_xlsx_and_pdf_files() {
   let pdf_bytes = fs::read(pdf_path).expect("pdf should be readable");
   assert_pdf_xref_is_well_formed(&pdf_bytes);
   let pdf_text = std::str::from_utf8(&pdf_bytes).expect("pdf fixture should be UTF-8");
-  assert!(pdf_text.contains("Sortlytic report."));
+  assert!(pdf_text.contains(&pdf_hex_text("导出任务 报告")));
+  assert!(!pdf_text.contains("See XLSX export for full structured data."));
   assert!(!pdf_text.contains("Smart Data Workbench"));
   assert!(xlsx.file_hash.is_some());
   assert!(pdf.file_size.unwrap_or_default() > 0);
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn pdf_export_contains_persisted_result_accounts_instead_of_a_placeholder() {
+  let (root_path, report) = test_report("pdf-results");
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  connection
+    .execute(
+      "INSERT INTO task_run (id, task_id, status, started_at, ended_at, current_stage)
+       VALUES ('pdf-run', ?1, 'success', ?2, ?2, '已完成')",
+      params![report.task_id, "2026-07-19T14:32:17+00:00"],
+    )
+    .expect("run should insert");
+  connection
+    .execute(
+      "INSERT INTO collected_account (
+         id, task_run_id, platform, identity_key, username, account, profile_text,
+         country_region, followers_count, posts_count, data_source, collected_at,
+         output_included, created_at, updated_at
+       ) VALUES ('pdf-account', 'pdf-run', 'tiktok', 'id:verified-user', '测试账号',
+         'verified_user', '公开简介', 'US', NULL, 0, 'TikHub API', ?1, 1, ?1, ?1)",
+      params!["2026-07-19T14:32:17+00:00"],
+    )
+    .expect("account should insert");
+
+  let job = create_export_job(&root_path, &report.id, "pdf", None).expect("pdf should export");
+  let bytes = fs::read(job.file_path.expect("pdf path")).expect("pdf should be readable");
+  let text = std::str::from_utf8(&bytes).expect("generated PDF should be ASCII-safe");
+
+  assert!(text.contains(&pdf_hex_text("测试账号")));
+  assert!(text.contains(&pdf_hex_text("verified_user")));
+  assert!(text.contains(&pdf_hex_text("作品数：0")));
+  assert!(!text.contains("See XLSX export for full structured data."));
+  assert_pdf_xref_is_well_formed(&bytes);
 
   std::fs::remove_dir_all(root_path).ok();
 }
@@ -329,7 +366,7 @@ fn assert_pdf_xref_is_well_formed(bytes: &[u8]) {
     .expect("xref should declare an object count")
     .parse::<usize>()
     .expect("xref object count should be numeric");
-  assert_eq!(object_count, 6);
+  assert_eq!(object_count, text.matches(" 0 obj\n").count() + 1);
   assert_eq!(lines.next(), Some("0000000000 65535 f "));
 
   for object_number in 1..object_count {
@@ -347,4 +384,11 @@ fn assert_pdf_xref_is_well_formed(bytes: &[u8]) {
       "xref entry should point to object {object_number}"
     );
   }
+}
+
+fn pdf_hex_text(value: &str) -> String {
+  value
+    .encode_utf16()
+    .map(|unit| format!("{unit:04X}"))
+    .collect()
 }

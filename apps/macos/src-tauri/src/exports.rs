@@ -1,4 +1,3 @@
-use std::fmt::Write as FmtWrite;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 #[cfg(unix)]
@@ -17,6 +16,8 @@ use crate::workspace::{open_workspace_database, DATABASE_FILE_NAME};
 
 #[path = "exports/excel.rs"]
 mod excel;
+#[path = "exports/pdf.rs"]
+mod pdf;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ReportView {
@@ -166,7 +167,7 @@ pub fn create_export_job(
   let write_result = if export_type == "xlsx" {
     excel::write_excel(root_path, &file_path, &report)
   } else {
-    write_pdf(&file_path, &report)
+    pdf::write_pdf(root_path, &file_path, &report)
   };
 
   if let Err(error) = write_result {
@@ -266,44 +267,6 @@ pub fn get_report(connection: &Connection, report_id: &str) -> AppResult<ReportV
     .optional()
     .map_err(database_error)?
     .ok_or_else(|| export_error("报告不存在"))
-}
-
-fn write_pdf(path: &Path, report: &ReportView) -> AppResult<()> {
-  let title = pdf_escape(&report.title);
-  let body = pdf_escape("Sortlytic report. See XLSX export for full structured data.");
-  let content = format!("BT /F1 18 Tf 72 740 Td ({title}) Tj /F1 11 Tf 0 -32 Td ({body}) Tj ET");
-  let objects = [
-    "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
-    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
-    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".to_string(),
-    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
-    format!(
-      "<< /Length {} >>\nstream\n{}\nendstream",
-      content.len(),
-      content
-    ),
-  ];
-  let mut pdf = String::from("%PDF-1.4\n");
-  let mut offsets = Vec::with_capacity(objects.len() + 1);
-  offsets.push(0);
-  for (index, object) in objects.iter().enumerate() {
-    offsets.push(pdf.len());
-    writeln!(&mut pdf, "{} 0 obj\n{}\nendobj", index + 1, object).map_err(export_error)?;
-  }
-  let xref_offset = pdf.len();
-  writeln!(&mut pdf, "xref\n0 {}", offsets.len()).map_err(export_error)?;
-  writeln!(&mut pdf, "0000000000 65535 f ").map_err(export_error)?;
-  for offset in offsets.iter().skip(1) {
-    writeln!(&mut pdf, "{offset:010} 00000 n ").map_err(export_error)?;
-  }
-  write!(
-    &mut pdf,
-    "trailer << /Root 1 0 R /Size {} >>\nstartxref\n{}\n%%EOF\n",
-    offsets.len(),
-    xref_offset
-  )
-  .map_err(export_error)?;
-  write_new_export_file(path, pdf.as_bytes())
 }
 
 fn write_report_snapshot(root_path: impl AsRef<Path>, report: &ReportView) -> AppResult<()> {
@@ -562,13 +525,6 @@ fn normalize_export_type(value: &str, allowed: &[&str]) -> AppResult<String> {
 
 fn string_to_json(value: String) -> Value {
   serde_json::from_str(&value).unwrap_or_else(|_| serde_json::json!({}))
-}
-
-fn pdf_escape(value: &str) -> String {
-  value
-    .replace('\\', "\\\\")
-    .replace('(', "\\(")
-    .replace(')', "\\)")
 }
 
 fn export_error(error: impl ToString) -> AppError {
