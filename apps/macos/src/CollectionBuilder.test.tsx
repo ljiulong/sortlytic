@@ -280,6 +280,29 @@ describe('CollectionPlanPreview', () => {
     expect(markup).not.toMatch(/<button[^>]*disabled=""/)
   })
 
+  it('确认前列出补全字段分类和涉及的计价端点', () => {
+    const markup = renderToStaticMarkup(
+      createElement(CollectionPlanPreview, {
+        actionMessage: '等待确认',
+        isBusy: false,
+        onConfirmPlan: vi.fn(),
+        plan: {
+          ...draftPlan,
+          selectedFields: ['bio', 'age', 'followers_count', 'last_posted_at'],
+          pricingEndpoints: [
+            '/api/v1/douyin/search/fetch_user_search',
+            '/api/v1/douyin/web/handler_user_profile_v4',
+          ],
+          pricingReady: true,
+        },
+      }),
+    )
+
+    expect(markup).toContain('补全字段分类：账号资料、人口属性、账号统计、账号活跃')
+    expect(markup).toContain('涉及端点：/api/v1/douyin/search/fetch_user_search')
+    expect(markup).toContain('/api/v1/douyin/web/handler_user_profile_v4')
+  })
+
   it('确认前展示已启用的明确性别筛选', () => {
     const markup = renderToStaticMarkup(
       createElement(CollectionPlanPreview, {

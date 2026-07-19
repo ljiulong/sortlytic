@@ -15,6 +15,7 @@ import { useTranslation } from 'react-i18next'
 import type { z } from 'zod'
 import AccountSourceFields from './AccountSourceFields'
 import AppSelect from './AppSelect'
+import { accountFieldGroups } from './account-field-groups'
 import type { AccountCollectionCapabilityView } from './backend-api'
 import './CollectionBuilder.css'
 import CollectionFilterFields from './CollectionFilterFields'
@@ -543,6 +544,12 @@ export function CollectionPlanPreview({
   const budget = plan.budget > 0 ? `$${plan.budget}` : t('preview.budgetLimitUnset')
   const costEstimate = localizedCostEstimate(t, plan.costEstimate, i18n.language)
   const statusLabel = localizedPlanStatus(t, plan.status)
+  const selectedFieldSet = new Set(plan.selectedFields ?? [])
+  const enrichmentGroups = (plan.pricingEndpoints?.length ?? 0) > 1
+    ? accountFieldGroups
+      .filter((group) => group.fields.some((field) => selectedFieldSet.has(field)))
+      .map((group) => t(`accountFieldGroups.${group.key}`))
+    : []
 
   return (
     <section className="collection-plan" aria-labelledby="collection-plan-heading">
@@ -582,6 +589,16 @@ export function CollectionPlanPreview({
             </div>
             <strong>{costEstimate}</strong>
             <span>{t('preview.budgetLimit', { budget })}</span>
+            {enrichmentGroups.length ? (
+              <span>{t('preview.enrichmentGroups', {
+                groups: enrichmentGroups.join(t('preview.listSeparator')),
+              })}</span>
+            ) : null}
+            {plan.pricingEndpoints?.length ? (
+              <span>{t('preview.pricingEndpoints', {
+                endpoints: plan.pricingEndpoints.join(t('preview.listSeparator')),
+              })}</span>
+            ) : null}
           </section>
         </div>
 
