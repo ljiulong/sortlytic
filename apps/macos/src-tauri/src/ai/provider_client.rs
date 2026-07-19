@@ -67,7 +67,7 @@ pub(crate) fn collection_plan_request(prompt_content: &str, intent_text: &str) -
       authoritative_collection_contract()
     ),
     user_prompt: json!({ "input_json": { "text": intent_text } }).to_string(),
-    schema_name: "collection_plan_v3".to_string(),
+    schema_name: "collection_plan_v4".to_string(),
     output_schema: collection_plan_schema(),
   }
 }
@@ -91,12 +91,13 @@ pub(crate) fn connection_test_request() -> ModelRequest {
 }
 
 fn authoritative_collection_contract() -> &'static str {
-  r#"你必须把 input_json.text 转为 collection_plan_v3 JSON，只输出 JSON，不得输出 Markdown。
-支持平台仅为 tiktok、douyin、xiaohongshu。数据类型仅为 keyword_search、comments、account_profile、account_posts、item_detail。
-每个可执行步骤必须包含唯一 step_key、正确的 endpoint_key、平台、数据类型、params、request_limit 和 output_selected。
-端点规则：keyword_search 需要 keyword；comments 需要 item_id；account_profile 和 account_posts 需要 account_id；item_detail 需要 item_id。需要先搜索再采集详情时，把 keyword_search 放入 internal_data_types，并用 depends_on_step_key 与 input_binding 表达依赖。
-TikTok 关键词搜索的时间范围只能是 1、7、30、180；抖音和小红书关键词搜索只能是 1、7、180。地区提交值使用 ISO 两位代码。
-年龄只允许来自公开接口的明确年龄并按闭区间过滤；性别只允许来自公开接口的明确规范值，禁止根据头像、姓名或简介推断。
+  r#"你必须把 input_json.text 转为 collection_plan_v4 账号计划 JSON，只输出 JSON，不得输出 Markdown。
+每条计划只能选择 tiktok、douyin、xiaohongshu 中的一个平台和一个 account_source。三平台支持 user_search、content_search_authors、direct_account、item_author、comment_authors；followers 和 followings 只支持 TikTok、抖音；similar_accounts 只支持 TikTok。
+发现步骤 operation_key 必须为 discover.<account_source>，role 为 discovery。补全步骤只能使用 enrich.profile、enrich.extended_demographics、enrich.account_country、enrich.account_posts，role 为 enrichment，并依赖 discover。
+TikTok 和小红书不得选择 gender、age；抖音选择 gender 或 age 时必须共用 enrich.extended_demographics。TikTok 的 country_region 使用 enrich.account_country。不得生成平台不支持的来源、字段或补全步骤。
+基础身份字段由系统固定采集，不放入 selected_fields。selected_fields 只包含用户明确要求的公开业务字段；不得把分页游标、日志 ID、缓存 URL、临时 CDN 地址或签名令牌作为业务字段。
+output_rules 必须区分未选择的“任务未设置”和已选择但未返回的“未采集到”，并要求逐字段证据。数值 0 是合法值；性别 0、年龄 -1 或超出 0 至 130 为未知。
+年龄和性别只允许使用公开接口明确返回值，禁止根据头像、姓名、简介或模型推断；筛选必须在账号合并后执行，未知值不能通过已启用筛选。
 用户给出的预算必须精确换算为 USD 微美元写入 budget_limit.amount_micros，不得使用固定默认预算覆盖用户输入。
 任何缺失或不确定字段必须写入 missing_fields，不得猜测；requires_user_confirmation 必须为 true。"#
 }
@@ -471,7 +472,7 @@ mod tests {
   #[test]
   fn custom_openai_sends_real_request_and_parses_structured_output() {
     let response_body = json!({
-      "choices": [{ "message": { "content": "{\"schema_version\":3}" } }],
+      "choices": [{ "message": { "content": "{\"schema_version\":4}" } }],
       "usage": { "prompt_tokens": 23, "completion_tokens": 7 }
     })
     .to_string();
@@ -491,7 +492,7 @@ mod tests {
     .expect("OpenAI-compatible request should succeed");
     server.join().expect("test server should finish");
 
-    assert_eq!(response.output_json["schema_version"], 3);
+    assert_eq!(response.output_json["schema_version"], 4);
     assert_eq!(response.input_tokens, Some(23));
     assert_eq!(response.output_tokens, Some(7));
   }
@@ -499,7 +500,7 @@ mod tests {
   #[test]
   fn official_openai_sends_the_strict_collection_plan_schema() {
     let response_body = json!({
-      "choices": [{ "message": { "content": "{\"schema_version\":3}" } }]
+      "choices": [{ "message": { "content": "{\"schema_version\":4}" } }]
     })
     .to_string();
     let (base_url, server) = serve_once(200, response_body, |request| {

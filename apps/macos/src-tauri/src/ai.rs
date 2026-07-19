@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::api_profiles::{
   load_api_profile_registry, AiApiFormat, AiProviderType, ApiProfileStatus,
 };
-use crate::collection::validate_collection_plan_v3;
+use crate::collection::validate_collection_plan_v4;
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 use crate::prompts::seed_builtin_prompts;
 use crate::tasks::{
@@ -137,7 +137,7 @@ pub fn generate_collection_plan_from_text(
       "INSERT INTO runtime_snapshot (
         id, task_id, provider_id, model_id, api_format, base_url_type, prompt_version_id,
         output_schema_id, capabilities_json, config_source, created_at
-      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'collection_plan_v3', ?8, 'active_api_profile', ?9)",
+      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'collection_plan_v4', ?8, 'active_api_profile', ?9)",
       params![
         runtime_snapshot_id,
         input.task_id,
@@ -181,22 +181,24 @@ pub fn generate_collection_plan_from_text(
   };
   let schema_errors = validate_collection_plan_schema(&response.output_json);
   let generated = normalize_model_plan(response.output_json);
-  let mut plan_validation = validate_collection_plan_v3(&generated);
+  let mut plan_validation = validate_collection_plan_v4(&generated);
   plan_validation.errors.extend(schema_errors);
   plan_validation.errors.sort();
   plan_validation.errors.dedup();
   plan_validation.valid = plan_validation.errors.is_empty();
   let schema_valid = plan_validation.valid;
   let generated_platforms = json_string_array(generated.get("platforms"));
-  let generated_data_types = json_string_array(generated.get("data_types"));
-  if schema_valid && !generated_platforms.is_empty() && !generated_data_types.is_empty() {
+  if schema_valid
+    && !generated_platforms.is_empty()
+    && generated.get("entity").and_then(Value::as_str) == Some("account")
+  {
     update_collection_task(
       &root_path,
       &input.task_id,
       UpdateCollectionTaskInput {
         name: None,
         platforms: Some(generated_platforms),
-        data_types: Some(generated_data_types),
+        data_types: Some(vec!["account".to_string()]),
       },
     )?;
   }
