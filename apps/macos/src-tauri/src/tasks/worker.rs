@@ -6,7 +6,9 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::accounts::{persist_account_observations, AccountObservationInput, AgeRange};
+use crate::accounts::{
+  persist_account_observations, AccountObservationInput, AccountPersistenceResult, AgeRange,
+};
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 use crate::records::{persist_collection_page, PersistCollectionPageInput};
 use crate::secrets::read_secret_for_snapshot;
@@ -466,9 +468,13 @@ pub(super) fn persist_step_accounts(
   run_id: &str,
   records: &[Value],
   collected_at: Option<&str>,
-) -> AppResult<()> {
+) -> AppResult<AccountPersistenceResult> {
   if step.schema_version < 3 {
-    return Ok(());
+    return Ok(AccountPersistenceResult {
+      observed_count: 0,
+      skipped_count: 0,
+      output_count: 0,
+    });
   }
   let record_limit =
     usize::try_from(step.record_limit).map_err(|_| task_error("账号输出上限超出运行平台范围"))?;
@@ -486,8 +492,7 @@ pub(super) fn persist_step_accounts(
         .map(ToString::to_string)
         .unwrap_or_else(|| Utc::now().to_rfc3339()),
     },
-  )?;
-  Ok(())
+  )
 }
 
 pub(super) fn mark_step_running(connection: &rusqlite::Connection, step_id: &str) -> AppResult<()> {
@@ -614,7 +619,7 @@ pub(super) fn mark_checkpoint_uncertain(
   Ok(())
 }
 
-fn mark_checkpoint_failed(
+pub(super) fn mark_checkpoint_failed(
   connection: &rusqlite::Connection,
   checkpoint_id: &str,
   error_code: &str,

@@ -11,9 +11,9 @@ use super::pricing::checkpoint_quote_json;
 use super::targets::{materialize_targets, PipelineTarget, TargetStepInput};
 use super::{
   database_error, insert_prepared_checkpoint, mark_checkpoint_completed,
-  mark_checkpoint_requesting, mark_checkpoint_response_received, mark_checkpoint_uncertain,
-  mark_step_running, mark_step_stopped, mark_step_success, open_workspace_connection,
-  persist_step_accounts, task_error, worker_error, RunStep,
+  mark_checkpoint_failed, mark_checkpoint_requesting, mark_checkpoint_response_received,
+  mark_checkpoint_uncertain, mark_step_running, mark_step_stopped, mark_step_success,
+  open_workspace_connection, persist_step_accounts, task_error, worker_error, RunStep,
 };
 use crate::domain::AppResult;
 use crate::domain::{AppError, AppErrorCode};
@@ -206,13 +206,28 @@ where
       false,
     ));
   }
-  persist_step_accounts(
+  let account_result = persist_step_accounts(
     connection,
     step,
     run_id,
     &page.records,
     Some(&response_received_at),
   )?;
+  if step.schema_version >= 4
+    && step.depends_on_step_key.is_none()
+    && !page.records.is_empty()
+    && account_result.observed_count == 0
+    && account_result.skipped_count == page.records.len()
+  {
+    const ERROR_CODE: &str = "ACCOUNT_IDENTITY_CONTRACT_FAILED";
+    const ERROR_MESSAGE: &str =
+      "TikHub 主来源返回了记录，但所有记录都缺少平台用户 ID 和可用账号标识";
+    mark_checkpoint_failed(connection, &checkpoint_id, ERROR_CODE, ERROR_MESSAGE)?;
+    target.request_count += 1;
+    let cursor = target.cursor.clone();
+    update_target(connection, target, "failed", cursor)?;
+    return Err(worker_error(ERROR_CODE, ERROR_MESSAGE, false));
+  }
 
   let raw_response = page.raw_response.to_string();
   let response_hash = format!("{:x}", Sha256::digest(raw_response.as_bytes()));

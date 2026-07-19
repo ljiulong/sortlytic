@@ -122,3 +122,107 @@ fn version_four_worker_enriches_discovered_account_country_by_handle() {
   );
   std::fs::remove_dir_all(root).ok();
 }
+
+#[test]
+fn version_four_worker_rejects_non_empty_discovery_without_account_identity() {
+  let root = std::env::temp_dir().join(format!("worker-v4-identity-{}", Uuid::new_v4()));
+  create_workspace("v4 账号身份契约测试", &root).expect("workspace should be created");
+  install_successful_tikhub_profile(&root).expect("TikHub profile should install");
+  let task = create_collection_task(
+    &root,
+    CreateCollectionTaskInput {
+      name: "TikTok 账号身份契约".to_string(),
+      source_type: "form".to_string(),
+      platforms: vec!["tiktok".to_string()],
+      data_types: vec!["account".to_string()],
+    },
+  )
+  .expect("v4 account task should create");
+  let draft = crate::collection::generate_account_collection_plan(
+    crate::collection::AccountFormCollectionPlanRequest {
+      platform: "tiktok".to_string(),
+      account_source: "user_search".to_string(),
+      selected_fields: Vec::new(),
+      enrichment_policy: "auto_costed".to_string(),
+      params: json!({ "keyword": "identity contract" }),
+      age_range: None,
+      gender_filter: None,
+      request_limit: Some(1),
+      record_limit: Some(1),
+      budget_limit_micros: Some(1_000_000),
+    },
+  )
+  .expect("v4 account plan should generate");
+  let plan = save_collection_plan(
+    &root,
+    SaveCollectionPlanInput {
+      task_id: task.id.clone(),
+      source: draft.source,
+      plan_json: draft.plan_json,
+      validation_status: draft.validation_status,
+      validation_errors_json: Some(draft.validation_errors_json),
+      cost_estimate_json: Some(draft.cost_estimate_json),
+    },
+  )
+  .expect("v4 account plan should save");
+  confirm_collection_plan(&root, &task.id, &plan.id).expect("v4 account plan should confirm");
+  enqueue_task(&root, &task.id).expect("v4 account task should enqueue");
+  let run = claim_next_task(&root)
+    .expect("worker should claim v4 account task")
+    .expect("v4 account task should exist");
+
+  let error = execute_claimed_run_with_fetcher(&root, &run, |_| {
+    let record = json!({
+      "id": "provider-row-without-account-identity",
+      "nickname": "缺少身份的账号"
+    });
+    Ok(CollectionPage {
+      records: vec![record.clone()],
+      next_cursor: None,
+      has_more: false,
+      raw_response: json!({ "code": 200, "data": { "user_list": [record] } }),
+    })
+  })
+  .expect_err("non-empty discovery without identity must fail");
+
+  assert_eq!(
+    error.safe_details["worker_code"],
+    "ACCOUNT_IDENTITY_CONTRACT_FAILED"
+  );
+  let connection = super::open_workspace_connection(&root).expect("database should open");
+  let checkpoint = connection
+    .query_row(
+      "SELECT status, retryable, last_error_code
+       FROM collection_page_checkpoint
+       WHERE task_run_step_id = (
+         SELECT id FROM task_run_step WHERE task_run_id = ?1 LIMIT 1
+       )",
+      [&run.id],
+      |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, i64>(1)?,
+          row.get::<_, Option<String>>(2)?,
+        ))
+      },
+    )
+    .expect("failed discovery checkpoint should persist");
+  assert_eq!(
+    checkpoint,
+    (
+      "failed".to_string(),
+      0,
+      Some("ACCOUNT_IDENTITY_CONTRACT_FAILED".to_string())
+    )
+  );
+  let account_count = connection
+    .query_row(
+      "SELECT COUNT(*) FROM collected_account WHERE task_run_id = ?1",
+      [&run.id],
+      |row| row.get::<_, i64>(0),
+    )
+    .expect("account count should query");
+  assert_eq!(account_count, 0);
+  drop(connection);
+  std::fs::remove_dir_all(root).ok();
+}
