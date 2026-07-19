@@ -5,6 +5,7 @@ use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 use crate::tasks::CostEstimateView;
 
 mod account_capabilities;
+mod account_plan;
 mod capabilities;
 mod form_plan;
 pub(crate) mod plan_estimate;
@@ -17,6 +18,9 @@ pub use account_capabilities::{
   AccountFieldGroupView, AccountFieldValueType, AccountSourceCapabilityView,
   AccountSourceInputKind, DataTypeCapabilityView, FilterExecution, PaginationMode,
   PlatformCapabilityView,
+};
+pub use account_plan::{
+  generate_account_collection_plan, validate_collection_plan_v4, AccountFormCollectionPlanRequest,
 };
 pub use form_plan::generate_form_collection_plan;
 pub use plan_validation::validate_collection_plan;
