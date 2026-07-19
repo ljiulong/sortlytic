@@ -568,6 +568,52 @@ describe('collection form controls', () => {
     expect(mounted.container.textContent).toContain('人口属性2/2')
   })
 
+  it('平台能力仍在加载时禁止生成旧能力计划', async () => {
+    let resolveCapability: ((value: Awaited<ReturnType<
+      typeof backendApiMocks.getAccountCollectionCapabilities
+    >>) => void) | undefined
+    backendApiMocks.getAccountCollectionCapabilities.mockImplementation(() => new Promise(
+      (resolve) => { resolveCapability = resolve },
+    ))
+    const mounted = mountBuilder({
+      onGenerateNaturalPlan: vi.fn(async () => draftPlan),
+    })
+
+    await act(async () => mounted.container.querySelector<HTMLButtonElement>('#platform')?.click())
+    await act(async () => Array.from(
+      mounted.container.querySelectorAll<HTMLButtonElement>('.app-select__option'),
+    ).find((option) => option.textContent?.includes('TikTok'))?.click())
+
+    expect(findButton(mounted.container, '生成计划')?.disabled).toBe(true)
+    await act(async () => resolveCapability?.({
+      catalog_version: 1,
+      platform: 'tiktok',
+      display_name: 'TikTok',
+      account_sources: [{
+        key: 'user_search',
+        display_name: '搜索用户',
+        description: '按关键词搜索公开账号。',
+        input_kind: 'keyword',
+        endpoint_key: 'tiktok.user_search',
+        pagination_mode: 'cursor',
+        max_page_size: 20,
+        max_request_count: 100,
+      }],
+      field_groups: [{ key: 'profile', display_name: '账号资料' }],
+      fields: [{
+        key: 'avatar_url',
+        group: 'profile',
+        display_name: '头像',
+        description: '账号公开头像地址。',
+        value_type: 'text',
+        availability: 'direct',
+        default_selected: true,
+        required_operation_keys: [],
+      }],
+    }))
+    expect(findButton(mounted.container, '生成计划')?.disabled).toBe(false)
+  })
+
   it('时间范围只接受平台能力中的规范值，不再接受任意文本', () => {
     for (const range of ['1', '7', '180']) {
       expect(collectionFormSchema.safeParse({ ...baseInput, range }).success).toBe(true)

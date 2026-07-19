@@ -116,6 +116,12 @@ export function CollectionBuilder({
   const capabilityReady = Boolean(
     selectedBackendPlatform && accountCapability?.platform === selectedBackendPlatform,
   )
+  const capabilitySubmittable = Boolean(
+    capabilityReady
+    && accountCapability
+    && accountCapability.account_sources.length > 0
+    && accountCapability.fields.length > 0,
+  )
   const ageFilterSupported = capabilityReady && accountCapability?.fields.some(
     (field) => field.key === 'age' && field.availability !== 'unsupported',
   ) === true
@@ -184,6 +190,7 @@ export function CollectionBuilder({
   }
 
   const submitForm = async (values: CollectionFormValues) => {
+    if (!capabilitySubmittable) return
     await submitPlanOnce(() => onGenerateFormPlan(values))
   }
 
@@ -380,7 +387,11 @@ export function CollectionBuilder({
 
             <div className="collection-builder__form-footer">
               <p>{t('form.footer')}</p>
-              <button className="primary-button" disabled={isBusy} type="submit">
+              <button
+                className="primary-button"
+                disabled={isBusy || Boolean(selectedPlatform && !capabilitySubmittable)}
+                type="submit"
+              >
                 <Gauge size={16} aria-hidden="true" />
                 {isBusy ? t('form.generating') : t('form.generatePlan')}
               </button>
