@@ -105,6 +105,7 @@ pub struct AccountFieldCapabilityView {
   pub required_operation_keys: Vec<String>,
   pub missing_reason: Option<String>,
   pub supported_platforms: Vec<String>,
+  pub covered_by_source_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -132,6 +133,17 @@ const FIELD_GROUPS: &[(&str, &str)] = &[
   ("statistics", "账号统计"),
   ("activity", "账号活跃"),
   ("platform_specific", "平台特有"),
+];
+
+#[rustfmt::skip]
+const DIRECT_PROFILE_FIELDS: &[&str] = &[
+  "secure_user_id", "avatar_url", "profile_url", "bio", "website_url", "verification_status",
+  "verification_reason", "account_type", "private_account", "language", "profile_tags",
+  "followers_count", "following_count", "friends_count", "posts_count", "likes_received_count",
+  "liked_content_count", "account_created_at", "live_status", "live_room_id", "username_modified_at",
+  "nickname_modified_at", "commerce_status", "commerce_category", "seller_status", "organization_status",
+  "comments_permission", "duet_permission", "stitch_permission", "download_permission", "favorites_visibility",
+  "following_visibility", "playlist_visibility",
 ];
 
 // 静态目录按一字段一行维护，避免纯声明数据被格式化为数百行并越过源码行数门禁。
@@ -360,7 +372,37 @@ fn field_capability(platform: &str, definition: &FieldDefinition) -> AccountFiel
       })
       .map(ToString::to_string)
       .collect(),
+    covered_by_source_keys: account_sources(platform)
+      .into_iter()
+      .filter(|source| source_covers_field(platform, &source.key, key))
+      .map(|source| source.key)
+      .collect(),
   }
+}
+
+pub(super) fn source_covers_field(platform: &str, account_source: &str, field_key: &str) -> bool {
+  if account_source == "direct_account" {
+    return DIRECT_PROFILE_FIELDS.contains(&field_key)
+      || (platform == "douyin" && field_key == "country_region");
+  }
+  matches!(
+    (platform, account_source, field_key),
+    (
+      "douyin",
+      "user_search",
+      "secure_user_id"
+        | "avatar_url"
+        | "bio"
+        | "verification_reason"
+        | "gender"
+        | "followers_count"
+        | "live_status",
+    ) | (
+      "tiktok",
+      "user_search",
+      "secure_user_id" | "avatar_url" | "bio" | "followers_count",
+    ) | ("xiaohongshu", "user_search", "avatar_url" | "bio")
+  )
 }
 
 fn field_support(
@@ -539,6 +581,16 @@ mod tests {
     assert_eq!(gender["label"], "性别");
     assert!(gender["missing_reason"].as_str().is_some());
     assert_eq!(gender["supported_platforms"], serde_json::json!(["douyin"]));
+    let avatar = serialized["fields"]
+      .as_array()
+      .unwrap()
+      .iter()
+      .find(|field| field["key"] == "avatar_url")
+      .unwrap();
+    assert_eq!(
+      avatar["covered_by_source_keys"],
+      serde_json::json!(["user_search", "direct_account"])
+    );
   }
 
   #[test]

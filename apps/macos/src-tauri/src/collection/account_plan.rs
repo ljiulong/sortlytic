@@ -3,23 +3,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use super::account_capabilities::source_covers_field;
 use super::{
   get_account_collection_capabilities, AccountCollectionCapabilityView, AccountFieldAvailability,
   AccountSourceInputKind, AgeRangeInput, CollectionPlanDraftView, CollectionPlanValidationResult,
   PaginationMode,
 };
 use crate::domain::{AppError, AppErrorStage, AppResult};
-
-#[rustfmt::skip]
-const DIRECT_PROFILE_FIELDS: &[&str] = &[
-  "secure_user_id", "avatar_url", "profile_url", "bio", "website_url", "verification_status",
-  "verification_reason", "account_type", "private_account", "language", "profile_tags",
-  "followers_count", "following_count", "friends_count", "posts_count", "likes_received_count",
-  "liked_content_count", "account_created_at", "live_status", "live_room_id", "username_modified_at",
-  "nickname_modified_at", "commerce_status", "commerce_category", "seller_status", "organization_status",
-  "comments_permission", "duet_permission", "stitch_permission", "download_permission", "favorites_visibility",
-  "following_visibility", "playlist_visibility",
-];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AccountFormCollectionPlanRequest {
@@ -576,31 +566,6 @@ fn required_enrichment_operations(
     }
   }
   operations
-}
-
-fn source_covers_field(platform: &str, account_source: &str, field_key: &str) -> bool {
-  if account_source == "direct_account" {
-    return DIRECT_PROFILE_FIELDS.contains(&field_key)
-      || (platform == "douyin" && field_key == "country_region");
-  }
-  matches!(
-    (platform, account_source, field_key),
-    (
-      "douyin",
-      "user_search",
-      "secure_user_id"
-        | "avatar_url"
-        | "bio"
-        | "verification_reason"
-        | "gender"
-        | "followers_count"
-        | "live_status",
-    ) | (
-      "tiktok",
-      "user_search",
-      "secure_user_id" | "avatar_url" | "bio" | "followers_count",
-    ) | ("xiaohongshu", "user_search", "avatar_url" | "bio")
-  )
 }
 
 fn enrichment_endpoint_key(platform: &str, operation_key: &str) -> Option<String> {
