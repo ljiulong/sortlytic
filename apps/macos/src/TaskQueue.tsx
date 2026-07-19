@@ -9,6 +9,7 @@ import TaskRunLogPanel from './TaskRunLogPanel'
 import type { TaskExportInput, WorkbenchRuntimeData } from './use-workbench-backend'
 import type { TaskStatus } from './workbench-data'
 import './TaskQueue.css'
+import './TaskQueueActions.css'
 
 type TaskRow = WorkbenchRuntimeData['tasks'][number]
 type ActiveTaskMode =
