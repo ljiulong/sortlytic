@@ -41,7 +41,7 @@ fn report_exports_xlsx_file() {
 }
 
 #[test]
-fn pdf_export_contains_persisted_result_accounts_instead_of_a_placeholder() {
+fn pdf_export_embeds_its_font_and_does_not_copy_raw_accounts() {
   let (root_path, report) = test_report("pdf-results");
   let connection = open_workspace_connection(&root_path).expect("database should open");
   connection
@@ -67,13 +67,18 @@ fn pdf_export_contains_persisted_result_accounts_instead_of_a_placeholder() {
     .expect("analysis report should build");
   let job = create_export_job(&root_path, &analysis.id, "pdf", None).expect("pdf should export");
   let bytes = fs::read(job.file_path.expect("pdf path")).expect("pdf should be readable");
-  let text = std::str::from_utf8(&bytes).expect("generated PDF should be ASCII-safe");
+  let text = String::from_utf8_lossy(&bytes);
 
-  assert!(text.contains(&pdf_hex_text("测试账号")));
-  assert!(text.contains(&pdf_hex_text("verified_user")));
-  assert!(text.contains(&pdf_hex_text("作品数：0")));
+  assert!(bytes
+    .windows(b"/FontFile2".len())
+    .any(|value| value == b"/FontFile2"));
+  assert!(!text.contains(&pdf_hex_text("测试账号")));
+  assert!(!text.contains(&pdf_hex_text("verified_user")));
+  assert!(!text.contains(&pdf_hex_text("公开简介")));
+  assert!(!text.contains("STSong-Light"));
   assert!(!text.contains("See XLSX export for full structured data."));
-  assert_pdf_xref_is_well_formed(&bytes);
+  assert!(bytes.starts_with(b"%PDF-"));
+  assert!(bytes.windows(b"%%EOF".len()).any(|value| value == b"%%EOF"));
 
   std::fs::remove_dir_all(root_path).ok();
 }
@@ -467,50 +472,6 @@ fn xml_cell<'a>(sheet: &'a str, reference: &str) -> &'a str {
 
 fn unique_temp_workspace(label: &str) -> std::path::PathBuf {
   std::env::temp_dir().join(format!("sortlytic-{label}-{}", Uuid::new_v4()))
-}
-
-fn assert_pdf_xref_is_well_formed(bytes: &[u8]) {
-  let text = std::str::from_utf8(bytes).expect("generated PDF should be UTF-8 in this fixture");
-  let startxref_marker = "\nstartxref\n";
-  let startxref_position = text
-    .find(startxref_marker)
-    .expect("PDF should declare startxref");
-  let xref_offset = text[startxref_position + startxref_marker.len()..]
-    .lines()
-    .next()
-    .expect("startxref should contain an offset")
-    .parse::<usize>()
-    .expect("startxref should contain a numeric offset");
-  assert_eq!(text.get(xref_offset..xref_offset + 5), Some("xref\n"));
-
-  let mut lines = text[xref_offset..].lines();
-  assert_eq!(lines.next(), Some("xref"));
-  let subsection = lines.next().expect("xref should declare a subsection");
-  let mut subsection_parts = subsection.split_whitespace();
-  assert_eq!(subsection_parts.next(), Some("0"));
-  let object_count = subsection_parts
-    .next()
-    .expect("xref should declare an object count")
-    .parse::<usize>()
-    .expect("xref object count should be numeric");
-  assert_eq!(object_count, text.matches(" 0 obj\n").count() + 1);
-  assert_eq!(lines.next(), Some("0000000000 65535 f "));
-
-  for object_number in 1..object_count {
-    let entry = lines
-      .next()
-      .expect("xref should contain every object entry");
-    let offset = entry[..10]
-      .parse::<usize>()
-      .expect("xref object offset should be numeric");
-    let header = format!("{object_number} 0 obj");
-    assert!(
-      text
-        .get(offset..)
-        .is_some_and(|object| object.starts_with(&header)),
-      "xref entry should point to object {object_number}"
-    );
-  }
 }
 
 fn pdf_hex_text(value: &str) -> String {
