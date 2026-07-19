@@ -69,11 +69,12 @@ fn failed_run_can_create_a_new_retry_run() {
 
 #[test]
 fn budget_stop_preserves_persisted_results_as_partial_success() {
-  let (root_path, task, _) = prepared_task_workspace("execution-budget-partial");
+  let (root_path, task, plan) = prepared_task_workspace("execution-budget-partial");
   enqueue_task(&root_path, &task.id).expect("task should enqueue");
   let running = claim_next_task(&root_path)
     .expect("claim should succeed")
     .expect("queued task should be claimed");
+  let run_step_id = set_run_step_status(&root_path, &running.id, &plan.id, "running");
   let connection = open_workspace_connection(&root_path).expect("database should open");
   connection
     .execute(
@@ -85,6 +86,41 @@ fn budget_stop_preserves_persisted_results_as_partial_success() {
       params![running.id, "2026-07-20T00:00:00+00:00"],
     )
     .expect("persisted result should insert");
+  connection
+    .execute(
+      "INSERT INTO collection_page_checkpoint (
+         id, task_run_step_id, page_index, idempotency_key, status,
+         request_attempt_count, record_count_received, record_count_persisted,
+         cost_actual_json, requested_at, response_received_at, committed_at,
+         created_at, updated_at
+       ) VALUES (?1, ?2, 0, ?3, 'completed', 1, 1, 1, ?4, ?5, ?5, ?5, ?5, ?5)",
+      params![
+        Uuid::new_v4().to_string(),
+        run_step_id,
+        Uuid::new_v4().to_string(),
+        serde_json::json!({
+          "currency": "USD",
+          "amount_micros": 125_000,
+          "billing_status": "quoted_not_final"
+        })
+        .to_string(),
+        "2026-07-20T00:00:00+00:00"
+      ],
+    )
+    .expect("completed billed checkpoint should insert");
+  connection
+    .execute(
+      "INSERT INTO collection_page_checkpoint (
+         id, task_run_step_id, page_index, idempotency_key, status, created_at, updated_at
+       ) VALUES (?1, ?2, 1, ?3, 'prepared', ?4, ?4)",
+      params![
+        Uuid::new_v4().to_string(),
+        run_step_id,
+        Uuid::new_v4().to_string(),
+        "2026-07-20T00:01:00+00:00"
+      ],
+    )
+    .expect("next unbilled checkpoint should insert");
   drop(connection);
 
   let stopped = fail_task_run(
@@ -113,6 +149,16 @@ fn budget_stop_preserves_persisted_results_as_partial_success() {
   assert!(!stopped.retryable);
   assert_eq!(stopped_task.status, "partial_success");
   assert!(stopped_task.completed_at.is_some());
+  let expected_cost = serde_json::json!({
+    "currency": "USD",
+    "billing_status": "quoted_not_final",
+    "quoted_cost_micros": 125_000,
+    "amount_micros": 125_000,
+    "request_count": 1,
+    "record_count": 1
+  });
+  assert_eq!(stopped.cost_actual_json, expected_cost);
+  assert_eq!(stopped_task.actual_cost_json, expected_cost);
   assert_eq!(page.total_count, 1);
   assert_eq!(page.items[0].username.as_deref(), Some("预算内结果"));
   assert_eq!(

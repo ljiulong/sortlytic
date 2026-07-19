@@ -28,26 +28,6 @@ pub fn fail_task_run(
     "执行失败"
   };
 
-  let run_changed = transaction
-    .execute(
-      "UPDATE task_run
-       SET status = ?1, ended_at = ?2, current_stage = ?3, error_code = ?4,
-           error_message = ?5, retryable = ?6
-       WHERE id = ?7 AND status = 'running'",
-      params![
-        terminal_status,
-        now,
-        current_stage,
-        code,
-        message,
-        i64::from(!budget_stopped_with_results && retryable && !has_request_evidence),
-        run_id
-      ],
-    )
-    .map_err(database_error)?;
-  if run_changed != 1 {
-    return Err(task_error("运行记录状态已变化，无法标记终态"));
-  }
   settle_active_children(
     &transaction,
     run_id,
@@ -74,14 +54,45 @@ pub fn fail_task_run(
     &message,
     &now,
   )?;
+  let terminal_cost_json = budget_stopped_with_results
+    .then(|| settled_cost_summary(&transaction, run_id))
+    .transpose()?;
+
+  let run_changed = transaction
+    .execute(
+      "UPDATE task_run
+       SET status = ?1, ended_at = ?2, current_stage = ?3, error_code = ?4,
+           error_message = ?5, retryable = ?6,
+           cost_actual_json = COALESCE(?7, cost_actual_json)
+       WHERE id = ?8 AND status = 'running'",
+      params![
+        terminal_status,
+        now,
+        current_stage,
+        code,
+        message,
+        i64::from(!budget_stopped_with_results && retryable && !has_request_evidence),
+        terminal_cost_json.as_deref(),
+        run_id
+      ],
+    )
+    .map_err(database_error)?;
+  if run_changed != 1 {
+    return Err(task_error("运行记录状态已变化，无法标记终态"));
+  }
   let task_changed = transaction
     .execute(
       "UPDATE collection_task
        SET status = ?1,
            completed_at = CASE WHEN ?1 = 'partial_success' THEN ?2 ELSE completed_at END,
-           updated_at = ?2
-       WHERE id = ?3 AND status = 'running'",
-      params![terminal_status, now, run.task_id],
+           actual_cost_json = COALESCE(?3, actual_cost_json), updated_at = ?2
+       WHERE id = ?4 AND status = 'running'",
+      params![
+        terminal_status,
+        now,
+        terminal_cost_json.as_deref(),
+        run.task_id
+      ],
     )
     .map_err(database_error)?;
   if task_changed != 1 {
@@ -164,6 +175,72 @@ fn output_record_count(connection: &Connection, run_id: &str) -> AppResult<i64> 
       |row| row.get(0),
     )
     .map_err(database_error)
+}
+
+fn settled_cost_summary(connection: &Connection, run_id: &str) -> AppResult<String> {
+  let mut statement = connection
+    .prepare(
+      "SELECT checkpoint.cost_actual_json, checkpoint.request_attempt_count,
+              checkpoint.record_count_persisted
+       FROM collection_page_checkpoint AS checkpoint
+       JOIN task_run_step AS run_step ON run_step.id = checkpoint.task_run_step_id
+       WHERE run_step.task_run_id = ?1 AND checkpoint.status IN ('completed', 'failed')
+       ORDER BY run_step.id, checkpoint.page_index, checkpoint.id",
+    )
+    .map_err(database_error)?;
+  let rows = statement
+    .query_map(params![run_id], |row| {
+      Ok((
+        row.get::<_, String>(0)?,
+        row.get::<_, i64>(1)?,
+        row.get::<_, i64>(2)?,
+      ))
+    })
+    .map_err(database_error)?;
+  let mut cost_micros = 0_i64;
+  let mut request_count = 0_i64;
+  let mut record_count = 0_i64;
+  let mut billed_checkpoint_count = 0_i64;
+  for row in rows {
+    let (cost_json, checkpoint_requests, checkpoint_records) = row.map_err(database_error)?;
+    let parsed_cost = serde_json::from_str::<Value>(&cost_json)
+      .map_err(|_| task_error("已结算检查点的成本证据不是合法 JSON"))?;
+    if parsed_cost
+      .as_object()
+      .is_some_and(serde_json::Map::is_empty)
+    {
+      continue;
+    }
+    let checkpoint_cost = checkpoint_cost_micros(&cost_json)
+      .ok_or_else(|| task_error("已结算检查点缺少有效的 USD 成本证据"))?;
+    if checkpoint_requests <= 0 || checkpoint_records < 0 {
+      return Err(task_error("已结算检查点的请求或记录数量无效"));
+    }
+    cost_micros = cost_micros
+      .checked_add(checkpoint_cost)
+      .ok_or_else(|| task_error("部分成功任务的成本金额溢出"))?;
+    request_count = request_count
+      .checked_add(checkpoint_requests)
+      .ok_or_else(|| task_error("部分成功任务的请求次数溢出"))?;
+    record_count = record_count
+      .checked_add(checkpoint_records)
+      .ok_or_else(|| task_error("部分成功任务的记录数量溢出"))?;
+    billed_checkpoint_count += 1;
+  }
+  if billed_checkpoint_count == 0 {
+    return Err(task_error("已有采集结果但缺少已结算检查点成本证据"));
+  }
+  Ok(
+    serde_json::json!({
+      "currency": "USD",
+      "billing_status": "quoted_not_final",
+      "quoted_cost_micros": cost_micros,
+      "amount_micros": cost_micros,
+      "request_count": request_count,
+      "record_count": record_count
+    })
+    .to_string(),
+  )
 }
 
 fn run_has_request_evidence(connection: &Connection, run_id: &str) -> AppResult<bool> {
