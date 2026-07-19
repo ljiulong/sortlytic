@@ -62,6 +62,8 @@ pub struct CollectionTaskView {
   pub status: String,
   pub platforms_json: Value,
   pub data_types_json: Value,
+  pub account_source: Option<String>,
+  pub selected_fields_json: Value,
   pub created_at: String,
   pub updated_at: String,
   pub confirmed_at: Option<String>,
@@ -256,6 +258,7 @@ pub fn list_tasks(
     let mut statement = connection
       .prepare(
         "SELECT id, name, source_type, status, platforms_json, data_types_json,
+                account_source, selected_fields_json,
                 created_at, updated_at, confirmed_at, completed_at, cancelled_at,
                 cost_estimate_json, actual_cost_json
          FROM collection_task
@@ -271,6 +274,7 @@ pub fn list_tasks(
     let mut statement = connection
       .prepare(
         "SELECT id, name, source_type, status, platforms_json, data_types_json,
+                account_source, selected_fields_json,
                 created_at, updated_at, confirmed_at, completed_at, cancelled_at,
                 cost_estimate_json, actual_cost_json
          FROM collection_task
@@ -397,6 +401,7 @@ fn get_task_by_id(connection: &Connection, task_id: &str) -> AppResult<Collectio
   connection
     .query_row(
       "SELECT id, name, source_type, status, platforms_json, data_types_json,
+              account_source, selected_fields_json,
               created_at, updated_at, confirmed_at, completed_at, cancelled_at,
               cost_estimate_json, actual_cost_json
        FROM collection_task
@@ -454,13 +459,15 @@ fn map_task(row: &Row<'_>) -> rusqlite::Result<CollectionTaskView> {
     status: row.get(3)?,
     platforms_json: string_to_json(row.get(4)?),
     data_types_json: string_to_json(row.get(5)?),
-    created_at: row.get(6)?,
-    updated_at: row.get(7)?,
-    confirmed_at: row.get(8)?,
-    completed_at: row.get(9)?,
-    cancelled_at: row.get(10)?,
-    cost_estimate_json: string_to_json(row.get(11)?),
-    actual_cost_json: string_to_json(row.get(12)?),
+    account_source: row.get(6)?,
+    selected_fields_json: string_to_json(row.get(7)?),
+    created_at: row.get(8)?,
+    updated_at: row.get(9)?,
+    confirmed_at: row.get(10)?,
+    completed_at: row.get(11)?,
+    cancelled_at: row.get(12)?,
+    cost_estimate_json: string_to_json(row.get(13)?),
+    actual_cost_json: string_to_json(row.get(14)?),
   })
 }
 

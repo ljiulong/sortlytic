@@ -368,7 +368,13 @@ fn version_four_account_plan_saves_scope_cost_and_confirmation() {
     plan.validation_errors_json
   );
   assert_eq!(plan.cost_estimate_json["request_count_estimate"], 21);
-  confirm_collection_plan(&root_path, &task.id, &plan.id).expect("v4 plan should confirm");
+  let confirmed =
+    confirm_collection_plan(&root_path, &task.id, &plan.id).expect("v4 plan should confirm");
+  assert_eq!(confirmed.account_source.as_deref(), Some("user_search"));
+  assert_eq!(
+    confirmed.selected_fields_json,
+    serde_json::json!(["avatar_url", "country_region"])
+  );
   let connection = open_workspace_connection(&root_path).unwrap();
   let scope = connection
     .query_row(
