@@ -23,7 +23,12 @@
         { "url": "https://tikhub.io/pricing" }
       ]
     },
-    "opener:allow-open-path",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        { "path": "$APPDATA/**" }
+      ]
+    },
     "process:default",
     "updater:default"
   ]

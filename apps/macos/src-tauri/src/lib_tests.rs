@@ -52,11 +52,27 @@ fn stored_record_counts_are_exposed_as_an_active_workspace_command() {
 
 #[test]
 fn packaged_app_can_open_a_completed_export_path() {
-  let capability = include_str!("../capabilities/default.json");
+  let capability: serde_json::Value =
+    serde_json::from_str(include_str!("../capabilities/default.json"))
+      .expect("default capability must be valid JSON");
+  let opener = capability["permissions"]
+    .as_array()
+    .and_then(|permissions| {
+      permissions.iter().find(|permission| {
+        permission
+          .get("identifier")
+          .and_then(serde_json::Value::as_str)
+          == Some("opener:allow-open-path")
+      })
+    })
+    .expect("export files need the narrow opener command permission");
 
-  assert!(
-    capability.contains("\"opener:allow-open-path\""),
-    "export files need the narrow opener command permission"
+  assert_eq!(
+    opener
+      .pointer("/allow/0/path")
+      .and_then(serde_json::Value::as_str),
+    Some("$APPDATA/**"),
+    "open_path must stay scoped to Sortlytic application data"
   );
 }
 
