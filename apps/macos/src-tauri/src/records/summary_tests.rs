@@ -121,9 +121,10 @@ fn lists_paginated_results_from_the_latest_successful_run_only() {
     connection
       .execute(
         "INSERT INTO collection_task (
-          id, name, source_type, status, platforms_json, data_types_json, created_at, updated_at
+          id, name, source_type, status, platforms_json, data_types_json,
+          selected_fields_json, created_at, updated_at
         ) VALUES (?1, ?1, 'form', 'partial_success', '[\"tiktok\"]',
-          '[\"keyword_search\"]', ?2, ?2)",
+          '[\"account\"]', '[\"bio\",\"followers_count\",\"country_region\"]', ?2, ?2)",
         params![task_id, now],
       )
       .expect("task should insert");
@@ -200,9 +201,13 @@ fn lists_paginated_results_from_the_latest_successful_run_only() {
         "INSERT INTO collected_account (
           id, task_run_id, platform, identity_key, username, account, platform_user_id,
           profile_text, country_region, gender, age, followers_count, posts_count,
-          profile_url, data_source, collected_at, output_included, created_at, updated_at
+          profile_url, data_source, collected_at, account_fields_json, field_evidence_json,
+          output_included, created_at, updated_at
         ) VALUES (?1, ?2, 'tiktok', ?1, ?3, ?1, ?1, '公开简介', 'US', 'female',
-          30, 100, 5, 'https://example.com/profile', 'TikHub API', ?5, ?4, ?5, ?5)",
+          30, 100, 5, 'https://example.com/profile', 'TikHub API', ?5,
+          '{\"bio\":\"公开简介\",\"followers_count\":100,\"country_region\":\"US\",\"friends_count\":0}',
+          '{\"bio\":{\"endpoint_key\":\"tiktok.account_profile\",\"raw_path\":\"user.signature\",\"collected_at\":\"2026-07-18T00:00:00Z\"}}',
+          ?4, ?5, ?5)",
         params![id, run_id, username, output_included, created_at],
       )
       .expect("collected account should insert");
@@ -220,6 +225,10 @@ fn lists_paginated_results_from_the_latest_successful_run_only() {
   assert!(page.age_filter_configured);
   assert!(!page.gender_filter_configured);
   assert_eq!(
+    page.selected_fields,
+    vec!["bio", "followers_count", "country_region"]
+  );
+  assert_eq!(
     page
       .items
       .iter()
@@ -228,6 +237,11 @@ fn lists_paginated_results_from_the_latest_successful_run_only() {
     vec![Some("账号乙"), Some("账号丙")]
   );
   assert!(page.items.iter().all(|item| item.platform == "tiktok"));
+  assert_eq!(page.items[0].account_fields_json["friends_count"], 0);
+  assert_eq!(
+    page.items[0].field_evidence_json["bio"]["endpoint_key"],
+    "tiktok.account_profile"
+  );
 
   fs::remove_dir_all(root).ok();
 }

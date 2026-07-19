@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use chrono::{TimeZone, Utc};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, types::Type, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -91,6 +91,8 @@ pub struct TaskResultRecordView {
   pub data_source: String,
   pub collected_at: String,
   pub notes: Option<String>,
+  pub account_fields_json: Value,
+  pub field_evidence_json: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -100,6 +102,7 @@ pub struct TaskResultsPageView {
   pub run_status: String,
   pub age_filter_configured: bool,
   pub gender_filter_configured: bool,
+  pub selected_fields: Vec<String>,
   pub total_count: i64,
   pub offset: i64,
   pub limit: i64,
@@ -177,8 +180,10 @@ pub fn list_task_results(
               CASE WHEN json_type(plan.plan_json, '$.age_range') = 'object' THEN 1 ELSE 0 END,
               CASE WHEN json_type(plan.plan_json, '$.gender_filter') = 'array'
                      AND json_array_length(plan.plan_json, '$.gender_filter') > 0
-                   THEN 1 ELSE 0 END
+                   THEN 1 ELSE 0 END,
+              task.selected_fields_json
        FROM task_run AS run
+       JOIN collection_task AS task ON task.id = run.task_id
        LEFT JOIN collection_plan AS plan ON plan.id = run.plan_id
        WHERE run.task_id = ?1 AND run.status IN ('success', 'partial_success')
        ORDER BY COALESCE(run.ended_at, run.started_at) DESC, run.id DESC
@@ -190,6 +195,7 @@ pub fn list_task_results(
           row.get::<_, String>(1)?,
           row.get::<_, i64>(2)? != 0,
           row.get::<_, i64>(3)? != 0,
+          string_array_column(row, 4)?,
         ))
       },
     )
@@ -209,7 +215,7 @@ pub fn list_task_results(
       "SELECT id, platform, username, account, platform_user_id, profile_text,
               country_region, region_source, region_confidence, gender, age,
               followers_count, posts_count, last_posted_at, profile_url,
-              data_source, collected_at, notes
+              data_source, collected_at, notes, account_fields_json, field_evidence_json
        FROM collected_account
        WHERE task_run_id = ?1 AND output_included = 1
        ORDER BY created_at, id
@@ -237,6 +243,8 @@ pub fn list_task_results(
         data_source: row.get(15)?,
         collected_at: row.get(16)?,
         notes: row.get(17)?,
+        account_fields_json: json_value_column(row, 18)?,
+        field_evidence_json: json_value_column(row, 19)?,
       })
     })
     .map_err(database_error)?;
@@ -250,11 +258,24 @@ pub fn list_task_results(
     run_status: latest_run.1,
     age_filter_configured: latest_run.2,
     gender_filter_configured: latest_run.3,
+    selected_fields: latest_run.4,
     total_count,
     offset,
     limit,
     items,
   })
+}
+
+fn string_array_column(row: &Row<'_>, index: usize) -> rusqlite::Result<Vec<String>> {
+  let text = row.get::<_, String>(index)?;
+  serde_json::from_str(&text)
+    .map_err(|error| rusqlite::Error::FromSqlConversionFailure(index, Type::Text, Box::new(error)))
+}
+
+fn json_value_column(row: &Row<'_>, index: usize) -> rusqlite::Result<Value> {
+  let text = row.get::<_, String>(index)?;
+  serde_json::from_str(&text)
+    .map_err(|error| rusqlite::Error::FromSqlConversionFailure(index, Type::Text, Box::new(error)))
 }
 
 #[derive(Debug)]
