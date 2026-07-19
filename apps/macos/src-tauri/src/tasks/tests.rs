@@ -853,6 +853,148 @@ fn delete_task_removes_plan_run_snapshot_and_child_rows_without_orphans() {
 }
 
 #[test]
+fn delete_task_removes_managed_raw_report_and_export_files() {
+  let root_path = unique_temp_workspace("delete-task-files");
+  create_workspace("任务文件删除测试", &root_path).expect("workspace should be created");
+  let task = create_collection_task(&root_path, create_task_input()).expect("task created");
+  let raw_name = format!("{}.json", "a".repeat(64));
+  let raw_relative_path = format!("raw/tikhub/{raw_name}");
+  let raw_path = root_path.join(&raw_relative_path);
+  std::fs::write(&raw_path, br#"{"aweme_id":"managed-raw"}"#)
+    .expect("managed raw snapshot should exist");
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  connection
+    .execute(
+      "INSERT INTO raw_record (
+         id, task_id, task_run_id, platform, data_type, platform_record_id,
+         raw_file_path, raw_hash, summary_json, collected_at, created_at
+       ) VALUES ('managed-raw', ?1, NULL, 'tiktok', 'keyword_search', 'managed-record',
+                 ?2, ?3, '{}', ?4, ?4)",
+      params![
+        task.id,
+        raw_relative_path,
+        "b".repeat(64),
+        "2026-07-20T00:00:00+00:00"
+      ],
+    )
+    .expect("raw snapshot index should insert");
+  drop(connection);
+  let report = crate::exports::build_report_model(&root_path, &task.id, "summary")
+    .expect("report should build");
+  let report_path = root_path.join("reports").join(&report.id);
+  let export = crate::exports::create_export_job(&root_path, &report.id, "xlsx", None)
+    .expect("managed export should build");
+  let export_path = export.file_path.expect("managed export path should exist");
+  let external_dir = unique_temp_workspace("delete-task-external-export");
+  std::fs::create_dir(&external_dir).expect("external export directory should exist");
+  let external_export_path = external_dir.join("user-copy.xlsx");
+  crate::exports::create_export_job(
+    &root_path,
+    &report.id,
+    "xlsx",
+    Some(external_export_path.to_string_lossy().to_string()),
+  )
+  .expect("explicit external export should build");
+
+  delete_task(&root_path, &task.id).expect("task and managed files should delete");
+
+  assert!(!raw_path.exists(), "raw snapshot must be removed");
+  assert!(!report_path.exists(), "report snapshot must be removed");
+  assert!(!export_path.exists(), "managed export must be removed");
+  assert!(
+    external_export_path.exists(),
+    "explicit user export outside the workspace must remain"
+  );
+  let delete_quarantines = std::fs::read_dir(root_path.join("temp"))
+    .expect("workspace temp directory should remain readable")
+    .filter_map(Result::ok)
+    .filter(|entry| {
+      entry
+        .file_name()
+        .to_string_lossy()
+        .starts_with("task-delete-")
+    })
+    .count();
+  assert_eq!(
+    delete_quarantines, 0,
+    "completed deletion must not leave quarantine data"
+  );
+  std::fs::remove_dir_all(root_path).ok();
+  std::fs::remove_dir_all(external_dir).ok();
+}
+
+#[test]
+fn delete_task_restores_staged_files_when_database_transaction_fails() {
+  let root_path = unique_temp_workspace("delete-task-file-rollback");
+  create_workspace("任务文件回滚测试", &root_path).expect("workspace should be created");
+  let task = create_collection_task(&root_path, create_task_input()).expect("task created");
+  let raw_name = format!("{}.json", "c".repeat(64));
+  let raw_relative_path = format!("raw/tikhub/{raw_name}");
+  let raw_path = root_path.join(&raw_relative_path);
+  std::fs::write(&raw_path, br#"{"aweme_id":"rollback-raw"}"#)
+    .expect("rollback raw snapshot should exist");
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  connection
+    .execute(
+      "INSERT INTO raw_record (
+         id, task_id, task_run_id, platform, data_type, platform_record_id,
+         raw_file_path, raw_hash, summary_json, collected_at, created_at
+       ) VALUES ('rollback-raw', ?1, NULL, 'tiktok', 'keyword_search', 'rollback-record',
+                 ?2, ?3, '{}', ?4, ?4)",
+      params![
+        task.id,
+        raw_relative_path,
+        "d".repeat(64),
+        "2026-07-20T00:00:00+00:00"
+      ],
+    )
+    .expect("rollback raw index should insert");
+  connection
+    .execute_batch(
+      "CREATE TRIGGER fail_delete_audit
+       BEFORE INSERT ON audit_log
+       WHEN NEW.action = 'delete_task'
+       BEGIN
+         SELECT RAISE(ABORT, 'forced delete audit failure');
+       END;",
+    )
+    .expect("failure trigger should install");
+  drop(connection);
+
+  delete_task(&root_path, &task.id).expect_err("audit failure should roll back deletion");
+
+  assert!(
+    raw_path.is_file(),
+    "rolled-back raw snapshot must return to its original path"
+  );
+  assert!(
+    get_task(&root_path, &task.id).is_ok(),
+    "rolled-back task must remain"
+  );
+  let connection = open_workspace_connection(&root_path).expect("database should reopen");
+  assert_eq!(
+    count_rows_for(&connection, "raw_record", "task_id", &task.id),
+    1,
+    "rolled-back raw index must remain"
+  );
+  let delete_quarantines = std::fs::read_dir(root_path.join("temp"))
+    .expect("workspace temp directory should remain readable")
+    .filter_map(Result::ok)
+    .filter(|entry| {
+      entry
+        .file_name()
+        .to_string_lossy()
+        .starts_with("task-delete-")
+    })
+    .count();
+  assert_eq!(
+    delete_quarantines, 0,
+    "rollback must remove the quarantine directory"
+  );
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn delete_task_rejects_queued_and_running_tasks_until_they_are_cancelled() {
   for status in ["queued", "running"] {
     let root_path = unique_temp_workspace(&format!("reject-delete-{status}"));
