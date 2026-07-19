@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import AccountSourceFields from './AccountSourceFields'
 import type { AccountCollectionCapabilityView } from './backend-api'
 import type { AccountSourceKey } from './collection-options'
+import { i18n } from './i18n'
 import type { Platform } from './workbench-data'
 
 const mountedRoots = new Set<{ container: HTMLDivElement; root: Root }>()
@@ -86,9 +87,10 @@ async function mountFields() {
   return { callbacks, container, root }
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
     .IS_REACT_ACT_ENVIRONMENT = true
+  await i18n.changeLanguage('zh-CN')
 })
 
 afterEach(() => {
@@ -121,5 +123,15 @@ describe('AccountSourceFields', () => {
     await act(async () => renderFields(root, nextCallbacks))
 
     expect(nextCallbacks.onSelectedFieldsChange).not.toHaveBeenCalled()
+  })
+
+  it('英文界面按稳定 key 翻译来源和动态输入文案', async () => {
+    await i18n.changeLanguage('en-US')
+    const { container } = await mountFields()
+
+    expect(container.querySelector('label[for="platform"]')?.textContent).toBe('Platform')
+    expect(container.querySelector('label[for="account-source"]')?.textContent).toBe('Account source')
+    expect(container.querySelector('label[for="source-input"]')?.textContent).toBe('Keyword')
+    expect(container.querySelector('#account-source')?.textContent).toContain('Search users')
   })
 })

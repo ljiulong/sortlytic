@@ -1,15 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { UseFormRegisterReturn } from 'react-hook-form'
+import { useTranslation } from 'react-i18next'
 import AccountFieldPicker from './AccountFieldPicker'
 import AppSelect from './AppSelect'
 import { reconcileAccountFields, sourceInputCopy } from './account-source-rules'
 import type { AccountSourceKey } from './collection-options'
 import { platformSelectOptions } from './collection-select-options'
+import { i18n } from './i18n'
 import {
   useAccountCapabilities,
   type AccountCapabilityLoader,
 } from './use-account-capabilities'
 import type { Platform } from './workbench-data'
+
+const platformTranslationKeys: Record<Platform, string> = {
+  TikTok: 'accountSources.platform.tiktok',
+  抖音: 'accountSources.platform.douyin',
+  小红书: 'accountSources.platform.xiaohongshu',
+}
 
 type AccountSourceFieldsProps = {
   accountSource?: AccountSourceKey
@@ -38,6 +46,7 @@ function AccountSourceFields({
   selectedFields,
   sourceInputRegistration,
 }: AccountSourceFieldsProps) {
+  const { t } = useTranslation('collection', { i18n })
   const { capability, error, isEmpty, isLoading } = useAccountCapabilities(
     platform,
     capabilityLoader,
@@ -48,7 +57,7 @@ function AccountSourceFields({
   const onSelectedFieldsChangeRef = useRef(onSelectedFieldsChange)
   const customizedRef = useRef(false)
   const previousPlatformRef = useRef<string | undefined>(undefined)
-  const [notice, setNotice] = useState('')
+  const [notice, setNotice] = useState({ removedCount: 0, sourceRemoved: false })
   selectedFieldsRef.current = selectedFields
   accountSourceRef.current = accountSource
   onAccountSourceChangeRef.current = onAccountSourceChange
@@ -69,22 +78,43 @@ function AccountSourceFields({
     const currentSource = accountSourceRef.current
     const sourceSupported = capability.account_sources.some((source) => source.key === currentSource)
     if (currentSource && !sourceSupported) onAccountSourceChangeRef.current(undefined)
-    const notices = []
-    if (reconciled.removedCount > 0 && platformChanged) {
-      notices.push(`已移除 ${reconciled.removedCount} 个当前平台不支持的字段`)
-    }
-    if (currentSource && !sourceSupported) notices.push('原账号来源在当前平台不可用，请重新选择')
-    setNotice(notices.join('；'))
+    setNotice({
+      removedCount: platformChanged ? reconciled.removedCount : 0,
+      sourceRemoved: Boolean(currentSource && !sourceSupported),
+    })
   }, [capability])
 
   const source = capability?.account_sources.find((item) => item.key === accountSource)
-  const inputCopy = sourceInputCopy(source)
+  const fallbackInputCopy = sourceInputCopy(source)
+  const inputType = !source
+    ? 'default'
+    : source.input_kind === 'keyword'
+      ? 'keyword'
+      : source.input_kind === 'item'
+        ? 'item'
+        : ['followers', 'followings', 'similar_accounts'].includes(source.key)
+          ? 'seedAccount'
+          : 'account'
+  const inputCopy = {
+    label: t(`accountSources.input.${inputType}.label`, { defaultValue: fallbackInputCopy.label }),
+    placeholder: t(`accountSources.input.${inputType}.placeholder`, {
+      defaultValue: fallbackInputCopy.placeholder,
+    }),
+  }
+  const localizedPlatformOptions = useMemo(() => platformSelectOptions.map((item) => ({
+    ...item,
+    label: t(platformTranslationKeys[item.value as Platform], { defaultValue: item.label }),
+  })), [t])
   const sourceOptions = useMemo(() => capability?.account_sources.map((item) => ({
     value: item.key,
-    label: item.display_name,
-    description: item.description,
-    meta: item.pagination_mode === 'single' ? '单个账号' : `每页最多 ${item.max_page_size}`,
-  })) ?? [], [capability])
+    label: t(`accountSources.options.${item.key}.label`, { defaultValue: item.display_name }),
+    description: t(`accountSources.options.${item.key}.description`, {
+      defaultValue: item.description,
+    }),
+    meta: item.pagination_mode === 'single'
+      ? t('accountSources.singleAccount')
+      : t('accountSources.pageSize', { count: item.max_page_size }),
+  })) ?? [], [capability, t])
 
   const handleFieldsChange = (fields: string[]) => {
     if (capability) {
@@ -99,21 +129,21 @@ function AccountSourceFields({
     <div className="account-source-fields">
       <div className="account-source-fields__selectors">
         <div className="collection-builder__field">
-          <label htmlFor="platform">平台</label>
+          <label htmlFor="platform">{t('fields.platform')}</label>
           <AppSelect
             id="platform"
             ariaDescribedBy={errors?.platform ? 'platform-error' : undefined}
             invalid={Boolean(errors?.platform)}
             onChange={(value) => onPlatformChange(value as Platform)}
-            options={platformSelectOptions}
-            placeholder="请选择平台"
+            options={localizedPlatformOptions}
+            placeholder={t('placeholders.platform')}
             value={platform ?? ''}
           />
           {errors?.platform ? <small className="form-error" id="platform-error">{errors.platform}</small> : null}
         </div>
 
         <div className="collection-builder__field">
-          <label htmlFor="account-source">账号来源</label>
+          <label htmlFor="account-source">{t('accountSources.label')}</label>
           <AppSelect
             id="account-source"
             ariaDescribedBy={errors?.accountSource ? 'account-source-error' : undefined}
@@ -121,7 +151,7 @@ function AccountSourceFields({
             invalid={Boolean(errors?.accountSource || error)}
             onChange={(value) => onAccountSourceChange(value as AccountSourceKey)}
             options={sourceOptions}
-            placeholder={isLoading ? '正在读取来源能力' : '请选择账号来源'}
+            placeholder={isLoading ? t('accountSources.loading') : t('accountSources.placeholder')}
             value={accountSource ?? ''}
           />
           {errors?.accountSource ? (
@@ -146,7 +176,16 @@ function AccountSourceFields({
         </div>
       ) : null}
 
-      {notice ? <p className="account-source-fields__notice" role="status">{notice}</p> : null}
+      {notice.removedCount > 0 || notice.sourceRemoved ? (
+        <p className="account-source-fields__notice" role="status">
+          {[
+            notice.removedCount > 0
+              ? t('accountSources.fieldsRemoved', { count: notice.removedCount })
+              : '',
+            notice.sourceRemoved ? t('accountSources.sourceRemoved') : '',
+          ].filter(Boolean).join(t('preview.listSeparator'))}
+        </p>
+      ) : null}
 
       <AccountFieldPicker
         capability={capability}
