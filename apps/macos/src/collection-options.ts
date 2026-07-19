@@ -138,7 +138,9 @@ export function createCollectionFormSchema(t: CollectionTranslator) {
   return z
     .object({
       platform: z.enum(platformOptions, { error: t('validation.platformRequired') }),
-      accountSource: z.enum(accountSourceKeys).optional(),
+      accountSource: z.enum(accountSourceKeys, {
+        error: t('validation.accountSourceRequired', { defaultValue: '请选择账号来源' }),
+      }),
       selectedFields: z.array(z.string()).default([]),
       dataType: z.enum(dataTypeOptions, { error: t('validation.dataTypeRequired') }),
       dataTypes: z.array(collectionDataTypeSchema).min(1, t('validation.dataTypesRequired')),

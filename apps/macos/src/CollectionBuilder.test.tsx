@@ -301,6 +301,7 @@ describe('CollectionPlanPreview', () => {
 describe('collection form controls', () => {
   const baseInput = {
     platform: '小红书',
+    accountSource: 'user_search',
     dataType: '关键词搜索',
     dataTypes: ['keyword_search'],
     regionCode: 'CN',
@@ -501,6 +502,8 @@ describe('collection form controls', () => {
   })
 
   it('数据类型至少选择一项，且年龄范围使用闭区间校验', () => {
+    const { accountSource: _accountSource, ...withoutAccountSource } = baseInput
+    expect(collectionFormSchema.safeParse(withoutAccountSource).success).toBe(false)
     expect(
       collectionFormSchema.safeParse({ ...baseInput, dataTypes: [] }).success,
     ).toBe(false)
