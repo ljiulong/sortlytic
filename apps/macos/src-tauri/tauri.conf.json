@@ -15,7 +15,7 @@
         "title": "Sortlytic",
         "width": 1440,
         "height": 900,
-        "minWidth": 1120,
+        "minWidth": 390,
         "minHeight": 720,
         "resizable": true,
         "fullscreen": false,

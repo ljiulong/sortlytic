@@ -123,6 +123,21 @@ fn packaged_macos_app_seals_resources_with_an_ad_hoc_signature() {
 }
 
 #[test]
+fn packaged_window_can_reach_the_narrow_layout_breakpoint() {
+  let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+    .expect("Tauri config must be valid JSON");
+  let min_width = config
+    .pointer("/app/windows/0/minWidth")
+    .and_then(serde_json::Value::as_u64)
+    .expect("the main window must declare a minimum width");
+
+  assert!(
+    min_width <= 390,
+    "the packaged app must support the required 390px narrow-window acceptance state"
+  );
+}
+
+#[test]
 fn prompt_activation_keeps_real_model_regressions_off_the_ui_thread() {
   let source = include_str!("lib.rs");
   let command = source
