@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use rusqlite::Connection;
 use serde_json::json;
 
@@ -17,6 +19,7 @@ fn explicit_age_range_is_inclusive_and_unknown_age_is_excluded() {
   }
   for value in [
     json!({ "user_id": "u-none" }),
+    json!({ "user_id": "u-unknown-sentinel", "age": -1 }),
     json!({ "user_id": "u-format", "age": "18岁" }),
     json!({ "user_id": "u-over", "age": 131 }),
   ] {
@@ -108,7 +111,7 @@ fn explicit_gender_values_are_normalized_without_inference() {
   for (value, expected) in [
     (json!("男"), "male"),
     (json!("female"), "female"),
-    (json!(0), "other"),
+    (json!("other"), "other"),
   ] {
     let account = normalize_account(
       "tiktok",
@@ -125,6 +128,165 @@ fn explicit_gender_values_are_normalized_without_inference() {
   )
   .expect("异常性别不应阻止账号归一化");
   assert_eq!(unknown.gender, None);
+  let unknown_zero = normalize_account(
+    "douyin",
+    SourceKind::AccountProfile,
+    &json!({ "user_id": "unknown-zero", "gender": 0 }),
+  )
+  .expect("性别 0 是平台未知哨兵值");
+  assert_eq!(unknown_zero.gender, None);
+}
+
+#[test]
+fn explicit_zero_statistics_are_preserved() {
+  let account = normalize_account(
+    "douyin",
+    SourceKind::AccountProfile,
+    &json!({ "user_id": "zero-stats", "follower_count": 0, "aweme_count": 0 }),
+  )
+  .expect("统计值 0 是合法业务值");
+
+  assert_eq!(account.followers_count, Some(0));
+  assert_eq!(account.posts_count, Some(0));
+}
+
+#[test]
+fn full_public_account_catalog_records_value_path_endpoint_and_time() {
+  let account = normalize_account_with_evidence(
+    "douyin",
+    SourceKind::FieldEnrichment,
+    "douyin.extended_demographics",
+    "2026-07-20T08:00:00+08:00",
+    &json!({
+      "user_id": "user-1",
+      "sec_user_id": "secure-1",
+      "avatar_url": "https://example.com/avatar.jpg",
+      "profile_url": "https://example.com/user-1",
+      "bio": "公开简介",
+      "website_url": "https://example.com",
+      "verified": false,
+      "verification_reason": "企业认证",
+      "account_type": "enterprise",
+      "is_private": false,
+      "language": "zh-Hans",
+      "country": "CN",
+      "profile_tags": ["汽车", "科技"],
+      "gender": 1,
+      "age": 28,
+      "followers_count": 0,
+      "following_count": 0,
+      "friends_count": 0,
+      "posts_count": 0,
+      "likes_received_count": 0,
+      "liked_content_count": 0,
+      "account_created_at": 0,
+      "last_posted_at": 0,
+      "live_status": 0,
+      "live_room_id": "room-1",
+      "username_modified_at": 0,
+      "nickname_modified_at": 0,
+      "commerce_status": false,
+      "commerce_category": "auto",
+      "seller_status": false,
+      "organization_status": false,
+      "comments_permission": "everyone",
+      "duet_permission": "everyone",
+      "stitch_permission": "everyone",
+      "download_permission": "everyone",
+      "favorites_visibility": "public",
+      "following_visibility": "public",
+      "playlist_visibility": "public",
+      "live_level": 0,
+      "live_badge": "车友"
+    }),
+  )
+  .expect("完整公开账号资料应归一化");
+
+  let expected = [
+    "secure_user_id",
+    "avatar_url",
+    "profile_url",
+    "bio",
+    "website_url",
+    "verification_status",
+    "verification_reason",
+    "account_type",
+    "private_account",
+    "language",
+    "country_region",
+    "profile_tags",
+    "gender",
+    "age",
+    "followers_count",
+    "following_count",
+    "friends_count",
+    "posts_count",
+    "likes_received_count",
+    "liked_content_count",
+    "account_created_at",
+    "last_posted_at",
+    "live_status",
+    "live_room_id",
+    "username_modified_at",
+    "nickname_modified_at",
+    "commerce_status",
+    "commerce_category",
+    "seller_status",
+    "organization_status",
+    "comments_permission",
+    "duet_permission",
+    "stitch_permission",
+    "download_permission",
+    "favorites_visibility",
+    "following_visibility",
+    "playlist_visibility",
+    "live_level",
+    "live_badge",
+  ];
+  assert_eq!(
+    account
+      .account_fields
+      .keys()
+      .map(String::as_str)
+      .collect::<BTreeSet<_>>(),
+    expected.into_iter().collect::<BTreeSet<_>>()
+  );
+  assert_eq!(account.account_fields["followers_count"], 0);
+  assert_eq!(account.account_fields["live_status"], false);
+  assert!(account.field_evidence.values().all(|evidence| {
+    evidence.endpoint_key == "douyin.extended_demographics"
+      && evidence.collected_at == "2026-07-20T08:00:00+08:00"
+      && evidence.raw_path.starts_with('/')
+  }));
+}
+
+#[test]
+fn higher_priority_zero_value_replaces_older_value_with_matching_evidence() {
+  let mut account = normalize_account_with_evidence(
+    "tiktok",
+    SourceKind::CommentAuthor,
+    "tiktok.comments",
+    "2026-07-20T08:00:00+08:00",
+    &json!({ "user_id": "user-1", "followers_count": 9 }),
+  )
+  .unwrap();
+  account.merge(
+    normalize_account_with_evidence(
+      "tiktok",
+      SourceKind::FieldEnrichment,
+      "tiktok.account_profile",
+      "2026-07-20T08:01:00+08:00",
+      &json!({ "user_id": "user-1", "followers_count": 0 }),
+    )
+    .unwrap(),
+  );
+
+  assert_eq!(account.followers_count, Some(0));
+  assert_eq!(account.account_fields["followers_count"], 0);
+  assert_eq!(
+    account.field_evidence["followers_count"].endpoint_key,
+    "tiktok.account_profile"
+  );
 }
 
 #[test]

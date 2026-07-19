@@ -5,6 +5,7 @@ use serde_json::Value;
 
 use crate::domain::{AppError, AppErrorStage, AppResult};
 
+mod fields;
 mod storage;
 
 pub use storage::{
@@ -29,17 +30,39 @@ impl AgeRange {
 pub enum SourceKind {
   CommentAuthor,
   ContentAuthor,
+  UserSearch,
+  Relationship,
   AccountProfile,
+  FieldEnrichment,
 }
 
 impl SourceKind {
   fn priority(self) -> u8 {
     match self {
       Self::CommentAuthor => 1,
-      Self::ContentAuthor => 2,
+      Self::ContentAuthor | Self::UserSearch | Self::Relationship => 2,
       Self::AccountProfile => 3,
+      Self::FieldEnrichment => 4,
     }
   }
+
+  fn evidence_name(self) -> &'static str {
+    match self {
+      Self::CommentAuthor => "comment_author",
+      Self::ContentAuthor => "content_author",
+      Self::UserSearch => "user_search",
+      Self::Relationship => "relationship",
+      Self::AccountProfile => "account_profile",
+      Self::FieldEnrichment => "field_enrichment",
+    }
+  }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FieldEvidence {
+  pub endpoint_key: String,
+  pub raw_path: String,
+  pub collected_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -57,6 +80,10 @@ pub struct AccountRecord {
   pub posts_count: Option<i64>,
   pub last_posted_at: Option<String>,
   pub profile_url: Option<String>,
+  #[serde(default)]
+  pub account_fields: BTreeMap<String, Value>,
+  #[serde(default)]
+  pub field_evidence: BTreeMap<String, FieldEvidence>,
   #[serde(skip)]
   field_priorities: BTreeMap<String, u8>,
 }
@@ -114,6 +141,22 @@ pub fn normalize_account(
   source_kind: SourceKind,
   value: &Value,
 ) -> AppResult<AccountRecord> {
+  normalize_account_with_evidence(
+    platform,
+    source_kind,
+    &format!("legacy.{}", source_kind.evidence_name()),
+    "",
+    value,
+  )
+}
+
+pub fn normalize_account_with_evidence(
+  platform: &str,
+  source_kind: SourceKind,
+  endpoint_key: &str,
+  collected_at: &str,
+  value: &Value,
+) -> AppResult<AccountRecord> {
   let platform = match platform.trim() {
     "tiktok" | "douyin" | "xiaohongshu" => platform.trim().to_string(),
     _ => {
@@ -123,20 +166,21 @@ pub fn normalize_account(
       ));
     }
   };
-  let platform_user_id = first_text(
+  let platform_user_id = first_identifier(
     value,
     &[
       "/platform_user_id",
-      "/sec_user_id",
       "/user_id",
       "/userid",
       "/uid",
-      "/author/sec_user_id",
       "/author/user_id",
       "/author/userid",
-      "/user/sec_user_id",
       "/user/user_id",
       "/user/userid",
+      "/sec_user_id",
+      "/sec_uid",
+      "/author/sec_user_id",
+      "/user/sec_user_id",
     ],
   );
   let account = first_text(
@@ -171,6 +215,7 @@ pub fn normalize_account(
       )
     })?;
   let priority = source_kind.priority();
+  let extracted = fields::extract_account_fields(value, endpoint_key, collected_at);
   let mut field_priorities = BTreeMap::new();
   for field in [
     "platform_user_id",
@@ -186,6 +231,9 @@ pub fn normalize_account(
     "profile_url",
   ] {
     field_priorities.insert(field.to_string(), priority);
+  }
+  for field in extracted.values.keys() {
+    field_priorities.insert(field.clone(), priority);
   }
 
   Ok(AccountRecord {
@@ -255,11 +303,14 @@ pub fn normalize_account(
         "/user/share_url",
       ],
     ),
+    account_fields: extracted.values,
+    field_evidence: extracted.evidence,
     field_priorities,
   })
 }
 
 fn merge_account(existing: &mut AccountRecord, incoming: AccountRecord) {
+  let prior_field_priorities = existing.field_priorities.clone();
   merge_field(existing, &incoming, "platform_user_id", |record| {
     &mut record.platform_user_id
   });
@@ -287,6 +338,21 @@ fn merge_account(existing: &mut AccountRecord, incoming: AccountRecord) {
   merge_field(existing, &incoming, "profile_url", |record| {
     &mut record.profile_url
   });
+  for (field, value) in &incoming.account_fields {
+    let incoming_priority = incoming.field_priorities.get(field).copied().unwrap_or(0);
+    let existing_priority = prior_field_priorities.get(field).copied().unwrap_or(0);
+    if !existing.account_fields.contains_key(field) || incoming_priority > existing_priority {
+      existing.account_fields.insert(field.clone(), value.clone());
+      if let Some(evidence) = incoming.field_evidence.get(field) {
+        existing
+          .field_evidence
+          .insert(field.clone(), evidence.clone());
+      }
+      existing
+        .field_priorities
+        .insert(field.clone(), incoming_priority);
+    }
+  }
 }
 
 fn merge_field(
@@ -352,7 +418,7 @@ fn first_gender(value: &Value) -> Option<String> {
   match normalized.as_str() {
     "male" | "m" | "男" | "男性" | "1" => Some("male".to_string()),
     "female" | "f" | "女" | "女性" | "2" => Some("female".to_string()),
-    "other" | "其他" | "其它" | "non_binary" | "non-binary" | "0" => Some("other".to_string()),
+    "other" | "其他" | "其它" | "non_binary" | "non-binary" => Some("other".to_string()),
     _ => None,
   }
 }
@@ -379,6 +445,20 @@ fn first_text(value: &Value, paths: &[&str]) -> Option<String> {
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .map(ToString::to_string)
+    })
+}
+
+fn first_identifier(value: &Value, paths: &[&str]) -> Option<String> {
+  paths
+    .iter()
+    .filter_map(|path| value.pointer(path))
+    .find_map(|value| {
+      value
+        .as_str()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| value.as_i64().map(|number| number.to_string()))
     })
 }
 
