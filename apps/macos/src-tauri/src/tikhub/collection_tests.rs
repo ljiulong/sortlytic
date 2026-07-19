@@ -389,6 +389,22 @@ fn xiaohongshu_detail_has_video_fallback() {
 }
 
 #[test]
+fn xiaohongshu_profile_and_detail_send_share_text_without_fake_ids() {
+  let share_text = "https://xhslink.com/m/3ZSCJZAMz0a";
+  for data_type in ["account_profile", "item_detail"] {
+    let request = build_collection_request(
+      "xiaohongshu",
+      data_type,
+      &serde_json::json!({ "share_text": share_text }),
+      None,
+    )
+    .expect("documented share_text request should build");
+    assert!(request.query().contains(&("share_text".to_string(), share_text.to_string())));
+    assert!(!request.query().iter().any(|(key, _)| matches!(key.as_str(), "user_id" | "note_id")));
+  }
+}
+
+#[test]
 fn rejects_failed_tikhub_wrapper_with_retry_metadata() {
   let request = build_collection_request("tiktok", "comments", &params_for("comments"), None)
     .expect("request should build");

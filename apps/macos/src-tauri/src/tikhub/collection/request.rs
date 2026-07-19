@@ -312,11 +312,7 @@ pub fn build_collection_request(
       request
         .paths
         .push("/api/v1/xiaohongshu/app_v2/get_user_info".to_string());
-      push_query(
-        &mut request,
-        "user_id",
-        required_string(&params, "account_id")?,
-      );
+      push_xiaohongshu_id_or_share(&mut request, &params, "user_id", "account_id")?;
     }
     ("xiaohongshu", "account_posts") => {
       request
@@ -338,11 +334,7 @@ pub fn build_collection_request(
         "/api/v1/xiaohongshu/app_v2/get_image_note_detail".to_string(),
         "/api/v1/xiaohongshu/app_v2/get_video_note_detail".to_string(),
       ]);
-      push_query(
-        &mut request,
-        "note_id",
-        required_string(&params, "item_id")?,
-      );
+      push_xiaohongshu_id_or_share(&mut request, &params, "note_id", "item_id")?;
     }
     ("tiktok", "user_search") => {
       request
@@ -537,6 +529,36 @@ fn push_tiktok_account_identifier(request: &mut TikHubCollectionRequest, account
     "sec_user_id"
   };
   push_query(request, key, account_id);
+}
+
+fn push_xiaohongshu_id_or_share(
+  request: &mut TikHubCollectionRequest,
+  params: &Value,
+  provider_id_key: &str,
+  business_id_key: &str,
+) -> AppResult<()> {
+  if let Some(value) = params
+    .get(business_id_key)
+    .and_then(Value::as_str)
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+  {
+    push_query(request, provider_id_key, value.to_string());
+    return Ok(());
+  }
+  if let Some(value) = params
+    .get("share_text")
+    .and_then(Value::as_str)
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+  {
+    push_query(request, "share_text", value.to_string());
+    return Ok(());
+  }
+  Err(AppError::validation(
+    format!("{business_id_key} 与 share_text 必须提供一项"),
+    AppErrorStage::Collection,
+  ))
 }
 
 fn relative_days(params: &Value) -> Option<String> {

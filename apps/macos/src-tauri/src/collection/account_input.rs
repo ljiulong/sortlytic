@@ -38,12 +38,16 @@ pub(super) fn normalize_account_source_input(
   }
   match input_kind {
     AccountSourceInputKind::Keyword => Ok(normalized(AccountSourceParamKey::Keyword, input)),
-    AccountSourceInputKind::Item => normalize_item_input(platform, input),
+    AccountSourceInputKind::Item => normalize_item_input(platform, account_source, input),
     AccountSourceInputKind::Account => normalize_account_input(platform, account_source, input),
   }
 }
 
-fn normalize_item_input(platform: &str, input: &str) -> AppResult<NormalizedAccountSourceInput> {
+fn normalize_item_input(
+  platform: &str,
+  account_source: &str,
+  input: &str,
+) -> AppResult<NormalizedAccountSourceInput> {
   let Some(url) = ParsedUrl::parse(input)? else {
     return validate_raw_item_id(platform, input);
   };
@@ -64,7 +68,7 @@ fn normalize_item_input(platform: &str, input: &str) -> AppResult<NormalizedAcco
       .filter(|value| is_safe_token(value))
       .map(|value| normalized(AccountSourceParamKey::ItemId, value))
       .ok_or_else(|| validation_error("小红书笔记链接缺少可识别的 note ID")),
-    "xiaohongshu" if url.host_matches("xhslink.com") => {
+    "xiaohongshu" if url.host_matches("xhslink.com") && account_source == "item_author" => {
       Ok(normalized(AccountSourceParamKey::ShareText, input))
     }
     "tiktok" | "douyin" => Err(validation_error(
@@ -262,6 +266,12 @@ mod tests {
       "followers",
       AccountSourceInputKind::Account,
       "https://www.tiktok.com/@openai",
+    ).is_err());
+    assert!(normalize_account_source_input(
+      "xiaohongshu",
+      "comment_authors",
+      AccountSourceInputKind::Item,
+      share,
     ).is_err());
   }
 }
