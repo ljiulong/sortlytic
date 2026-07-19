@@ -11,10 +11,12 @@ import {
   enqueueTask,
   estimateTaskCost,
   ensureDefaultWorkspace,
+  generateAccountCollectionPlan,
   generateCollectionPlanFromText,
   generateFormCollectionPlan,
   getLatestCollectionPlan,
   type GenerateFormPlanInput,
+  type GenerateAccountPlanInput,
   getBackendStatus,
   listLatestTaskRuns,
   listTaskRecordCounts,
@@ -32,6 +34,7 @@ import {
   pricingEndpointsForPlan,
 } from './collection-pricing'
 import type { CollectionDataType } from './collection-options'
+import type { AccountSourceKey } from './collection-options'
 import {
   numberFromJson,
   stringArrayFromJson,
@@ -64,6 +67,8 @@ export type CollectionFormPayload = {
   range: string
   maxRecords: number
   budget: number
+  accountSource?: AccountSourceKey
+  selectedFields?: string[]
   dataTypes?: CollectionDataType[]
   ageRangeEnabled?: boolean
   ageMin?: number
@@ -371,13 +376,19 @@ export async function loadBackendWorkbench(): Promise<BackendWorkbenchData> {
 
 async function createFormPlan(values: CollectionFormPayload): Promise<RuntimeCollectionPlan> {
   assertTauriRuntime()
-  const request = buildFormPlanRequest(values)
-  const draft = await generateFormCollectionPlan(request)
+  const accountRequest = values.accountSource ? buildAccountPlanRequest(values) : undefined
+  const request = accountRequest ?? buildFormPlanRequest(values)
+  const draft = accountRequest
+    ? await generateAccountCollectionPlan(accountRequest)
+    : await generateFormCollectionPlan(request as GenerateFormPlanInput)
   const task = await createCollectionTask({
     name: values.keyword.trim(),
     source_type: 'form',
     platforms: [request.platform],
-    data_types: request.data_types ?? [request.data_type ?? 'keyword_search'],
+    data_types: accountRequest
+      ? ['account']
+      : (request as GenerateFormPlanInput).data_types
+        ?? [(request as GenerateFormPlanInput).data_type ?? 'keyword_search'],
   })
   let runtimePlan: RuntimeCollectionPlan
   try {
@@ -395,6 +406,45 @@ async function createFormPlan(values: CollectionFormPayload): Promise<RuntimeCol
   }
 
   return preparePlanPricing(runtimePlan)
+}
+
+const keywordAccountSources = new Set<AccountSourceKey>([
+  'user_search',
+  'content_search_authors',
+])
+const itemAccountSources = new Set<AccountSourceKey>(['item_author', 'comment_authors'])
+
+export function buildAccountPlanRequest(values: CollectionFormPayload): GenerateAccountPlanInput {
+  if (!values.accountSource) throw new Error('请选择账号来源')
+  const platform = toBackendPlatform(values.platform)
+  const sourceInputKey = keywordAccountSources.has(values.accountSource)
+    ? 'keyword'
+    : itemAccountSources.has(values.accountSource)
+      ? 'item_id'
+      : 'account_id'
+  const singleSource = ['direct_account', 'item_author'].includes(values.accountSource)
+  const selectedFields = [...new Set(values.selectedFields ?? [])]
+  const ageRange = values.ageRangeEnabled
+    && values.ageMin !== undefined
+    && values.ageMax !== undefined
+    ? { min: values.ageMin, max: values.ageMax }
+    : null
+  const params: Record<string, unknown> = { [sourceInputKey]: values.keyword.trim() }
+  if (values.regionCode) params.region = values.regionCode
+  if (values.range) params.time_range = values.range
+
+  return {
+    platform,
+    account_source: values.accountSource,
+    selected_fields: selectedFields,
+    enrichment_policy: 'auto_costed',
+    params,
+    age_range: ageRange,
+    gender_filter: values.genderFilterEnabled ? values.genders ?? [] : null,
+    request_limit: singleSource ? 1 : Math.max(1, Math.ceil(values.maxRecords / 20)),
+    record_limit: singleSource ? 1 : values.maxRecords,
+    budget_limit_micros: Math.round(values.budget * 1_000_000),
+  }
 }
 
 export function buildFormPlanRequest(values: CollectionFormPayload): GenerateFormPlanInput {

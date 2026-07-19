@@ -22,6 +22,7 @@ import {
 } from './backend-api'
 import {
   browserFallbackData,
+  buildAccountPlanRequest,
   buildFormPlanRequest,
   confirmPersistedTask,
   exportTaskArtifact,
@@ -524,6 +525,65 @@ describe('任务页动作', () => {
 })
 
 describe('计划生成失败的草稿清理', () => {
+  it('账号表单把单一来源、字段和筛选转换为 v4 请求', () => {
+    expect(buildAccountPlanRequest({
+      ...formPlanInput,
+      platform: '抖音',
+      accountSource: 'user_search',
+      selectedFields: ['avatar_url', 'gender', 'age', 'gender'],
+      ageRangeEnabled: true,
+      ageMin: 18,
+      ageMax: 35,
+      genderFilterEnabled: true,
+      genders: ['female'],
+    })).toEqual({
+      platform: 'douyin',
+      account_source: 'user_search',
+      selected_fields: ['avatar_url', 'gender', 'age'],
+      enrichment_policy: 'auto_costed',
+      params: { keyword: '新能源汽车', region: 'CN', time_range: '7' },
+      age_range: { min: 18, max: 35 },
+      gender_filter: ['female'],
+      request_limit: 5,
+      record_limit: 100,
+      budget_limit_micros: 1_000_000,
+    })
+  })
+
+  it('账号来源表单调用 v4 命令并把任务范围固定为 account', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'generate_account_collection_plan') return generatedFormDraft
+      if (command === 'create_collection_task') {
+        return { ...task, id: 'task-account-1', status: 'waiting_confirmation' }
+      }
+      if (command === 'save_collection_plan') return {
+        ...savedFormPlan,
+        task_id: 'task-account-1',
+      }
+      throw new Error(`意外命令：${command}`)
+    })
+    renderWorkbenchHook()
+    const generateFormMutation = mutationOptionsMock.current[0]
+
+    await generateFormMutation?.mutationFn?.({
+      ...formPlanInput,
+      accountSource: 'user_search',
+      selectedFields: ['avatar_url'],
+    })
+
+    expect(invokeMock).toHaveBeenCalledWith('generate_account_collection_plan', {
+      request: expect.objectContaining({
+        account_source: 'user_search',
+        selected_fields: ['avatar_url'],
+      }),
+    })
+    expect(invokeMock).toHaveBeenCalledWith('create_collection_task', {
+      input: expect.objectContaining({ data_types: ['account'] }),
+      rootPath: null,
+    })
+  })
+
   it('表单计划保存失败后删除已创建的草稿任务', async () => {
     vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
     invokeMock.mockImplementation(async (command: string) => {
