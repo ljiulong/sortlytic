@@ -204,7 +204,7 @@ pub(super) fn apply_collection_pipeline_migration(connection: &mut Connection) -
     return ensure_foreign_key_integrity(connection);
   }
   if migration_artifacts_present(connection)? {
-    if schema_is_current(connection)? {
+    if schema_is_current(connection)? || v10_schema_supersedes_v7(connection)? {
       let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(database_error)?;
@@ -266,12 +266,33 @@ fn validate_marker_and_schema(
   name: &str,
   checksum: &str,
 ) -> AppResult<()> {
-  if name != MIGRATION_NAME || checksum != migration_checksum() || !schema_is_current(connection)? {
+  let compatible_schema = schema_is_current(connection)? || v10_schema_supersedes_v7(connection)?;
+  if name != MIGRATION_NAME || checksum != migration_checksum() || !compatible_schema {
     return Err(workspace_error(
       "数据库迁移 v7 校验失败，采集流水线结构、标记或 checksum 不一致",
     ));
   }
   Ok(())
+}
+
+fn v10_schema_supersedes_v7(connection: &Connection) -> AppResult<bool> {
+  let normalized_columns = columns(connection, "normalized_record")?;
+  let account_columns = columns(connection, "collected_account")?;
+  let raw_sql = object_sql(connection, "table", "raw_record")?.unwrap_or_default();
+  let target_sql =
+    object_sql(connection, "table", "collection_pipeline_target")?.unwrap_or_default();
+  Ok(
+    ["account_fields_json", "field_evidence_json"]
+      .iter()
+      .all(|column| normalized_columns.iter().any(|value| value == column))
+      && ["account_fields_json", "field_evidence_json"]
+        .iter()
+        .all(|column| account_columns.iter().any(|value| value == column))
+      && raw_sql.contains("'user_search'")
+      && raw_sql.contains("'account_country'")
+      && target_sql.contains("'user_search'")
+      && target_sql.contains("'account_country'"),
+  )
 }
 
 fn schema_is_current(connection: &Connection) -> AppResult<bool> {
