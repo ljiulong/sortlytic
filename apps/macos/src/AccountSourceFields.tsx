@@ -43,10 +43,16 @@ function AccountSourceFields({
     capabilityLoader,
   )
   const selectedFieldsRef = useRef(selectedFields)
+  const accountSourceRef = useRef(accountSource)
+  const onAccountSourceChangeRef = useRef(onAccountSourceChange)
+  const onSelectedFieldsChangeRef = useRef(onSelectedFieldsChange)
   const customizedRef = useRef(false)
   const previousPlatformRef = useRef<string | undefined>(undefined)
   const [notice, setNotice] = useState('')
   selectedFieldsRef.current = selectedFields
+  accountSourceRef.current = accountSource
+  onAccountSourceChangeRef.current = onAccountSourceChange
+  onSelectedFieldsChangeRef.current = onSelectedFieldsChange
 
   useEffect(() => {
     if (!capability) return
@@ -57,18 +63,19 @@ function AccountSourceFields({
       selectedFieldsRef.current,
       customizedRef.current && platformChanged,
     )
-    onSelectedFieldsChange(reconciled.fields)
+    onSelectedFieldsChangeRef.current(reconciled.fields)
     previousPlatformRef.current = capability.platform
 
-    const sourceSupported = capability.account_sources.some((source) => source.key === accountSource)
-    if (accountSource && !sourceSupported) onAccountSourceChange(undefined)
+    const currentSource = accountSourceRef.current
+    const sourceSupported = capability.account_sources.some((source) => source.key === currentSource)
+    if (currentSource && !sourceSupported) onAccountSourceChangeRef.current(undefined)
     const notices = []
     if (reconciled.removedCount > 0 && platformChanged) {
       notices.push(`已移除 ${reconciled.removedCount} 个当前平台不支持的字段`)
     }
-    if (accountSource && !sourceSupported) notices.push('原账号来源在当前平台不可用，请重新选择')
+    if (currentSource && !sourceSupported) notices.push('原账号来源在当前平台不可用，请重新选择')
     setNotice(notices.join('；'))
-  }, [accountSource, capability, onAccountSourceChange, onSelectedFieldsChange])
+  }, [capability])
 
   const source = capability?.account_sources.find((item) => item.key === accountSource)
   const inputCopy = sourceInputCopy(source)
@@ -91,8 +98,8 @@ function AccountSourceFields({
   return (
     <div className="account-source-fields">
       <div className="account-source-fields__selectors">
-        <label className="collection-builder__field" htmlFor="platform">
-          <span>平台</span>
+        <div className="collection-builder__field">
+          <label htmlFor="platform">平台</label>
           <AppSelect
             id="platform"
             ariaDescribedBy={errors?.platform ? 'platform-error' : undefined}
@@ -103,10 +110,10 @@ function AccountSourceFields({
             value={platform ?? ''}
           />
           {errors?.platform ? <small className="form-error" id="platform-error">{errors.platform}</small> : null}
-        </label>
+        </div>
 
-        <label className="collection-builder__field" htmlFor="account-source">
-          <span>账号来源</span>
+        <div className="collection-builder__field">
+          <label htmlFor="account-source">账号来源</label>
           <AppSelect
             id="account-source"
             ariaDescribedBy={errors?.accountSource ? 'account-source-error' : undefined}
@@ -120,12 +127,12 @@ function AccountSourceFields({
           {errors?.accountSource ? (
             <small className="form-error" id="account-source-error">{errors.accountSource}</small>
           ) : null}
-        </label>
+        </div>
       </div>
 
       {source ? (
-        <label className="collection-builder__field account-source-fields__input" htmlFor="source-input">
-          <span>{inputCopy.label}</span>
+        <div className="collection-builder__field account-source-fields__input">
+          <label htmlFor="source-input">{inputCopy.label}</label>
           <input
             id="source-input"
             aria-describedby={errors?.sourceInput ? 'source-input-error' : undefined}
@@ -136,7 +143,7 @@ function AccountSourceFields({
           {errors?.sourceInput ? (
             <small className="form-error" id="source-input-error">{errors.sourceInput}</small>
           ) : null}
-        </label>
+        </div>
       ) : null}
 
       {notice ? <p className="account-source-fields__notice" role="status">{notice}</p> : null}
