@@ -44,7 +44,7 @@ function AccountFieldPicker({
   const normalizedQuery = query.trim().toLocaleLowerCase()
   const fieldName = (field: AccountFieldCapabilityView) => String(t(
     `accountFields.${field.key}.label`,
-    { defaultValue: field.display_name },
+    { defaultValue: field.label ?? field.display_name },
   ))
   const fieldDescription = (field: AccountFieldCapabilityView) => String(t(
     `accountFields.${field.key}.description`,
@@ -54,6 +54,16 @@ function AccountFieldPicker({
     `accountFieldGroups.${key}`,
     { defaultValue: fallback },
   ))
+  const unsupportedDetail = (field: AccountFieldCapabilityView) => t(
+    'accountFields.unsupportedDetail',
+    {
+      platforms: (field.supported_platforms ?? []).map((platform) => t(
+        `accountSources.platform.${platform}`,
+        { defaultValue: platform },
+      )).join(t('preview.listSeparator')),
+      reason: field.missing_reason || t('accountFields.status.unsupported'),
+    },
+  )
   const filteredFields = capability?.fields.filter(
     (field) => !normalizedQuery || [
       field.display_name,
@@ -240,6 +250,7 @@ function AccountFieldPicker({
                                 <code>{field.key}</code>
                               </span>
                               <small>{fieldDescription(field)}</small>
+                              {unsupported ? <small>{unsupportedDetail(field)}</small> : null}
                             </span>
                             <FieldStatus field={field} />
                           </label>

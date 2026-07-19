@@ -49,6 +49,7 @@ const capability: AccountCollectionCapabilityView = {
       default_selected: false,
       required_operation_keys: [],
       missing_reason: 'TikTok 当前资料接口未明确提供。',
+      supported_platforms: ['douyin'],
     },
   ],
 }
@@ -131,6 +132,8 @@ describe('AccountFieldPicker', () => {
       .find((label) => label.textContent?.includes('gender'))
       ?.querySelector('input')
     expect(gender?.disabled).toBe(true)
+    expect(container.textContent).toContain('TikTok 当前资料接口未明确提供。')
+    expect(container.textContent).toContain('支持平台：抖音')
   })
 
   it('搜索中文名称、字段代码和说明时保留分类结构', async () => {
