@@ -154,4 +154,22 @@ describe('AccountFieldPicker', () => {
     expect(container.textContent).toContain('country_region')
     expect(container.textContent).not.toContain('avatar_url')
   })
+
+  it('搜索命中其他分类时激活首个命中分类', async () => {
+    const { container } = await mountPicker()
+    await act(async () => buttonByText(container, '配置字段')?.click())
+    const search = container.querySelector<HTMLInputElement>('input[type="search"]')
+    await act(async () => {
+      const nativeSetter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        'value',
+      )?.set
+      nativeSetter?.call(search, 'gender')
+      search?.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+
+    const demographics = [...container.querySelectorAll<HTMLElement>('.account-field-picker__panel')]
+      .find((panel) => panel.textContent?.includes('gender'))
+    expect(demographics?.dataset.active).toBe('true')
+  })
 })

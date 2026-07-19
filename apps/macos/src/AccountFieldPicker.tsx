@@ -40,7 +40,6 @@ function AccountFieldPicker({
     () => availableFields.filter((field) => field.default_selected).map((field) => field.key),
     [availableFields],
   )
-  const effectiveGroup = activeGroup || capability?.field_groups[0]?.key || ''
   const normalizedQuery = query.trim().toLocaleLowerCase()
   const fieldName = (field: AccountFieldCapabilityView) => String(t(
     `accountFields.${field.key}.label`,
@@ -73,6 +72,12 @@ function AccountFieldPicker({
       fieldDescription(field),
     ].join(' ').toLocaleLowerCase().includes(normalizedQuery),
   ) ?? []
+  const searchedGroup = normalizedQuery
+    ? capability?.field_groups.find((group) => (
+      filteredFields.some((field) => field.group === group.key)
+    ))?.key
+    : undefined
+  const effectiveGroup = searchedGroup || activeGroup || capability?.field_groups[0]?.key || ''
   const enrichmentCount = availableFields.filter(
     (field) => selected.has(field.key) && field.required_operation_keys.length > 0,
   ).length
