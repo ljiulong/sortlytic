@@ -574,6 +574,13 @@ describe('TaskQueue', () => {
     expect(markup).toContain('前往“新建任务”')
   })
 
+  it('Schema v4 任务卡使用账号数据文案而不是评论用户回退', () => {
+    const markup = renderQueue([{ ...waitingTask, dataTypeCode: 'account' }])
+
+    expect(markup).toContain('账号数据')
+    expect(markup).not.toContain('评论用户')
+  })
+
   it('英文模式使用本地化的任务来源、请求估算和数据类型', async () => {
     await appI18n.changeLanguage('en-US')
     const markup = renderQueue([{ ...waitingTask, name: 'Research task', sourceType: 'natural_language' }])

@@ -19,6 +19,7 @@ export const taskSourceTranslationKeys = {
 } as const
 
 export const taskDataTypeTranslationKeys: Record<string, string> = {
+  account: 'taskQueue.dataType.account',
   keyword_search: 'taskQueue.dataType.keywordSearch',
   account_profile: 'taskQueue.dataType.accountProfile',
   item_detail: 'taskQueue.dataType.itemDetail',
