@@ -138,6 +138,7 @@ export default function NaturalParseFeedback({
 
 function remediationForProblem(problem: BackendProblem) {
   const configurationError = [
+    'MODEL_CONFIG_ERROR',
     'MODEL_AUTH_ERROR',
     'MODEL_PROTOCOL_ERROR',
     'MODEL_NOT_FOUND',
