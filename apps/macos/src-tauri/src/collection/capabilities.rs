@@ -532,9 +532,17 @@ mod tests {
         .find(|capability| capability.data_type == data_type)
         .unwrap();
       assert!(capability.required_params.is_empty());
-      assert!(capability.optional_params.iter().any(|value| value == "share_text"));
+      assert!(capability
+        .optional_params
+        .iter()
+        .any(|value| value == "share_text"));
       assert!(capability.optional_params.iter().any(|value| {
-        value == if data_type == "account_profile" { "account_id" } else { "item_id" }
+        value
+          == if data_type == "account_profile" {
+            "account_id"
+          } else {
+            "item_id"
+          }
       }));
     }
   }
