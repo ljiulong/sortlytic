@@ -192,13 +192,13 @@ fn active_ai_profile(
     .active_profile_ids
     .ai
     .as_deref()
-    .ok_or_else(|| ai_error("尚未设置当前 AI 配置，请先在设置中完成真实连通性测试"))?;
+    .ok_or_else(|| ai_config_error("尚未设置当前 AI 配置，请先在设置中完成真实连通性测试"))?;
   let profile = registry
     .ai_profiles
     .get(profile_id)
-    .ok_or_else(|| ai_error("当前 AI 配置不存在，请重新选择并测试"))?;
+    .ok_or_else(|| ai_config_error("当前 AI 配置不存在，请重新选择并测试"))?;
   if profile.status != ApiProfileStatus::Success {
-    return Err(ai_error(
+    return Err(ai_config_error(
       "当前 AI 配置尚未通过真实连通性测试，请先在设置中测试",
     ));
   }
@@ -207,14 +207,14 @@ fn active_ai_profile(
     .as_deref()
     .is_some_and(|selected| selected != profile.id)
   {
-    return Err(ai_error("请求指定的 AI 配置与当前配置不一致"));
+    return Err(ai_config_error("请求指定的 AI 配置与当前配置不一致"));
   }
   if input
     .model_id
     .as_deref()
     .is_some_and(|selected| selected != profile.default_model_id)
   {
-    return Err(ai_error("请求指定的模型与当前 AI 配置不一致"));
+    return Err(ai_config_error("请求指定的模型与当前 AI 配置不一致"));
   }
   let api_key = profile
     .credential_ref_id
@@ -222,7 +222,7 @@ fn active_ai_profile(
     .and_then(|credential_id| registry.credentials.get(credential_id))
     .map(|credential| credential.secret.clone());
   if profile.provider_type != AiProviderType::Ollama && api_key.is_none() {
-    return Err(ai_error("当前 AI 配置缺少 API Key，请重新输入并测试"));
+    return Err(ai_config_error("当前 AI 配置缺少 API Key，请重新输入并测试"));
   }
   Ok(ResolvedAiProfile {
     profile_id: profile.id.clone(),
@@ -541,6 +541,15 @@ fn i64_to_bool(value: i64) -> bool {
 fn ai_error(message: impl Into<String>) -> AppError {
   AppError::new(
     AppErrorCode::ValidationError,
+    message,
+    AppErrorStage::Ai,
+    false,
+  )
+}
+
+fn ai_config_error(message: impl Into<String>) -> AppError {
+  AppError::new(
+    AppErrorCode::ModelConfigError,
     message,
     AppErrorStage::Ai,
     false,

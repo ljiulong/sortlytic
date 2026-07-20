@@ -49,7 +49,7 @@ fn natural_language_generation_requires_an_active_ai_profile() {
   )
   .expect_err("missing active AI profile must fail closed");
 
-  assert_eq!(error.code, AppErrorCode::ValidationError);
+  assert_eq!(error.code, AppErrorCode::ModelConfigError);
   assert!(error.message.contains("AI 配置"));
   let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
   let attempt = connection
@@ -72,7 +72,7 @@ fn natural_language_generation_requires_an_active_ai_profile() {
   assert_eq!(attempt.0, "采集最近 7 天美国 TikTok 汽车内容");
   assert_eq!(attempt.1, "failed");
   assert_eq!(attempt.2.as_deref(), Some("preparing"));
-  assert_eq!(attempt.3.as_deref(), Some("VALIDATION_ERROR"));
+  assert_eq!(attempt.3.as_deref(), Some("MODEL_CONFIG_ERROR"));
   assert!(attempt.4.is_some_and(|message| message.contains("AI 配置")));
   assert_eq!(attempt.5, Some(0));
 

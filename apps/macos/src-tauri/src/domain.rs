@@ -16,6 +16,7 @@ pub enum AppErrorCode {
   TikhubAuthError,
   TikhubRateLimit,
   TikhubRequestError,
+  ModelConfigError,
   ModelAuthError,
   ModelRateLimit,
   ModelProtocolError,
