@@ -1253,6 +1253,35 @@ describe('backendErrorMessage', () => {
 })
 
 describe('mapBackendData', () => {
+  it('用一次批量结果把最近自然语言解析记录合并到对应任务', () => {
+    const attempt = {
+      id: 'attempt-1',
+      task_id: task.id,
+      intent_text: '用中文查找英国 TikTok 宠物用品账号',
+      parse_status: 'failed' as const,
+      parse_phase: 'requesting_ai',
+      error_code: 'MODEL_RATE_LIMIT',
+      error_message: 'AI 服务请求过于频繁或额度不足，请稍后重试',
+      retryable: true,
+      error_safe_details_json: { retry_after: '17' },
+      created_at: '2026-07-20T08:00:00Z',
+      updated_at: '2026-07-20T08:00:17Z',
+    }
+
+    const result = mapBackendData(
+      workspace,
+      [task],
+      tikhubRegistryFixture(),
+      1_000,
+      [],
+      [],
+      [attempt],
+    )
+
+    expect(result.naturalParseAttempts).toEqual([attempt])
+    expect(result.tasks[0]?.naturalParseAttempt).toEqual(attempt)
+  })
+
   it('把 SQLite 标准化记录数关联到对应任务', () => {
     const result = mapBackendData(
       workspace,

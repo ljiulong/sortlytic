@@ -4,6 +4,7 @@ import type {
 } from './api-profiles'
 import type {
   CollectionTaskView,
+  NaturalParseAttemptView,
   TaskRecordCountView,
   TaskRunView,
   WorkspaceSummary,
@@ -60,6 +61,7 @@ export type WorkbenchRuntimeData = {
       startedAt: string
       endedAt?: string | null
     }
+    naturalParseAttempt?: NaturalParseAttemptView
   }>
   records: SocialRecord[]
   promptRuns: Array<{ name: string; status: '通过' | '失败'; provider: string; diff: string }>
@@ -67,6 +69,7 @@ export type WorkbenchRuntimeData = {
 
 export type BackendWorkbenchData = WorkbenchRuntimeData & {
   latestTaskId?: string
+  naturalParseAttempts: NaturalParseAttemptView[]
   runtimeMode: 'backend' | 'unavailable' | 'loading' | 'error'
 }
 
@@ -77,6 +80,7 @@ export function mapBackendData(
   uptimeMs: number,
   latestRuns: TaskRunView[] = [],
   recordCounts: TaskRecordCountView[] = [],
+  naturalParseAttempts: NaturalParseAttemptView[] = [],
 ): BackendWorkbenchData {
   const latestTaskId = tasks[0]?.id
   const pendingCount = tasks.filter((task) => task.status === 'waiting_confirmation').length
@@ -85,6 +89,9 @@ export function mapBackendData(
 
   const latestRunByTask = new Map(latestRuns.map((run) => [run.task_id, run]))
   const recordCountByTask = new Map(recordCounts.map((count) => [count.task_id, count.record_count]))
+  const parseAttemptByTask = new Map(
+    naturalParseAttempts.map((attempt) => [attempt.task_id, attempt]),
+  )
   const taskRecordCounts = tasks.map((task) => Math.max(0, recordCountByTask.get(task.id) ?? 0))
   const storedRecordCount = taskRecordCounts.reduce((total, count) => total + count, 0)
   const tasksWithRecords = taskRecordCounts.filter((count) => count > 0).length
@@ -116,6 +123,7 @@ export function mapBackendData(
       return {
         ...row,
         records: recordCountByTask.get(task.id) ?? 0,
+        naturalParseAttempt: parseAttemptByTask.get(task.id),
         latestRun: run
           ? {
               id: run.id,
@@ -134,6 +142,7 @@ export function mapBackendData(
     }),
     records: [],
     promptRuns: [],
+    naturalParseAttempts,
     latestTaskId,
     runtimeMode: 'backend',
   }

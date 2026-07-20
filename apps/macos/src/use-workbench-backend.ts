@@ -19,6 +19,7 @@ import {
   type GenerateAccountPlanInput,
   getBackendStatus,
   listLatestTaskRuns,
+  listLatestTaskIntents,
   listTaskRecordCounts,
   listTasks,
   saveCollectionPlan,
@@ -150,6 +151,7 @@ function createEmptyWorkbenchData(mode: 'loading' | 'error' | 'unavailable'): Ba
     tasks: [],
     records: [],
     promptRuns: [],
+    naturalParseAttempts: [],
     latestTaskId: undefined,
     runtimeMode: mode,
   }
@@ -368,15 +370,24 @@ export async function loadBackendWorkbench(): Promise<BackendWorkbenchData> {
   }
 
   const workspace = await getActiveWorkspace() ?? await ensureDefaultWorkspace()
-  const [status, tasks, latestRuns, recordCounts, registry] = await Promise.all([
+  const [status, tasks, latestRuns, recordCounts, naturalParseAttempts, registry] = await Promise.all([
     getBackendStatus(),
     listTasks(),
     listLatestTaskRuns().catch(() => []),
     listTaskRecordCounts().catch(() => []),
+    listLatestTaskIntents().catch(() => []),
     getApiProfileRegistry().catch(() => null),
   ])
 
-  return mapBackendData(workspace, tasks, registry, status.uptime_ms, latestRuns, recordCounts)
+  return mapBackendData(
+    workspace,
+    tasks,
+    registry,
+    status.uptime_ms,
+    latestRuns,
+    recordCounts,
+    naturalParseAttempts,
+  )
 }
 
 async function createFormPlan(values: CollectionFormPayload): Promise<RuntimeCollectionPlan> {
