@@ -83,7 +83,7 @@ pub fn generate_collection_plan_from_text(
 
   let request = collection_intent_request(&prompt.content, intent_text);
   let call_started_at = std::time::Instant::now();
-  let response = match call_model(&profile.config, &request) {
+  let response = match call_model_for_intent(&profile.config, &request) {
     Ok(response) => response,
     Err(error) => {
       let latency_ms = i64::try_from(call_started_at.elapsed().as_millis()).unwrap_or(i64::MAX);

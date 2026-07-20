@@ -26,9 +26,7 @@ pub use generation::generate_collection_plan_from_text;
 pub use intent_plan::IntentPlanBuildResult;
 
 use collection_intent_schema::parse_collection_intent;
-use provider_client::{
-  call_model, call_model_for_intent, collection_intent_request, ProviderConfig,
-};
+use provider_client::{call_model_for_intent, collection_intent_request, ProviderConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GenerateCollectionPlanFromTextInput {
