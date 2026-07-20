@@ -1146,6 +1146,129 @@ fn account_source_parsers_prioritize_and_unwrap_user_arrays() {
 }
 
 #[test]
+fn tiktok_account_fixtures_preserve_source_arrays_and_field_evidence() {
+  use crate::accounts::{normalize_account_with_evidence, SourceKind};
+
+  let fixtures: Value = serde_json::from_str(include_str!(
+    "fixtures/tiktok_account_responses.json"
+  ))
+  .expect("TikTok 固化响应应为有效 JSON");
+  let collected_at = "2026-07-20T08:00:00+08:00";
+  let source_params = |data_type: &str| match data_type {
+    "user_search" => serde_json::json!({ "keyword": "汽车" }),
+    "followers" | "followings" | "similar_accounts" | "account_profile" => {
+      serde_json::json!({ "account_id": "MS4wLjAB-seed" })
+    }
+    "item_detail" | "comments" => serde_json::json!({ "item_id": "7400000000000000000" }),
+    _ => unreachable!("fixture data type should be covered"),
+  };
+  let cases = [
+    ("user_search", SourceKind::UserSearch, "/uid", "tt-search-1"),
+    ("followers", SourceKind::Relationship, "/uid", "tt-follower-1"),
+    ("followings", SourceKind::Relationship, "/uid", "tt-following-1"),
+    (
+      "similar_accounts",
+      SourceKind::Relationship,
+      "/uid",
+      "tt-similar-1",
+    ),
+  ];
+  for (data_type, source_kind, identity_path, expected_id) in cases {
+    let request = build_collection_request(
+      "tiktok",
+      data_type,
+      &source_params(data_type),
+      None,
+    )
+    .expect("TikTok 账号来源请求应构建");
+    let page = parse_collection_page(&request, fixtures[data_type].clone())
+      .expect("TikTok 账号来源响应应解析");
+    assert_eq!(page.records.len(), 1);
+    assert_eq!(
+      page.records[0].pointer(identity_path),
+      Some(&serde_json::json!(expected_id))
+    );
+    let endpoint_key = format!("tiktok.{data_type}");
+    let account = normalize_account_with_evidence(
+      "tiktok",
+      source_kind,
+      &endpoint_key,
+      collected_at,
+      &page.records[0],
+    )
+    .expect("TikTok 来源账号应归一化");
+    assert_eq!(account.platform_user_id.as_deref(), Some(expected_id));
+    assert_eq!(
+      account.field_evidence["platform_user_id"].endpoint_key,
+      endpoint_key
+    );
+    assert_eq!(account.field_evidence["platform_user_id"].raw_path, "/uid");
+    assert_eq!(
+      account.field_evidence["platform_user_id"].collected_at,
+      collected_at
+    );
+  }
+
+  let profile_request = build_collection_request(
+    "tiktok",
+    "account_profile",
+    &source_params("account_profile"),
+    None,
+  )
+  .unwrap();
+  let profile_page = parse_collection_page(
+    &profile_request,
+    fixtures["account_profile"].clone(),
+  )
+  .unwrap();
+  let profile = profile_page.records[0]
+    .pointer("/user")
+    .expect("资料响应应包含 user");
+  let account = normalize_account_with_evidence(
+    "tiktok",
+    SourceKind::AccountProfile,
+    "tiktok.account_profile",
+    collected_at,
+    profile,
+  )
+  .unwrap();
+  assert_eq!(account.account_fields["followers_count"], 0);
+  assert_eq!(account.account_fields["bio"], "公开简介");
+  assert_eq!(
+    account.field_evidence["avatar_url"].raw_path,
+    "/avatar_larger/url_list/0"
+  );
+  assert_eq!(
+    account.field_evidence["followers_count"].endpoint_key,
+    "tiktok.account_profile"
+  );
+
+  for (data_type, source_kind, author_path, expected_id) in [
+    ("item_detail", SourceKind::ContentAuthor, "/aweme_detail/author", "tt-author-1"),
+    ("comments", SourceKind::CommentAuthor, "/user", "tt-commenter-1"),
+  ] {
+    let request = build_collection_request("tiktok", data_type, &source_params(data_type), None)
+      .expect("TikTok 作者来源请求应构建");
+    let page = parse_collection_page(&request, fixtures[data_type].clone())
+      .expect("TikTok 作者来源响应应解析");
+    let author = page.records[0]
+      .pointer(author_path)
+      .expect("TikTok 来源记录应包含作者");
+    let endpoint_key = format!("tiktok.{data_type}");
+    let account = normalize_account_with_evidence(
+      "tiktok",
+      source_kind,
+      &endpoint_key,
+      collected_at,
+      author,
+    )
+    .expect("TikTok 作者应归一化");
+    assert_eq!(account.platform_user_id.as_deref(), Some(expected_id));
+    assert_eq!(account.field_evidence["platform_user_id"].endpoint_key, endpoint_key);
+  }
+}
+
+#[test]
 fn account_enrichment_parsers_keep_detail_payloads() {
   for (platform, data_type, data) in [
     (

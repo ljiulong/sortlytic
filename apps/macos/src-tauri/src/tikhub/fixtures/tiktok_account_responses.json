@@ -1,0 +1,87 @@
+{
+  "account_profile": {
+    "code": 200,
+    "data": {
+      "user": {
+        "uid": "tt-user-1",
+        "sec_uid": "MS4wLjAB-tt-user-1",
+        "unique_id": "sortlytic_tt",
+        "nickname": "TikTok 公开账号",
+        "signature": "公开简介",
+        "avatar_larger": { "url_list": ["https://example.com/tiktok-avatar.jpg"] },
+        "verified": false,
+        "follower_count": 0,
+        "following_count": 12,
+        "aweme_count": 3,
+        "total_favorited": 45
+      }
+    }
+  },
+  "user_search": {
+    "code": 200,
+    "data": {
+      "aweme_list": [],
+      "user_list": [
+        {
+          "user_info": {
+            "uid": "tt-search-1",
+            "sec_uid": "MS4wLjAB-tt-search-1",
+            "unique_id": "search_result",
+            "nickname": "用户搜索结果",
+            "follower_count": 8
+          }
+        }
+      ],
+      "has_more": false
+    }
+  },
+  "followers": {
+    "code": 200,
+    "data": {
+      "followers": [
+        { "uid": "tt-follower-1", "unique_id": "follower_one", "nickname": "粉丝一" }
+      ],
+      "has_more": false
+    }
+  },
+  "followings": {
+    "code": 200,
+    "data": {
+      "followings": [
+        { "uid": "tt-following-1", "unique_id": "following_one", "nickname": "关注一" }
+      ],
+      "has_more": false
+    }
+  },
+  "similar_accounts": {
+    "code": 200,
+    "data": {
+      "user_list": [
+        { "user_info": { "uid": "tt-similar-1", "unique_id": "similar_one", "nickname": "相似账号一" } }
+      ],
+      "has_more": false
+    }
+  },
+  "item_detail": {
+    "code": 200,
+    "data": {
+      "aweme_detail": {
+        "aweme_id": "tt-video-1",
+        "author": { "uid": "tt-author-1", "unique_id": "video_author", "nickname": "作品作者" }
+      }
+    }
+  },
+  "comments": {
+    "code": 200,
+    "data": {
+      "comments": [
+        {
+          "cid": "tt-comment-1",
+          "text": "公开评论",
+          "user": { "uid": "tt-commenter-1", "unique_id": "comment_author", "nickname": "评论用户" }
+        }
+      ],
+      "has_more": false
+    }
+  }
+}
