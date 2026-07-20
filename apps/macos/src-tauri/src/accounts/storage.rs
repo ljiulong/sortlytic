@@ -1,11 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::Utc;
+use chrono::{DateTime, Duration, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
 use uuid::Uuid;
 
-use super::{normalize_account_with_evidence, AccountRecord, AgeRange, SourceKind};
+use super::{
+  normalize_account_with_evidence, normalize_country_region, AccountRecord, AgeRange, SourceKind,
+};
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 
 #[derive(Debug, Clone)]
@@ -35,6 +37,21 @@ struct StoredAccount {
   data_types: BTreeSet<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum EvidenceFilter<T> {
+  Disabled,
+  Required(T),
+  Invalid,
+}
+
+#[derive(Debug, Clone)]
+struct AccountFilters {
+  gender: Option<BTreeSet<String>>,
+  region: EvidenceFilter<String>,
+  time_range_days: EvidenceFilter<i64>,
+  evaluated_at: Option<DateTime<Utc>>,
+}
+
 pub fn persist_account_observations(
   connection: &Connection,
   input: AccountObservationInput,
@@ -52,7 +69,7 @@ pub fn persist_account_observations(
   }
   i64::try_from(input.record_limit).map_err(|_| validation_error("账号输出上限超出范围"))?;
   let source_kind = source_kind(&input.data_type)?;
-  let gender_filter = active_gender_filter(connection, &input.task_run_id)?;
+  let filters = active_account_filters(connection, &input.task_run_id, &input.collected_at)?;
   let transaction = connection.unchecked_transaction().map_err(database_error)?;
   let mut observed_count = 0;
   let mut skipped_count = 0;
@@ -73,7 +90,7 @@ pub fn persist_account_observations(
       }
       Err(error) => return Err(error),
     };
-    persist_account(&transaction, &input, incoming, gender_filter.as_ref())?;
+    persist_account(&transaction, &input, incoming, &filters)?;
     observed_count += 1;
   }
 
@@ -104,7 +121,7 @@ fn persist_account(
   connection: &Connection,
   input: &AccountObservationInput,
   incoming: AccountRecord,
-  gender_filter: Option<&BTreeSet<String>>,
+  filters: &AccountFilters,
 ) -> AppResult<()> {
   let matches = matching_accounts(connection, input, &incoming)?;
   let was_included = matches.iter().any(|stored| stored.output_included);
@@ -145,12 +162,18 @@ fn persist_account(
   let qualifies = input
     .age_range
     .is_none_or(|range| range.includes(merged.age))
-    && gender_filter.is_none_or(|filter| {
+    && filters.gender.as_ref().is_none_or(|filter| {
       merged
         .gender
         .as_ref()
         .is_some_and(|gender| filter.contains(gender))
-    });
+    })
+    && region_matches(&filters.region, merged.country_region.as_deref())
+    && time_range_matches(
+      &filters.time_range_days,
+      filters.evaluated_at,
+      merged.last_posted_at.as_deref(),
+    );
   let other_output_count = connection
     .query_row(
       "SELECT COUNT(*) FROM collected_account
@@ -327,10 +350,11 @@ fn output_count(connection: &Connection, task_run_id: &str) -> AppResult<usize> 
   usize::try_from(count).map_err(|_| database_error("账号输出数量超出范围"))
 }
 
-fn active_gender_filter(
+fn active_account_filters(
   connection: &Connection,
   task_run_id: &str,
-) -> AppResult<Option<BTreeSet<String>>> {
+  collected_at: &str,
+) -> AppResult<AccountFilters> {
   let plan_json = connection
     .query_row(
       "SELECT plan.plan_json
@@ -343,7 +367,12 @@ fn active_gender_filter(
     .optional()
     .map_err(database_error)?;
   let Some(plan_json) = plan_json else {
-    return Ok(None);
+    return Ok(AccountFilters {
+      gender: None,
+      region: EvidenceFilter::Disabled,
+      time_range_days: EvidenceFilter::Disabled,
+      evaluated_at: timestamp_utc(collected_at),
+    });
   };
   let plan_json: Value = serde_json::from_str(&plan_json).map_err(json_error)?;
   let genders = plan_json
@@ -354,7 +383,79 @@ fn active_gender_filter(
     .filter_map(Value::as_str)
     .map(ToString::to_string)
     .collect::<BTreeSet<_>>();
-  Ok((!genders.is_empty()).then_some(genders))
+  Ok(AccountFilters {
+    gender: (!genders.is_empty()).then_some(genders),
+    region: plan_region_filter(&plan_json),
+    time_range_days: plan_time_range_filter(&plan_json),
+    evaluated_at: timestamp_utc(collected_at),
+  })
+}
+
+fn plan_region_filter(plan_json: &Value) -> EvidenceFilter<String> {
+  let Some(value) = plan_json.get("region").filter(|value| !value.is_null()) else {
+    return EvidenceFilter::Disabled;
+  };
+  let raw = value
+    .as_str()
+    .or_else(|| value.get("value").and_then(Value::as_str));
+  normalize_country_region(raw).map_or(EvidenceFilter::Invalid, EvidenceFilter::Required)
+}
+
+fn plan_time_range_filter(plan_json: &Value) -> EvidenceFilter<i64> {
+  let Some(value) = plan_json.get("time_range").filter(|value| !value.is_null()) else {
+    return EvidenceFilter::Disabled;
+  };
+  let days = value
+    .as_i64()
+    .or_else(|| value.as_str().and_then(|value| value.trim().parse().ok()));
+  days
+    .filter(|days| matches!(days, 1 | 7 | 30 | 180))
+    .map_or(EvidenceFilter::Invalid, EvidenceFilter::Required)
+}
+
+fn region_matches(filter: &EvidenceFilter<String>, actual: Option<&str>) -> bool {
+  match filter {
+    EvidenceFilter::Disabled => true,
+    EvidenceFilter::Required(expected) => {
+      normalize_country_region(actual).as_ref() == Some(expected)
+    }
+    EvidenceFilter::Invalid => false,
+  }
+}
+
+fn time_range_matches(
+  filter: &EvidenceFilter<i64>,
+  evaluated_at: Option<DateTime<Utc>>,
+  actual: Option<&str>,
+) -> bool {
+  match filter {
+    EvidenceFilter::Disabled => true,
+    EvidenceFilter::Required(days) => evaluated_at
+      .zip(actual.and_then(timestamp_utc))
+      .is_some_and(|(evaluated_at, posted_at)| {
+        posted_at <= evaluated_at && posted_at >= evaluated_at - Duration::days(*days)
+      }),
+    EvidenceFilter::Invalid => false,
+  }
+}
+
+fn timestamp_utc(value: &str) -> Option<DateTime<Utc>> {
+  let value = value.trim();
+  DateTime::parse_from_rfc3339(value)
+    .ok()
+    .map(|value| value.with_timezone(&Utc))
+    .or_else(|| {
+      let raw = value.parse::<i64>().ok()?;
+      let (seconds, nanos) = if raw.unsigned_abs() >= 1_000_000_000_000 {
+        (
+          raw.div_euclid(1_000),
+          raw.rem_euclid(1_000) as u32 * 1_000_000,
+        )
+      } else {
+        (raw, 0)
+      };
+      DateTime::from_timestamp(seconds, nanos)
+    })
 }
 
 fn validation_error(message: impl Into<String>) -> AppError {

@@ -345,6 +345,109 @@ fn persisted_gender_filter_runs_after_account_merge() {
 }
 
 #[test]
+fn persisted_region_and_time_filters_require_explicit_merged_evidence() {
+  for (days, cutoff) in [
+    (1, "2026-07-19T00:00:00Z"),
+    (7, "2026-07-13T00:00:00Z"),
+    (30, "2026-06-20T00:00:00Z"),
+    (180, "2026-01-21T00:00:00Z"),
+  ] {
+    let connection = account_connection();
+    set_account_filters(&connection, "GB", days);
+    let observed_at = "2026-07-20T00:00:00Z";
+
+    let discovered = persist_account_observations(
+      &connection,
+      AccountObservationInput {
+        task_run_id: "run-1".to_string(),
+        platform: "tiktok".to_string(),
+        data_type: "comments".to_string(),
+        records: vec![json!({ "user_id": "qualified", "unique_id": "qualified" })],
+        output_selected: true,
+        age_range: None,
+        record_limit: 10,
+        collected_at: observed_at.to_string(),
+      },
+    )
+    .expect("候选账号应先留存");
+    assert_eq!(discovered.output_count, 0, "缺少地区和时间证据不得输出");
+
+    let region_enriched = persist_account_observations(
+      &connection,
+      AccountObservationInput {
+        task_run_id: "run-1".to_string(),
+        platform: "tiktok".to_string(),
+        data_type: "account_country".to_string(),
+        records: vec![json!({
+          "user_id": "qualified",
+          "unique_id": "qualified",
+          "country_region": "gb"
+        })],
+        output_selected: true,
+        age_range: None,
+        record_limit: 10,
+        collected_at: observed_at.to_string(),
+      },
+    )
+    .expect("明确地区应合并");
+    assert_eq!(region_enriched.output_count, 0, "缺少时间证据仍不得输出");
+
+    let time_enriched = persist_account_observations(
+      &connection,
+      AccountObservationInput {
+        task_run_id: "run-1".to_string(),
+        platform: "tiktok".to_string(),
+        data_type: "account_posts".to_string(),
+        records: vec![json!({
+          "user_id": "qualified",
+          "unique_id": "qualified",
+          "last_posted_at": cutoff
+        })],
+        output_selected: true,
+        age_range: None,
+        record_limit: 10,
+        collected_at: observed_at.to_string(),
+      },
+    )
+    .expect("精确边界时间应合并");
+    assert_eq!(time_enriched.output_count, 1, "{days} 天边界应包含在结果内");
+
+    persist_account_observations(
+      &connection,
+      AccountObservationInput {
+        task_run_id: "run-1".to_string(),
+        platform: "tiktok".to_string(),
+        data_type: "account_profile".to_string(),
+        records: vec![
+          json!({ "user_id": "wrong-region", "country_region": "US", "last_posted_at": observed_at }),
+          json!({ "user_id": "missing-region", "last_posted_at": observed_at }),
+          json!({ "user_id": "invalid-region", "country_region": "United Kingdom", "last_posted_at": observed_at }),
+          json!({ "user_id": "future-post", "country_region": "GB", "last_posted_at": "2026-07-21T00:00:00Z" }),
+          json!({ "user_id": "invalid-post", "country_region": "GB", "last_posted_at": "recently" })
+        ],
+        output_selected: true,
+        age_range: None,
+        record_limit: 10,
+        collected_at: observed_at.to_string(),
+      },
+    )
+    .expect("不合格证据仍应留存用于审计");
+
+    assert_eq!(
+      connection
+        .query_row(
+          "SELECT COUNT(*) FROM collected_account WHERE output_included = 1",
+          [],
+          |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+      1,
+      "未知、异常、未来或不匹配证据不得通过"
+    );
+  }
+}
+
+#[test]
 fn persisted_accounts_merge_before_age_filter_and_apply_output_limit() {
   let connection = account_connection();
   let first = persist_account_observations(
@@ -725,4 +828,23 @@ fn set_gender_filter(connection: &Connection, genders: &[&str]) {
       [],
     )
     .expect("性别运行应插入");
+}
+
+fn set_account_filters(connection: &Connection, region: &str, time_range_days: i64) {
+  connection
+    .execute(
+      "INSERT INTO collection_plan (id, plan_json) VALUES ('plan-1', ?1)",
+      [serde_json::json!({
+        "region": region,
+        "time_range": time_range_days.to_string()
+      })
+      .to_string()],
+    )
+    .expect("地区和时间计划应插入");
+  connection
+    .execute(
+      "INSERT INTO task_run (id, plan_id) VALUES ('run-1', 'plan-1')",
+      [],
+    )
+    .expect("地区和时间运行应插入");
 }
