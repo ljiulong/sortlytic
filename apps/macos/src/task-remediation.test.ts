@@ -26,6 +26,16 @@ describe('任务错误修改方式', () => {
     expect(remediation.primaryAction).toBe('edit_task')
   })
 
+  it('历史配置失败即使使用通用校验码也仍指向 AI 设置', () => {
+    const remediation = remediationForTaskProblem(
+      'VALIDATION_ERROR',
+      '尚未设置当前 AI 配置，请先在设置中完成真实连通性测试',
+    )
+
+    expect(remediation.primaryAction).toBe('open_ai_settings')
+    expect(remediation.message).toContain('打开 AI 设置')
+  })
+
   it('未知错误仍保留记录并允许查看诊断和编辑，不只显示稍后重试', () => {
     expect(remediationForTaskProblem('UNCLASSIFIED_ERROR')).toEqual({
       message: '保留当前任务和失败记录；查看诊断详情后编辑任务或重新执行安全操作。',

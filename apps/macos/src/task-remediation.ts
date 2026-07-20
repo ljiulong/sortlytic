@@ -17,6 +17,14 @@ export function remediationForTaskProblem(
   code?: string | null,
   message?: string | null,
 ): TaskRemediation {
+  if (code === 'VALIDATION_ERROR'
+    && /(?:AI 配置|API Key|真实连通性测试)/.test(message ?? '')) {
+    return {
+      message: '打开 AI 设置，检查 Base URL、API Key、模型 ID，并完成真实连通性测试后重新解析。',
+      primaryAction: 'open_ai_settings',
+      secondaryAction: 'view_diagnostics',
+    }
+  }
   if (code === 'VALIDATION_ERROR') {
     return {
       message: message?.includes('请求参数') || message?.includes('地区和时间范围')
