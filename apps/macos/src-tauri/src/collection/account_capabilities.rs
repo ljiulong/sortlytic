@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::AppResult;
 
+use super::capabilities::endpoint_for;
 use super::collection_error;
 
 pub const ACCOUNT_CAPABILITY_CATALOG_VERSION: i64 = 1;
@@ -82,6 +83,9 @@ pub struct AccountSourceCapabilityView {
   pub input_kind: AccountSourceInputKind,
   pub endpoint_key: String,
   pub pagination_mode: PaginationMode,
+  pub region_filter: FilterExecution,
+  pub time_range_filter: FilterExecution,
+  pub time_ranges: Vec<String>,
   pub max_page_size: i64,
   pub max_request_count: i64,
 }
@@ -352,6 +356,22 @@ fn source(
   max_page_size: i64,
   max_request_count: i64,
 ) -> AccountSourceCapabilityView {
+  let endpoint =
+    endpoint_for(platform, endpoint_suffix).expect("账号来源必须引用能力目录中的已注册端点");
+  let region_filter = match endpoint.region_filter {
+    FilterExecution::Provider => FilterExecution::Provider,
+    _ if matches!(platform, "tiktok" | "douyin") => FilterExecution::Local,
+    _ => FilterExecution::Unsupported,
+  };
+  let time_range_filter = match endpoint.time_range_filter {
+    FilterExecution::Provider => FilterExecution::Provider,
+    _ => FilterExecution::Local,
+  };
+  let time_ranges = match time_range_filter {
+    FilterExecution::Provider => endpoint.provider_time_ranges,
+    FilterExecution::Local => &["1", "7", "30", "180"],
+    FilterExecution::Unsupported => &[],
+  };
   AccountSourceCapabilityView {
     key: key.to_string(),
     label: display_name.to_string(),
@@ -360,6 +380,12 @@ fn source(
     input_kind,
     endpoint_key: format!("{platform}.{endpoint_suffix}"),
     pagination_mode,
+    region_filter,
+    time_range_filter,
+    time_ranges: time_ranges
+      .iter()
+      .map(|value| (*value).to_string())
+      .collect(),
     max_page_size,
     max_request_count,
   }
@@ -593,6 +619,58 @@ mod tests {
           capability.platform, source_key
         );
       }
+    }
+  }
+
+  #[test]
+  fn account_sources_expose_evidence_based_region_and_time_capabilities() {
+    for (platform, source_key, region, time, ranges) in [
+      (
+        "tiktok",
+        "content_search_authors",
+        FilterExecution::Provider,
+        FilterExecution::Provider,
+        vec!["1", "7", "30", "180"],
+      ),
+      (
+        "tiktok",
+        "user_search",
+        FilterExecution::Local,
+        FilterExecution::Local,
+        vec!["1", "7", "30", "180"],
+      ),
+      (
+        "douyin",
+        "user_search",
+        FilterExecution::Local,
+        FilterExecution::Local,
+        vec!["1", "7", "30", "180"],
+      ),
+      (
+        "xiaohongshu",
+        "user_search",
+        FilterExecution::Unsupported,
+        FilterExecution::Local,
+        vec!["1", "7", "30", "180"],
+      ),
+    ] {
+      let capability = get_account_collection_capabilities(platform).unwrap();
+      let source = capability
+        .account_sources
+        .iter()
+        .find(|source| source.key == source_key)
+        .unwrap();
+
+      assert_eq!(source.region_filter, region, "{platform}.{source_key}");
+      assert_eq!(source.time_range_filter, time, "{platform}.{source_key}");
+      assert_eq!(
+        source.time_ranges,
+        ranges
+          .into_iter()
+          .map(ToString::to_string)
+          .collect::<Vec<_>>(),
+        "{platform}.{source_key}"
+      );
     }
   }
 
