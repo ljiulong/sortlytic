@@ -46,8 +46,8 @@ use prompts::{
 use task_commands::{
   cancel_task, confirm_collection_plan, copy_task, create_collection_task, delete_task,
   enqueue_task, estimate_task_cost, execute_next_task, get_latest_collection_plan, get_task,
-  list_latest_task_runs, list_task_logs, list_tasks, retry_task, save_collection_plan,
-  update_collection_task,
+  list_latest_task_runs, list_task_logs, list_tasks, retry_task, revise_collection_task,
+  save_collection_plan, update_collection_task,
 };
 use tasks::CostEstimateView;
 use tauri::Manager;
@@ -456,6 +456,7 @@ pub fn run() {
       create_collection_task,
       update_collection_task,
       save_collection_plan,
+      revise_collection_task,
       estimate_task_cost,
       confirm_collection_plan,
       get_latest_collection_plan,

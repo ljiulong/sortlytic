@@ -1,7 +1,8 @@
 use crate::domain::AppResult;
 use crate::tasks::{
   self, CollectionPlanView, CollectionTaskView, CostEstimateView, CreateCollectionTaskInput,
-  SaveCollectionPlanInput, TaskLogView, TaskRunView, UpdateCollectionTaskInput,
+  ReviseCollectionTaskInput, RevisedCollectionTaskView, SaveCollectionPlanInput, TaskLogView,
+  TaskRunView, UpdateCollectionTaskInput,
 };
 
 use super::{resolve_workspace_root, AppState};
@@ -35,6 +36,16 @@ pub(super) fn save_collection_plan(
 ) -> AppResult<CollectionPlanView> {
   let root_path = resolve_workspace_root(root_path, &state)?;
   tasks::save_collection_plan(root_path, input)
+}
+
+#[tauri::command]
+pub(super) fn revise_collection_task(
+  input: ReviseCollectionTaskInput,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<RevisedCollectionTaskView> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  tasks::revise_collection_task(root_path, input)
 }
 
 #[tauri::command]
