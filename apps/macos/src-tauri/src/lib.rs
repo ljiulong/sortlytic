@@ -132,6 +132,16 @@ fn list_latest_task_intents(
 }
 
 #[tauri::command]
+fn list_task_intents(
+  task_id: String,
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<Vec<NaturalParseAttemptView>> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  ai::list_task_intents(root_path, &task_id)
+}
+
+#[tauri::command]
 fn run_workspace_health_check(
   root_path: Option<String>,
   state: tauri::State<'_, AppState>,
@@ -445,6 +455,7 @@ pub fn run() {
       open_workspace,
       get_active_workspace,
       list_latest_task_intents,
+      list_task_intents,
       run_workspace_health_check,
       close_workspace,
       get_api_profile_registry,

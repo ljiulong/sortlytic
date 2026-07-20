@@ -62,6 +62,33 @@ pub fn list_latest_task_intents(
     .map_err(database_error)
 }
 
+pub fn list_task_intents(
+  root_path: impl AsRef<Path>,
+  task_id: &str,
+) -> AppResult<Vec<NaturalParseAttemptView>> {
+  let connection = open_connection(root_path)?;
+  let mut statement = connection
+    .prepare(
+      "SELECT intent.id, intent.task_id, intent.intent_text, intent.language,
+              intent.parse_status, intent.parse_phase, intent.ai_run_id,
+              intent.error_code, intent.error_message, intent.retryable,
+              intent.error_safe_details_json, snapshot.provider_id, snapshot.model_id,
+              snapshot.prompt_version_id, intent.created_at, intent.updated_at
+       FROM task_intent AS intent
+       LEFT JOIN ai_run AS run ON run.id = intent.ai_run_id
+       LEFT JOIN runtime_snapshot AS snapshot ON snapshot.id = run.runtime_snapshot_id
+       WHERE intent.task_id = ?1
+       ORDER BY intent.updated_at DESC, intent.created_at DESC, intent.id DESC",
+    )
+    .map_err(database_error)?;
+  let rows = statement
+    .query_map(params![task_id], map_attempt)
+    .map_err(database_error)?;
+  rows
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .map_err(database_error)
+}
+
 pub(crate) fn mark_interrupted_task_intents(root_path: impl AsRef<Path>) -> AppResult<usize> {
   let connection = open_connection(root_path)?;
   connection
@@ -183,6 +210,12 @@ mod tests {
       Some("AI_PARSE_INTERRUPTED")
     );
     assert_eq!(attempts[0].retryable, Some(true));
+
+    let history = list_task_intents(&root, &task.id).unwrap();
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0].id, "intent-new");
+    assert_eq!(history[1].id, "intent-old");
+    assert_eq!(history[1].parse_status, "failed");
 
     fs::remove_dir_all(root).ok();
   }

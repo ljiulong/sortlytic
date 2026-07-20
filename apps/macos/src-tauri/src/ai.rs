@@ -20,7 +20,7 @@ pub(crate) mod provider_client;
 mod provider_policy;
 
 pub(crate) use attempts::mark_interrupted_task_intents;
-pub use attempts::{list_latest_task_intents, NaturalParseAttemptView};
+pub use attempts::{list_latest_task_intents, list_task_intents, NaturalParseAttemptView};
 pub use collection_intent_schema::{CollectionIntentV1, IntentAgeRange};
 pub use generation::generate_collection_plan_from_text;
 pub use intent_plan::IntentPlanBuildResult;
