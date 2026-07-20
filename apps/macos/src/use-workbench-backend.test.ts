@@ -43,6 +43,7 @@ import type { ApiProfileRegistryView } from './api-profiles'
 
 type CapturedMutationOptions = {
   mutationFn?: (input: unknown) => Promise<unknown>
+  onMutate?: (input: string) => unknown
   onSuccess?: (data: unknown) => unknown
   onError?: (error: unknown) => unknown
   retry?: boolean | number
@@ -532,6 +533,63 @@ describe('任务页动作', () => {
 })
 
 describe('计划生成失败的草稿清理', () => {
+  it('点击解析后立即进入 preparing 状态并保留原始输入', () => {
+    renderWorkbenchHook()
+    const generateNaturalMutation = mutationOptionsMock.current[1]
+    const naturalParseStateSetter = stateSettersMock.current[3]
+
+    generateNaturalMutation?.onMutate?.('  用中文查找英国 TikTok 宠物用品账号  ')
+
+    expect(naturalParseStateSetter).toHaveBeenCalledWith(expect.objectContaining({
+      phase: 'preparing',
+      intentText: '用中文查找英国 TikTok 宠物用品账号',
+      draftPreserved: true,
+    }))
+  })
+
+  it('应用重启后从批量 attempt 数据恢复最近失败状态', () => {
+    const failedAttempt = {
+      id: 'attempt-failed',
+      task_id: task.id,
+      intent_text: '采集英国 TikTok 宠物用品账号',
+      parse_status: 'failed' as const,
+      parse_phase: 'requesting_ai',
+      error_code: 'MODEL_RATE_LIMIT',
+      error_message: 'AI 服务请求过于频繁或额度不足，请稍后重试',
+      retryable: true,
+      error_safe_details_json: { retry_after: '17' },
+      created_at: '2026-07-20T08:00:00Z',
+      updated_at: '2026-07-20T08:00:17Z',
+    }
+    queryMock.current = {
+      data: mapBackendData(
+        workspace,
+        [task],
+        tikhubRegistryFixture(),
+        1_000,
+        [],
+        [],
+        [failedAttempt],
+      ),
+      error: null,
+      isLoading: false,
+      isSuccess: true,
+    }
+
+    const result = renderWorkbenchHook()
+
+    expect(result.naturalParseState).toMatchObject({
+      phase: 'failed',
+      taskId: task.id,
+      intentText: '采集英国 TikTok 宠物用品账号',
+      problem: {
+        code: 'MODEL_RATE_LIMIT',
+        message: 'AI 服务请求过于频繁或额度不足，请稍后重试',
+        safeDetails: { retry_after: '17' },
+      },
+    })
+  })
+
   it('账号表单把单一来源、字段和筛选转换为 v4 请求', () => {
     expect(buildAccountPlanRequest({
       ...formPlanInput,

@@ -25,6 +25,14 @@ export type NaturalParseState = {
   draftPreserved: boolean
 }
 
+export function createIdleNaturalParseState(): NaturalParseState {
+  return {
+    phase: 'idle',
+    intentText: '',
+    draftPreserved: true,
+  }
+}
+
 export function createPreparingNaturalParseState(intentText: string): NaturalParseState {
   return {
     phase: 'preparing',
@@ -52,6 +60,28 @@ export function naturalParseStateFromAttempt(
     problem: problemFromAttempt(attempt, phase),
     draftPreserved: true,
   }
+}
+
+export function resolveNaturalParseState(
+  localState: NaturalParseState,
+  attempts: NaturalParseAttemptView[],
+): NaturalParseState {
+  const latestAttempts = [...attempts].sort(
+    (left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at),
+  )
+  if (localState.phase === 'idle') {
+    return latestAttempts[0]
+      ? naturalParseStateFromAttempt(latestAttempts[0])
+      : localState
+  }
+  if (!localState.taskId) return localState
+  const persisted = latestAttempts.find((attempt) => attempt.task_id === localState.taskId)
+  if (!persisted) return localState
+  const persistedUpdatedAt = Date.parse(persisted.updated_at)
+  const localStartedAt = Date.parse(localState.startedAt ?? '')
+  return !Number.isFinite(localStartedAt) || persistedUpdatedAt >= localStartedAt
+    ? naturalParseStateFromAttempt(persisted)
+    : localState
 }
 
 function phaseFromAttempt(attempt: NaturalParseAttemptView): NaturalParsePhase {
