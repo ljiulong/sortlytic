@@ -17,6 +17,7 @@ pub(crate) mod collection_intent_schema;
 mod generation;
 pub(crate) mod intent_plan;
 pub(crate) mod provider_client;
+mod provider_policy;
 
 pub(crate) use attempts::mark_interrupted_task_intents;
 pub use attempts::{list_latest_task_intents, NaturalParseAttemptView};
@@ -25,7 +26,9 @@ pub use generation::generate_collection_plan_from_text;
 pub use intent_plan::IntentPlanBuildResult;
 
 use collection_intent_schema::parse_collection_intent;
-use provider_client::{call_model, collection_intent_request, ProviderConfig};
+use provider_client::{
+  call_model, call_model_for_intent, collection_intent_request, ProviderConfig,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GenerateCollectionPlanFromTextInput {
@@ -106,7 +109,7 @@ pub fn run_collection_prompt_regression(
     },
   )?;
   let request = collection_intent_request(prompt_content, intent_text);
-  let response = call_model(&profile.config, &request)?;
+  let response = call_model_for_intent(&profile.config, &request)?;
   let parsed = parse_collection_intent(&response.output_json).map_err(|errors| {
     ai_error(format!(
       "真实模型回归未通过 collection_intent_v1 Schema：{}",

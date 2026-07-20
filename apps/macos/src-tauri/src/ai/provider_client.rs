@@ -1,5 +1,5 @@
 use std::io::Read;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use reqwest::blocking::{Client, RequestBuilder, Response};
 use reqwest::{StatusCode, Url};
@@ -9,6 +9,7 @@ use crate::api_profiles::{AiApiFormat, AiProviderType};
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 
 use super::collection_intent_schema::collection_intent_schema;
+use super::provider_policy::{model_timeouts, ModelCallPurpose};
 
 const MAX_MODEL_RESPONSE_BYTES: u64 = 2 * 1024 * 1024;
 
@@ -41,10 +42,26 @@ pub(crate) fn call_model(
   config: &ProviderConfig,
   request: &ModelRequest,
 ) -> AppResult<ModelResponse> {
+  call_model_for_purpose(config, request, ModelCallPurpose::ConnectionTest)
+}
+
+pub(crate) fn call_model_for_intent(
+  config: &ProviderConfig,
+  request: &ModelRequest,
+) -> AppResult<ModelResponse> {
+  call_model_for_purpose(config, request, ModelCallPurpose::CollectionIntent)
+}
+
+fn call_model_for_purpose(
+  config: &ProviderConfig,
+  request: &ModelRequest,
+  purpose: ModelCallPurpose,
+) -> AppResult<ModelResponse> {
   validate_config(config)?;
+  let timeouts = model_timeouts(purpose);
   let client = Client::builder()
-    .connect_timeout(Duration::from_secs(10))
-    .timeout(Duration::from_secs(30))
+    .connect_timeout(timeouts.connect)
+    .timeout(timeouts.total)
     .redirect(reqwest::redirect::Policy::none())
     .build()
     .map_err(transport_error)?;
