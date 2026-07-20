@@ -23,13 +23,7 @@ pub(super) fn estimate_from_plan_json(plan_json: &Value) -> CostEstimateView {
   if plan_json.get("schema_version").and_then(Value::as_i64) == Some(4) {
     data_type_count = step_count;
   }
-  let embedded_request_count = plan_json
-    .get("cost_estimate")
-    .and_then(|cost| cost.get("request_count_estimate"))
-    .and_then(Value::as_i64)
-    .filter(|value| *value > 0);
-  let request_count_estimate = embedded_request_count
-    .or_else(|| crate::collection::plan_estimate::estimate_request_count(plan_json))
+  let request_count_estimate = crate::collection::plan_estimate::estimate_request_count(plan_json)
     .unwrap_or_else(|| step_count.saturating_mul(request_limit));
   let requires_confirmation =
     request_count_estimate > 1 || platform_count > 1 || data_type_count > 1;

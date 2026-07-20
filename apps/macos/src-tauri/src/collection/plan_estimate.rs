@@ -14,6 +14,10 @@ pub(crate) fn estimate_request_count(plan_json: &Value) -> Option<i64> {
     .and_then(Value::as_i64)
     .filter(|value| *value > 0)
     .unwrap_or(1);
+  let record_limit = plan_json
+    .get("record_limit")
+    .and_then(Value::as_i64)
+    .filter(|value| *value > 0);
   let mut output_limits = BTreeMap::new();
   let mut total = 0_i64;
 
@@ -50,6 +54,7 @@ pub(crate) fn estimate_request_count(plan_json: &Value) -> Option<i64> {
       PaginationMode::Single => request_count,
       PaginationMode::Cursor => request_count.saturating_mul(endpoint.max_page_size),
     };
+    let output_limit = record_limit.map_or(output_limit, |limit| output_limit.min(limit));
     if output_limits.insert(step_key, output_limit).is_some() {
       return None;
     }
@@ -111,5 +116,30 @@ mod tests {
     });
 
     assert_eq!(estimate_request_count(&plan), Some(5));
+  }
+
+  #[test]
+  fn caps_v4_dependency_fanout_at_the_record_limit() {
+    let plan = serde_json::json!({
+      "record_limit": 10,
+      "request_limit": 1,
+      "steps": [
+        {
+          "step_key": "discover",
+          "platform": "tiktok",
+          "data_type": "user_search",
+          "request_limit": 1
+        },
+        {
+          "step_key": "enrich_country",
+          "depends_on_step_key": "discover",
+          "platform": "tiktok",
+          "data_type": "account_country",
+          "request_limit": 1
+        }
+      ]
+    });
+
+    assert_eq!(estimate_request_count(&plan), Some(11));
   }
 }

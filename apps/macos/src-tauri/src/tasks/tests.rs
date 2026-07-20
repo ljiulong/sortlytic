@@ -545,6 +545,29 @@ fn persisted_cost_estimate_counts_the_confirmed_request_limit() {
 }
 
 #[test]
+fn persisted_cost_estimate_ignores_forged_embedded_totals() {
+  let root_path = unique_temp_workspace("forged-cost-estimate");
+  create_workspace("成本重算测试", &root_path).expect("workspace should be created");
+  let task = create_collection_task(&root_path, create_task_input()).expect("task created");
+  let mut input = plan_input(&task.id);
+  input.plan_json["request_limit"] = serde_json::json!(5);
+  input.plan_json["cost_estimate"] = serde_json::json!({
+    "request_count_estimate": 999_999,
+    "requires_confirmation": false
+  });
+  input.cost_estimate_json = Some(serde_json::json!({
+    "request_count_estimate": 777_777
+  }));
+
+  let plan = save_collection_plan(&root_path, input).expect("plan should save");
+  let estimate = estimate_task_cost(&root_path, Some(task.id), None).expect("cost should load");
+
+  assert_eq!(plan.cost_estimate_json["request_count_estimate"], 5);
+  assert_eq!(estimate.request_count_estimate, 5);
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn persisted_cost_estimate_keeps_dependency_fanout() {
   let root_path = unique_temp_workspace("dependency-fanout-cost");
   create_workspace("依赖扇出成本测试", &root_path).expect("workspace should be created");
