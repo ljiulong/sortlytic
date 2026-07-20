@@ -13,6 +13,7 @@ mod deletion;
 mod execution;
 mod plans;
 mod recovery;
+mod revisions;
 mod snapshot;
 mod validation;
 mod worker;
@@ -27,6 +28,7 @@ pub use execution::{
 use plans::latest_plan_for_task;
 pub use plans::{confirm_collection_plan, estimate_task_cost, save_collection_plan};
 pub use recovery::recover_interrupted_runs;
+pub use revisions::revise_collection_task;
 pub use worker::execute_next_task;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -52,6 +54,23 @@ pub struct SaveCollectionPlanInput {
   pub validation_status: String,
   pub validation_errors_json: Option<Value>,
   pub cost_estimate_json: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ReviseCollectionTaskInput {
+  pub task_id: String,
+  pub name: String,
+  pub platforms: Vec<String>,
+  pub data_types: Vec<String>,
+  pub source: String,
+  pub plan_json: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RevisedCollectionTaskView {
+  pub task: CollectionTaskView,
+  pub collection_plan: CollectionPlanView,
+  pub copied_from_task_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -685,6 +704,9 @@ fn database_error(error: impl ToString) -> AppError {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod revision_tests;
 
 #[cfg(test)]
 #[path = "tasks/execution_tests.rs"]
