@@ -3,6 +3,7 @@ import {
   checkForAppUpdate,
   getAiRun,
   getCurrentAppVersion,
+  getTask,
   listLatestTaskIntents,
   listAiRuns,
   prepareAppUpdate,
@@ -41,6 +42,17 @@ describe('natural parse attempt API boundary', () => {
 })
 
 describe('task revision API boundary', () => {
+  it('loads the complete persisted task before editing', async () => {
+    invokeMock.mockResolvedValue({ id: 'task-1' })
+
+    await getTask('task-1')
+
+    expect(invokeMock).toHaveBeenCalledWith('get_task', {
+      taskId: 'task-1',
+      rootPath: null,
+    })
+  })
+
   it('passes the complete user-edited plan to the active workspace command', async () => {
     invokeMock.mockResolvedValue({ task: { id: 'task-1' }, collection_plan: { id: 'plan-2' } })
     const input = {

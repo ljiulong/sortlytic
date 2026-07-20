@@ -475,6 +475,13 @@ export function getLatestCollectionPlan(taskId: string) {
   })
 }
 
+export function getTask(taskId: string) {
+  return invoke<CollectionTaskView>('get_task', {
+    taskId,
+    rootPath: null,
+  })
+}
+
 export function estimateTaskCost(taskId: string) {
   return invoke<CostEstimateView>('estimate_task_cost', {
     taskId,
