@@ -134,9 +134,12 @@ function Workbench() {
                   actionMessage={backend.actionMessage}
                   activePlan={backend.activePlan}
                   isBusy={backend.isBusy}
+                  naturalParseState={backend.naturalParseState}
                   onConfirmPlan={backend.confirmActivePlan}
                   onGenerateFormPlan={backend.generateFormPlan}
                   onGenerateNaturalPlan={backend.generateNaturalPlan}
+                  onOpenAiSettings={() => setActiveNav(parseFeedbackNavigationTarget('ai_settings'))}
+                  onViewParseDiagnostics={() => setActiveNav(parseFeedbackNavigationTarget('diagnostics'))}
                 />
               </div>
             </section>
@@ -258,6 +261,13 @@ export function localizeBackendMessage(message: string): MessageCopy {
   return message.trim()
     ? { key: 'error.raw', options: { message } }
     : { key: 'error.unknown' }
+}
+
+// oxlint-disable-next-line react/only-export-components
+export function parseFeedbackNavigationTarget(
+  action: 'ai_settings' | 'diagnostics',
+): NavKey {
+  return action === 'ai_settings' ? 'settings' : 'tasks'
 }
 
 export default App
