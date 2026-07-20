@@ -255,9 +255,9 @@ export function localizeBackendMessage(message: string): MessageCopy {
   if (key) return { key }
   const dynamicKey = dynamicBackendMessageKeys.find(([pattern]) => pattern.test(message))?.[1]
   if (dynamicKey) return { key: dynamicKey }
-  return /[^\p{ASCII}]/u.test(message)
-    ? { key: 'error.unknown' }
-    : { key: 'error.raw', options: { message } }
+  return message.trim()
+    ? { key: 'error.raw', options: { message } }
+    : { key: 'error.unknown' }
 }
 
 export default App

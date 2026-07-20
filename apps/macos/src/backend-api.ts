@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { normalizeBackendProblem } from './backend-problem'
 
 export type BackendStatus = {
   service: string
@@ -596,9 +597,5 @@ export async function relaunchAfterAppUpdate(): Promise<void> {
 }
 
 export function backendErrorMessage(error: unknown) {
-  if (typeof error === 'string') return error
-  if (error && typeof error === 'object' && 'message' in error) {
-    return String((error as { message: unknown }).message)
-  }
-  return '后端调用失败'
+  return normalizeBackendProblem(error).message
 }
