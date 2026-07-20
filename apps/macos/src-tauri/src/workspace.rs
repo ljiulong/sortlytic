@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use chrono::Utc;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
@@ -101,6 +102,7 @@ pub fn create_workspace(name: &str, root_path: impl AsRef<Path>) -> AppResult<Wo
   create_private_database_file(&database_path)?;
 
   let mut connection = open_workspace_database(&database_path)?;
+  apply_workspace_write_pragmas(&connection)?;
   apply_schema(&mut connection)?;
 
   let now = Utc::now().to_rfc3339();
@@ -167,6 +169,7 @@ pub fn open_workspace(root_path: impl AsRef<Path>) -> AppResult<WorkspaceSummary
   secure_existing_workspace_permissions(&root_path, &database_path)?;
 
   let mut connection = open_workspace_database(&database_path)?;
+  apply_workspace_write_pragmas(&connection)?;
   apply_schema(&mut connection)?;
   let mut summary = get_workspace_summary(&connection, &root_path, &database_path)?;
   create_private_workspace_directories(&root_path)?;
@@ -247,9 +250,6 @@ pub fn open_workspace_database(database_path: impl AsRef<Path>) -> AppResult<Con
   )
   .map_err(database_error)?;
   apply_connection_pragmas(&connection)?;
-  connection
-    .execute_batch("BEGIN IMMEDIATE; ROLLBACK;")
-    .map_err(database_error)?;
   validate_private_database_files(&database_path)?;
   Ok(connection)
 }
@@ -282,13 +282,25 @@ fn normalize_workspace_path(root_path: impl AsRef<Path>) -> AppResult<PathBuf> {
 
 fn apply_connection_pragmas(connection: &Connection) -> AppResult<()> {
   connection
+    .busy_timeout(Duration::from_secs(5))
+    .map_err(database_error)?;
+  connection
     .execute_batch(
       "
       PRAGMA foreign_keys = ON;
-      PRAGMA journal_mode = WAL;
-      PRAGMA wal_autocheckpoint = 1000;
       PRAGMA synchronous = NORMAL;
       PRAGMA temp_store = MEMORY;
+      ",
+    )
+    .map_err(database_error)
+}
+
+fn apply_workspace_write_pragmas(connection: &Connection) -> AppResult<()> {
+  connection
+    .execute_batch(
+      "
+      PRAGMA journal_mode = WAL;
+      PRAGMA wal_autocheckpoint = 1000;
       ",
     )
     .map_err(database_error)
@@ -690,6 +702,34 @@ mod tests {
     assert_eq!(created.name, "默认工作区");
     assert!(reopened.database_path.is_file());
 
+    fs::remove_dir_all(root_path).ok();
+  }
+
+  #[test]
+  fn opening_a_read_connection_does_not_compete_for_an_existing_write_lock() {
+    let root_path = unique_temp_workspace("concurrent-read");
+    let summary =
+      create_workspace("并发读取测试", &root_path).expect("workspace should be created");
+    let writer = open_workspace_database(&summary.database_path).expect("writer should open");
+    writer
+      .execute_batch("BEGIN IMMEDIATE;")
+      .expect("writer should hold the write transaction");
+
+    let reader = open_workspace_database(&summary.database_path)
+      .expect("opening a read connection must not request a write lock");
+    let workspace_count = reader
+      .query_row("SELECT COUNT(*) FROM workspace", [], |row| {
+        row.get::<_, i64>(0)
+      })
+      .expect("WAL readers should remain available during a write transaction");
+    let busy_timeout = reader
+      .query_row("PRAGMA busy_timeout", [], |row| row.get::<_, i64>(0))
+      .expect("busy timeout should be readable");
+
+    assert_eq!(workspace_count, 1);
+    assert_eq!(busy_timeout, 5_000);
+
+    writer.execute_batch("ROLLBACK;").ok();
     fs::remove_dir_all(root_path).ok();
   }
 
