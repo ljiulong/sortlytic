@@ -39,4 +39,18 @@ describe('TaskProblemPanel', () => {
     expect(markup).toContain('编辑任务')
     expect(markup).toContain('查看诊断')
   })
+
+  it('结构化意图需要补充时不误称为解析失败', () => {
+    const markup = renderToStaticMarkup(createElement(TaskProblemPanel, {
+      kind: 'natural_parse',
+      naturalState: 'needs_review',
+      message: '缺少国家地区和预算',
+      retryable: false,
+      attemptedAt: '2026-07-20T08:00:17Z',
+    }))
+
+    expect(markup).toContain('aria-label="自然语言解析待补充详情"')
+    expect(markup).toContain('解析完成，需要补充信息')
+    expect(markup).not.toContain('解析失败')
+  })
 })

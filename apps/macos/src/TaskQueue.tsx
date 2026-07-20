@@ -476,6 +476,9 @@ function TaskQueue({
                     <p>原始需求：{parseAttempt.intent_text}</p>
                     <TaskProblemPanel
                       kind="natural_parse"
+                      naturalState={parseAttempt.parse_status === 'needs_review'
+                        ? 'needs_review'
+                        : 'failed'}
                       code={parseAttempt.error_code}
                       message={parseAttempt.error_message
                         ?? (parseAttempt.parse_status === 'needs_review'

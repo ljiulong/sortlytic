@@ -14,6 +14,7 @@ import './TaskProblemPanel.css'
 
 type TaskProblemPanelProps = {
   kind: 'natural_parse' | 'run'
+  naturalState?: 'failed' | 'needs_review'
   code?: string | null
   message: string
   retryable: boolean
@@ -45,6 +46,7 @@ const actionIcons: Record<TaskRemediationAction, typeof Search> = {
 
 export default function TaskProblemPanel({
   kind,
+  naturalState = 'failed',
   code,
   message,
   retryable,
@@ -53,25 +55,37 @@ export default function TaskProblemPanel({
   draftPreserved = true,
   onAction,
 }: TaskProblemPanelProps) {
-  const remediation = remediationForTaskProblem(code, message)
+  const needsReview = kind === 'natural_parse' && naturalState === 'needs_review'
+  const displayCode = code || (needsReview ? 'NEEDS_REVIEW' : 'UNCLASSIFIED_ERROR')
+  const remediation = needsReview
+    ? {
+        message: '点击“编辑任务”补齐缺失字段或移除不兼容条件，保存合格计划后才能确认运行。',
+        primaryAction: 'edit_task' as const,
+        secondaryAction: 'view_diagnostics' as const,
+      }
+    : remediationForTaskProblem(code, message)
   const actions = [remediation.primaryAction, remediation.secondaryAction]
     .filter((action): action is TaskRemediationAction => Boolean(action))
 
   return (
     <section
-      aria-label={kind === 'natural_parse' ? '自然语言解析失败详情' : '任务运行失败详情'}
+      aria-label={needsReview
+        ? '自然语言解析待补充详情'
+        : kind === 'natural_parse' ? '自然语言解析失败详情' : '任务运行失败详情'}
       className="task-problem"
       data-kind={kind}
     >
       <header>
         <div>
-          <span>{kind === 'natural_parse' ? '解析失败' : '运行失败'}</span>
+          <span>{needsReview
+            ? '解析完成，需要补充信息'
+            : kind === 'natural_parse' ? '解析失败' : '运行失败'}</span>
           <strong>{message}</strong>
         </div>
-        <code>{code || 'UNCLASSIFIED_ERROR'}</code>
+        <code>{displayCode}</code>
       </header>
       <dl>
-        <div><dt>错误码</dt><dd>{code || 'UNCLASSIFIED_ERROR'}</dd></div>
+        <div><dt>{needsReview ? '状态码' : '错误码'}</dt><dd>{displayCode}</dd></div>
         <div><dt>可重试</dt><dd>{retryable ? '是' : '否'}</dd></div>
         <div><dt>最近尝试</dt><dd>{formatAttemptTime(attemptedAt)}</dd></div>
         <div><dt>草稿与记录</dt><dd>{draftPreserved ? '已保留' : '状态未知'}</dd></div>
