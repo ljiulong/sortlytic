@@ -34,15 +34,17 @@ fn seed_builtin_prompts_is_idempotent() {
   assert_eq!(templates.len(), 3);
   assert_eq!(
     collection_template.output_schema_id.as_deref(),
-    Some("collection_plan_v4")
+    Some("collection_intent_v1")
   );
   assert_eq!(versions[0].status, "active");
-  assert!(versions[0].content.contains("collection_plan_v4"));
+  assert!(versions[0].content.contains("collection_intent_v1"));
+  assert!(versions[0].content.contains("en-GB"));
+  assert!(versions[0].content.contains("URL"));
   assert!(versions[0].content.contains("证据"));
-  assert_eq!(first_cases.len(), 3);
+  assert_eq!(first_cases.len(), 4);
   assert!(first_cases
     .iter()
-    .all(|case| case.expected_schema_id == "collection_plan_v4"));
+    .all(|case| case.expected_schema_id == "collection_intent_v1"));
   assert_eq!(second_cases.len(), first_cases.len());
   assert_eq!(
     second_cases
@@ -94,11 +96,13 @@ fn seeding_upgrades_a_legacy_collection_prompt_without_losing_history() {
 
   assert_eq!(
     upgraded_template.output_schema_id.as_deref(),
-    Some("collection_plan_v4")
+    Some("collection_intent_v1")
   );
   assert_eq!(upgraded_versions.len(), 2);
   assert_eq!(upgraded_versions[0].status, "active");
-  assert!(upgraded_versions[0].content.contains("collection_plan_v4"));
+  assert!(upgraded_versions[0]
+    .content
+    .contains("collection_intent_v1"));
   assert_eq!(upgraded_versions[1].status, "archived");
   assert_eq!(upgraded_versions[1].content, "legacy v1");
 
@@ -155,7 +159,7 @@ fn builtin_upgrade_preserves_the_user_activated_prompt_version() {
     .expect("custom version should remain");
   let current_builtin = versions
     .iter()
-    .find(|version| version.content.contains("collection_plan_v4"))
+    .find(|version| version.content.contains("collection_intent_v1"))
     .expect("current builtin should be added");
 
   assert_eq!(custom.status, "active");
@@ -288,7 +292,7 @@ fn evaluator_result_changes_when_case_input_violates_expected_rules() {
     id: "version-1".to_string(),
     template_id: "template-1".to_string(),
     version: 1,
-    content: "只输出 JSON，包含 platforms 和 missing_fields".to_string(),
+    content: "只输出 JSON，包含 platform 和 missing_fields".to_string(),
     change_note: "测试".to_string(),
     status: "draft".to_string(),
     created_at: "2026-01-01T00:00:00Z".to_string(),
@@ -301,9 +305,9 @@ fn evaluator_result_changes_when_case_input_violates_expected_rules() {
     template_id: "template-1".to_string(),
     name: "预期完整输入".to_string(),
     input_json: serde_json::json!({ "text": "采集汽车评论" }),
-    expected_schema_id: "collection_plan_v4".to_string(),
+    expected_schema_id: "collection_intent_v1".to_string(),
     expected_rules_json: serde_json::json!({
-      "expected_platforms": ["tiktok"],
+      "expected_platform": "tiktok",
       "expected_account_source": "comment_authors",
       "expected_selected_fields": [],
       "expected_missing_fields": [],
@@ -345,7 +349,7 @@ fn complete_builtin_contract_executes_all_cases_and_can_activate() {
     },
   )
   .expect("version should create");
-  let (base_url, server) = serve_prompt_regressions(3, false);
+  let (base_url, server) = serve_prompt_regressions(4, false);
   let profile_id = configure_active_ai(&root_path, base_url);
 
   let activated =
@@ -354,7 +358,7 @@ fn complete_builtin_contract_executes_all_cases_and_can_activate() {
   let runs = list_prompt_regression_runs(&root_path, &version.id).expect("runs should list");
 
   assert_eq!(activated.status, "active");
-  assert_eq!(runs.len(), 3);
+  assert_eq!(runs.len(), 4);
   assert!(runs.iter().all(|run| run.schema_valid && run.rules_valid));
   assert!(runs
     .iter()
@@ -388,11 +392,11 @@ fn activation_rejects_model_output_missing_a_required_schema_field() {
     },
   )
   .expect("version should create");
-  let (base_url, server) = serve_prompt_regressions(3, true);
+  let (base_url, server) = serve_prompt_regressions(4, true);
   configure_active_ai(&root_path, base_url);
 
   let error = activate_prompt_version(&root_path, &version.id)
-    .expect_err("missing output_selected must fail prompt regression");
+    .expect_err("missing budget_limit_micros must fail prompt regression");
   server.join().expect("regression server should finish");
   let versions = list_prompt_versions(&root_path, &template.id).expect("versions should list");
   let failed = versions
@@ -403,7 +407,7 @@ fn activation_rejects_model_output_missing_a_required_schema_field() {
 
   assert_eq!(error.code, AppErrorCode::ValidationError);
   assert_eq!(failed.status, "failed_regression");
-  assert_eq!(runs.len(), 3);
+  assert_eq!(runs.len(), 4);
   assert!(runs.iter().all(|run| !run.schema_valid));
 
   std::fs::remove_dir_all(root_path).ok();
@@ -453,7 +457,7 @@ fn configure_active_ai(root_path: &Path, base_url: String) -> String {
 
 fn serve_prompt_regressions(
   expected_requests: usize,
-  omit_output_selected: bool,
+  omit_budget_limit: bool,
 ) -> (String, thread::JoinHandle<()>) {
   let listener = TcpListener::bind("127.0.0.1:0").expect("test server should bind");
   let address = listener.local_addr().expect("test address should resolve");
@@ -462,34 +466,67 @@ fn serve_prompt_regressions(
       let (mut stream, _) = listener.accept().expect("test server should accept");
       let request = read_http_request(&mut stream);
       assert!(request.contains("input_json.text"));
-      assert!(request.contains("collection_plan_v4"));
-      let mut plan = if request.contains("新能源汽车") {
-        valid_account_plan(
-          "douyin",
-          &["avatar_url", "gender", "age", "followers_count"],
-          3_000_000,
+      assert!(request.contains("collection_intent_v1"));
+      let mut intent = if request.contains("PetBrandUK") {
+        collection_intent_fixture(
+          Some("tiktok"),
+          Some("direct_account"),
+          Some("https://www.tiktok.com/@PetBrandUK"),
+          None,
+          Some("GB"),
+          Some(1),
+          Some(100_000),
+          &[],
         )
-      } else if request.contains("智能汽车") {
-        valid_account_plan(
-          "xiaohongshu",
-          &["avatar_url", "bio", "followers_count", "posts_count"],
-          4_000_000,
+      } else if request.contains("7123456789012345678") {
+        collection_intent_fixture(
+          Some("tiktok"),
+          Some("item_author"),
+          Some("7123456789012345678"),
+          None,
+          Some("US"),
+          Some(1),
+          Some(100_000),
+          &[],
+        )
+      } else if request.contains("英国 TikTok") {
+        collection_intent_fixture(
+          Some("tiktok"),
+          Some("user_search"),
+          Some("pet supplies"),
+          Some("en-GB"),
+          Some("GB"),
+          Some(10),
+          Some(100_000),
+          &[],
         )
       } else {
-        valid_account_plan(
-          "tiktok",
-          &["avatar_url", "bio", "country_region", "followers_count"],
-          2_000_000,
+        collection_intent_fixture(
+          None,
+          Some("user_search"),
+          None,
+          None,
+          None,
+          None,
+          None,
+          &[
+            "platform",
+            "source_input",
+            "query_locale",
+            "region_code",
+            "record_limit",
+            "budget_limit_micros",
+          ],
         )
       };
-      if omit_output_selected {
-        plan["steps"][0]
+      if omit_budget_limit {
+        intent
           .as_object_mut()
-          .expect("step should be an object")
-          .remove("output_selected");
+          .expect("intent should be an object")
+          .remove("budget_limit_micros");
       }
       let body = serde_json::json!({
-        "choices": [{ "message": { "content": plan.to_string() } }],
+        "choices": [{ "message": { "content": intent.to_string() } }],
         "usage": { "prompt_tokens": 40, "completion_tokens": 80 }
       })
       .to_string();
@@ -534,47 +571,32 @@ fn read_http_request(stream: &mut std::net::TcpStream) -> String {
   String::from_utf8_lossy(&request).into_owned()
 }
 
-fn valid_account_plan(platform: &str, selected_fields: &[&str], budget_micros: i64) -> Value {
-  let mut plan = crate::collection::generate_account_collection_plan(
-    crate::collection::AccountFormCollectionPlanRequest {
-      platform: platform.to_string(),
-      account_source: "user_search".to_string(),
-      selected_fields: selected_fields
-        .iter()
-        .map(|field| (*field).to_string())
-        .collect(),
-      enrichment_policy: "auto_costed".to_string(),
-      params: serde_json::json!({ "keyword": "car" }),
-      age_range: None,
-      gender_filter: None,
-      request_limit: Some(1),
-      record_limit: Some(20),
-      budget_limit_micros: Some(budget_micros),
-    },
-  )
-  .expect("account plan fixture should generate")
-  .plan_json;
-  for step in plan["steps"]
-    .as_array_mut()
-    .expect("account plan steps should be an array")
-  {
-    let params = step["params"]
-      .as_object_mut()
-      .expect("account plan params should be an object");
-    for key in [
-      "keyword",
-      "item_id",
-      "account_id",
-      "region",
-      "time_range",
-      "page_size",
-    ] {
-      params.entry(key.to_string()).or_insert(Value::Null);
-    }
-  }
-  plan["confidence"] = serde_json::json!(0.98);
-  plan["missing_fields"] = serde_json::json!([]);
-  plan
+fn collection_intent_fixture(
+  platform: Option<&str>,
+  account_source: Option<&str>,
+  source_input: Option<&str>,
+  query_locale: Option<&str>,
+  region_code: Option<&str>,
+  record_limit: Option<i64>,
+  budget_limit_micros: Option<i64>,
+  missing_fields: &[&str],
+) -> Value {
+  serde_json::json!({
+    "schema_version": 1,
+    "platform": platform,
+    "account_source": account_source,
+    "source_input": source_input,
+    "query_locale": query_locale,
+    "region_code": region_code,
+    "selected_fields": [],
+    "time_range_days": null,
+    "age_range": null,
+    "gender_filter": null,
+    "record_limit": record_limit,
+    "budget_limit_micros": budget_limit_micros,
+    "missing_fields": missing_fields,
+    "confidence": 0.98
+  })
 }
 
 fn unique_temp_workspace(label: &str) -> std::path::PathBuf {

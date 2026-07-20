@@ -90,17 +90,18 @@ struct BuiltinPromptTemplate {
 const BUILTIN_PROMPTS: &[BuiltinPromptTemplate] = &[
   BuiltinPromptTemplate {
     key: "collection_plan_from_text",
-    name: "自然语言采集计划生成",
+    name: "自然语言采集意图解析",
     task_type: "collection_plan",
-    description: "把自然语言需求转为 v4 账号计划；校验并确认后由运行器调用真实 TikHub。",
-    output_schema_id: "collection_plan_v4",
-    content: r#"读取 input_json.text，把它作为本次计划的唯一需求证据，只输出 collection_plan_v4 JSON，不得输出 Markdown。
-必须包含 schema_version、entity、platforms、account_source、selected_fields、enrichment_policy、region、time_range、age_range、gender_filter、steps、record_limit、request_limit、budget_limit、output_rules、cost_estimate、missing_fields、confidence 和 requires_user_confirmation。
-schema_version 必须为 4，entity 必须为 account，enrichment_policy 必须为 auto_costed，requires_user_confirmation 必须为 true。每条计划只允许 tiktok、douyin、xiaohongshu 中的一个平台和一个账号来源。
-发现步骤必须使用 discover.* operation_key；字段补全只允许 enrich.profile、enrich.extended_demographics、enrich.account_country、enrich.account_posts，并复用同一端点响应。不得生成当前平台不支持的来源、字段、endpoint_key 或依赖关系。
-selected_fields 只包含公开账号业务字段，不包含固定身份字段和技术字段。output_rules 必须记录逐字段证据，并严格区分“任务未设置”和“未采集到”。
-预算按输入原值换算为 USD 微美元并覆盖发现和补全请求；年龄和性别只能使用接口明确值，禁止根据头像、姓名或简介推断。数值 0 必须保留，未知值不能通过已启用筛选。
-无法从输入证据确认的信息写入 missing_fields，不得猜测，也不得绕过 Schema 校验、能力校验、预算校验或用户确认。"#,
+    description: "把自然语言需求转为 collection_intent_v1；后端再按能力目录生成并校验 v4 计划。",
+    output_schema_id: "collection_intent_v1",
+    content: r#"读取 input_json.text，把它作为本次意图的唯一需求证据，只输出 collection_intent_v1 JSON，不得输出 Markdown。
+必须完整包含 schema_version、platform、account_source、source_input、query_locale、region_code、selected_fields、time_range_days、age_range、gender_filter、record_limit、budget_limit_micros、missing_fields 和 confidence；业务缺失必须显式写 null。
+schema_version 必须为 1。platform 只允许 tiktok、douyin、xiaohongshu；account_source 只能选择当前平台支持的账号来源。selected_fields 只包含用户明确要求的公开账号业务字段。
+关键词、用户和内容搜索必须把 source_input 翻译为目标地区适合平台检索的一个主语言，并把 query_locale 写为 language-REGION，例如英国使用 GB、en-GB 和英文检索词。检索词语言不能作为账号地区证据。
+用户名、账号 ID、作品 ID、URL、分享链接必须原样保留，禁止翻译。品牌名和专有名词只有存在明确通用本地写法时才转换；不确定时保留原文并进入 missing_fields。
+预算按输入原值换算为正整数 USD 微美元；年龄和性别只能表达用户明确要求的过滤条件，禁止根据头像、姓名或简介推断。
+不得输出 endpoint_key、端点、步骤、步骤依赖、请求参数白名单、分页、补全或成本估算；这些安全信息由后端能力目录生成并保留证据。
+无法确认平台、地区、来源、目标语言、记录数、预算或其他必需字段时写入 missing_fields，不得猜测，也不得绕过 Schema、能力、白名单、预算或用户确认。"#,
   },
   BuiltinPromptTemplate {
     key: "general_summary",
@@ -422,7 +423,10 @@ fn ensure_builtin_regression_cases(
       .execute(
         "UPDATE prompt_regression_case SET enabled = 0, updated_at = ?1
          WHERE template_id = ?2
-           AND name IN ('正常自然语言需求', '缺少平台', '缺少国家地区')",
+           AND name IN (
+             '正常自然语言需求', '缺少平台', '缺少国家地区',
+             'TikTok 账号搜索完整计划', '抖音人口属性补全计划', '小红书账号搜索完整计划'
+           )",
         params![now, template_id],
       )
       .map_err(database_error)?;
@@ -430,36 +434,57 @@ fn ensure_builtin_regression_cases(
   let cases = match builtin.key {
     "collection_plan_from_text" => vec![
       (
-        "TikTok 账号搜索完整计划",
-        serde_json::json!({ "text": "搜索美国 TikTok 汽车账号，采集头像、简介、粉丝数和国家地区，最多 20 个账号，预算 2 美元" }),
+        "英国 TikTok 中文关键词翻译",
+        serde_json::json!({ "text": "用中文查找英国 TikTok 宠物用品账号，最多 10 个，预算 0.1 美元。" }),
         serde_json::json!({
-          "expected_platforms": ["tiktok"],
+          "expected_platform": "tiktok",
           "expected_account_source": "user_search",
-          "expected_selected_fields": ["avatar_url", "bio", "country_region", "followers_count"],
+          "expected_region_code": "GB",
+          "expected_query_locale": "en-GB",
+          "source_input_ascii_letters": true,
+          "expected_selected_fields": [],
           "expected_missing_fields": [],
           "expected_plan_valid": true
         }),
       ),
       (
-        "抖音人口属性补全计划",
-        serde_json::json!({ "text": "搜索抖音新能源汽车账号，采集头像、粉丝数、性别和年龄，最多 20 个账号，预算 3 美元" }),
+        "TikTok 主页 URL 原样保留",
+        serde_json::json!({ "text": "采集英国 TikTok 账号 https://www.tiktok.com/@PetBrandUK，最多 1 个，预算 0.1 美元。" }),
         serde_json::json!({
-          "expected_platforms": ["douyin"],
-          "expected_account_source": "user_search",
-          "expected_selected_fields": ["avatar_url", "gender", "age", "followers_count"],
+          "expected_platform": "tiktok",
+          "expected_account_source": "direct_account",
+          "expected_source_input": "https://www.tiktok.com/@PetBrandUK",
+          "expected_region_code": "GB",
+          "expected_query_locale": null,
+          "expected_selected_fields": [],
           "expected_missing_fields": [],
           "expected_plan_valid": true
         }),
       ),
       (
-        "小红书账号搜索完整计划",
-        serde_json::json!({ "text": "搜索小红书智能汽车账号，采集头像、简介、粉丝数和笔记数，最多 20 个账号，预算 4 美元" }),
+        "TikTok 作品 ID 原样保留",
+        serde_json::json!({ "text": "采集美国 TikTok 作品 ID 7123456789012345678 的作者，最多 1 个，预算 0.1 美元。" }),
         serde_json::json!({
-          "expected_platforms": ["xiaohongshu"],
-          "expected_account_source": "user_search",
-          "expected_selected_fields": ["avatar_url", "bio", "followers_count", "posts_count"],
+          "expected_platform": "tiktok",
+          "expected_account_source": "item_author",
+          "expected_source_input": "7123456789012345678",
+          "expected_region_code": "US",
+          "expected_query_locale": null,
+          "expected_selected_fields": [],
           "expected_missing_fields": [],
           "expected_plan_valid": true
+        }),
+      ),
+      (
+        "缺少执行必需信息",
+        serde_json::json!({ "text": "搜索宠物用品账号" }),
+        serde_json::json!({
+          "expected_account_source": "user_search",
+          "expected_missing_contains": [
+            "platform", "source_input", "query_locale", "region_code", "record_limit",
+            "budget_limit_micros"
+          ],
+          "expected_plan_valid": false
         }),
       ),
     ],

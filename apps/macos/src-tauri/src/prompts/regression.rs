@@ -2,8 +2,8 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::ai::run_collection_prompt_regression;
-use crate::collection::validate_collection_plan_v4;
+use crate::ai::intent_plan::build_collection_plan_from_intent;
+use crate::ai::{run_collection_prompt_regression, CollectionIntentV1};
 
 use super::{PromptRegressionCaseView, PromptVersionView};
 
@@ -23,7 +23,7 @@ pub(super) fn evaluate_prompt_case(
   let mut schema_errors = Vec::new();
   let mut rule_errors = Vec::new();
   let (provider_id, model_id) = match case.expected_schema_id.as_str() {
-    "collection_plan_v4" => evaluate_collection_case(
+    "collection_intent_v1" => evaluate_collection_case(
       root_path,
       version,
       case,
@@ -81,24 +81,22 @@ fn evaluate_collection_case(
     &version.content,
     &[
       "json",
-      "collection_plan_v4",
+      "collection_intent_v1",
       "input_json.text",
       "schema_version",
-      "entity",
-      "platforms",
+      "platform",
       "account_source",
+      "source_input",
+      "query_locale",
+      "region_code",
       "selected_fields",
-      "enrichment_policy",
-      "region",
-      "steps",
-      "operation_key",
+      "time_range_days",
       "record_limit",
-      "request_limit",
-      "budget_limit",
-      "output_rules",
-      "cost_estimate",
+      "budget_limit_micros",
       "missing_fields",
-      "requires_user_confirmation",
+      "endpoint_key",
+      "翻译",
+      "url",
       "证据",
       "不得猜测",
     ],
@@ -117,66 +115,77 @@ fn evaluate_collection_case(
     }
   };
   let output = response.output_json.clone();
-  compare_string_array_rule(
-    &output,
-    "platforms",
-    &case.expected_rules_json,
-    "expected_platforms",
-    rule_errors,
-  );
-  compare_string_rule(
-    &output,
-    "account_source",
-    &case.expected_rules_json,
-    "expected_account_source",
-    rule_errors,
-  );
-  compare_string_array_rule(
-    &output,
-    "selected_fields",
-    &case.expected_rules_json,
-    "expected_selected_fields",
-    rule_errors,
-  );
-  compare_string_array_rule(
-    &output,
-    "missing_fields",
-    &case.expected_rules_json,
-    "expected_missing_fields",
-    rule_errors,
-  );
+  for (output_field, rule_field) in [
+    ("platform", "expected_platform"),
+    ("account_source", "expected_account_source"),
+    ("source_input", "expected_source_input"),
+    ("query_locale", "expected_query_locale"),
+    ("region_code", "expected_region_code"),
+  ] {
+    if case.expected_rules_json.get(rule_field).is_some() {
+      compare_nullable_string_rule(
+        &output,
+        output_field,
+        &case.expected_rules_json,
+        rule_field,
+        rule_errors,
+      );
+    }
+  }
+  for (output_field, rule_field) in [
+    ("selected_fields", "expected_selected_fields"),
+    ("missing_fields", "expected_missing_fields"),
+  ] {
+    if case.expected_rules_json.get(rule_field).is_some() {
+      compare_string_array_rule(
+        &output,
+        output_field,
+        &case.expected_rules_json,
+        rule_field,
+        rule_errors,
+      );
+    }
+  }
+  if case
+    .expected_rules_json
+    .get("source_input_ascii_letters")
+    .and_then(Value::as_bool)
+    == Some(true)
+  {
+    let valid = output
+      .get("source_input")
+      .and_then(Value::as_str)
+      .is_some_and(|value| {
+        !value.trim().is_empty()
+          && value.chars().all(|character| character.is_ascii())
+          && value
+            .chars()
+            .any(|character| character.is_ascii_alphabetic())
+      });
+    if !valid {
+      rule_errors.push("source_input 应为非空英文检索词".to_string());
+    }
+  }
+  for expected in string_array(case.expected_rules_json.get("expected_missing_contains")) {
+    if !string_array(output.get("missing_fields")).contains(&expected) {
+      rule_errors.push(format!("missing_fields 应包含 {expected}"));
+    }
+  }
 
-  let validation = validate_collection_plan_v4(&output);
+  let parsed = serde_json::from_value::<CollectionIntentV1>(output).expect("AI 回归入口已校验意图");
+  let built = build_collection_plan_from_intent(parsed);
+  let plan_valid = built.validation_status == "valid" && built.collection_plan.is_some();
   if let Some(expected_valid) = case
     .expected_rules_json
     .get("expected_plan_valid")
     .and_then(Value::as_bool)
   {
-    if validation.valid != expected_valid {
+    if plan_valid != expected_valid {
       rule_errors.push(format!(
         "计划校验结果应为 {expected_valid}，实际为 {}",
-        validation.valid
+        plan_valid
       ));
     }
-  }
-  for expected_error in case
-    .expected_rules_json
-    .get("expected_error_contains")
-    .and_then(Value::as_array)
-    .into_iter()
-    .flatten()
-    .filter_map(Value::as_str)
-  {
-    if !validation
-      .errors
-      .iter()
-      .any(|error| error.contains(expected_error))
-    {
-      rule_errors.push(format!("计划校验错误未包含 {expected_error}"));
-    }
-  }
-  if !validation.valid {
-    schema_errors.extend(validation.errors);
   }
 
   (Some(response.provider_id), Some(response.model_id))
@@ -243,7 +252,7 @@ fn compare_string_array_rule(
   }
 }
 
-fn compare_string_rule(
+fn compare_nullable_string_rule(
   output: &Value,
   output_field: &str,
   rules: &Value,
