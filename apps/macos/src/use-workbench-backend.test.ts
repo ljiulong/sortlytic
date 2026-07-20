@@ -784,6 +784,63 @@ describe('计划生成失败的草稿清理', () => {
     ])
   })
 
+  it('重新解析复用原失败任务，不新建或删除任务', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'generate_collection_plan_from_text') {
+        return {
+          parsed_intent: {
+            schema_version: 1,
+            platform: 'tiktok',
+            account_source: 'user_search',
+            source_input: 'pet supplies',
+            query_locale: 'en-GB',
+            region_code: 'GB',
+            selected_fields: [],
+            time_range_days: null,
+            age_range: null,
+            gender_filter: null,
+            record_limit: 10,
+            budget_limit_micros: 100_000,
+            missing_fields: [],
+            confidence: 0.95,
+          },
+          issues: [],
+          collection_plan: {
+            ...savedFormPlan,
+            task_id: 'task-natural-failed',
+            plan_json: {
+              platforms: ['tiktok'],
+              account_source: 'user_search',
+              region: 'GB',
+              time_range: null,
+              record_limit: 10,
+              budget_limit: { currency: 'USD', amount_micros: 100_000 },
+              selected_fields: [],
+              steps: [{
+                endpoint_key: 'tiktok.user_search',
+                params: { keyword: 'pet supplies' },
+              }],
+            },
+          },
+        }
+      }
+      throw new Error(`意外命令：${command}`)
+    })
+    const result = renderWorkbenchHook()
+
+    await expect(result.retryNaturalParse(
+      'task-natural-failed',
+      '用中文查找英国 TikTok 宠物用品账号',
+    )).resolves.toMatchObject({
+      taskId: 'task-natural-failed',
+      keyword: 'pet supplies',
+    })
+    expect(invokeMock.mock.calls.map(([command]) => command)).toEqual([
+      'generate_collection_plan_from_text',
+    ])
+  })
+
   it('草稿清理失败时同时返回原始错误与明确的人工清理提示', async () => {
     vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
     invokeMock.mockImplementation(async (command: string) => {

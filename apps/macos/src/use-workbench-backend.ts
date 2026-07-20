@@ -12,7 +12,6 @@ import {
   estimateTaskCost,
   ensureDefaultWorkspace,
   generateAccountCollectionPlan,
-  generateCollectionPlanFromText,
   getActiveWorkspace,
   getLatestCollectionPlan,
   type GenerateFormPlanInput,
@@ -28,7 +27,6 @@ import {
   updateCollectionTask,
 } from './backend-api'
 import { getApiProfileRegistry } from './api-profiles'
-import { normalizeBackendProblem } from './backend-problem'
 import { useAppUpdater } from './use-app-updater'
 import { buildPlanParams } from './collection-plan-client'
 import {
@@ -58,6 +56,12 @@ import {
   resolveNaturalParseState,
   type NaturalParseState,
 } from './natural-parse-state'
+import {
+  createNaturalTaskAttempt,
+  describeNaturalParseFailure,
+  parseNaturalTaskAttempt,
+  type SuccessfulNaturalTaskAttempt,
+} from './natural-task-attempt'
 
 export {
   mapBackendData,
@@ -260,25 +264,16 @@ export function useWorkbenchBackend() {
       void queryClient.invalidateQueries({ queryKey })
     },
     onError: (error) => {
-      const needsReview = error instanceof NaturalParseNeedsReviewError
-      const problem = needsReview
-        ? normalizeBackendProblem({
-            code: 'VALIDATION_ERROR',
-            stage: 'validating_intent',
-            message: error.message,
-            retryable: false,
-            safe_details: { issues: error.issues },
-          })
-        : normalizeBackendProblem(error)
+      const failure = describeNaturalParseFailure(error)
       setNaturalParseState((state) => ({
         ...state,
-        phase: needsReview ? 'needs_review' : 'failed',
-        taskId: needsReview ? error.taskId : state.taskId,
+        phase: failure.phase,
+        taskId: failure.taskId ?? state.taskId,
         finishedAt: new Date().toISOString(),
-        problem,
+        problem: failure.problem,
         draftPreserved: true,
       }))
-      setActionMessage(problem.message)
+      setActionMessage(failure.problem.message)
       void queryClient.invalidateQueries({ queryKey })
     },
   })
@@ -379,6 +374,39 @@ export function useWorkbenchBackend() {
         ? '当前未连接本地后端，不展示预览数据；请打开打包后的 macOS 应用'
         : '本地工作区已打开，后端可用'
       : actionMessage
+  const retryNaturalParse = async (taskId: string, intentText: string) => {
+    setNaturalParseState({
+      ...createPreparingNaturalParseState(intentText),
+      taskId,
+      phase: 'requesting_ai',
+    })
+    try {
+      const plan = naturalAttemptToRuntimePlan(await parseNaturalTaskAttempt(taskId, intentText))
+      setActivePlan(plan)
+      setNaturalParseState((state) => ({
+        ...state,
+        phase: 'success',
+        taskId,
+        finishedAt: new Date().toISOString(),
+        problem: undefined,
+      }))
+      setActionMessage('自然语言计划已重新生成，原失败记录已保留')
+      void queryClient.invalidateQueries({ queryKey })
+      return plan
+    } catch (error) {
+      const failure = describeNaturalParseFailure(error)
+      setNaturalParseState((state) => ({
+        ...state,
+        phase: failure.phase,
+        taskId: failure.taskId ?? taskId,
+        finishedAt: new Date().toISOString(),
+        problem: failure.problem,
+      }))
+      setActionMessage(failure.problem.message)
+      void queryClient.invalidateQueries({ queryKey })
+      throw error
+    }
+  }
 
   return {
     data,
@@ -396,9 +424,11 @@ export function useWorkbenchBackend() {
       cancelTaskMutation.isPending ||
       deleteTaskMutation.isPending ||
       confirmTaskMutation.isPending ||
+      isNaturalParseInProgress(resolvedNaturalParseState.phase) ||
       appUpdater.isUpdateBusy,
     generateFormPlan: generateFormPlanMutation.mutateAsync,
     generateNaturalPlan: generateNaturalPlanMutation.mutateAsync,
+    retryNaturalParse,
     confirmActivePlan: confirmPlanMutation.mutateAsync,
     updateTask: updateTaskMutation.mutateAsync,
     cancelTask: cancelTaskMutation.mutateAsync,
@@ -531,30 +561,12 @@ async function createNaturalPlan(
   onTaskCreated?: (taskId: string) => void,
 ): Promise<RuntimeCollectionPlan> {
   assertTauriRuntime()
-  const task = await createCollectionTask({
-    name: intentText.trim().slice(0, 42) || '自然语言采集任务',
-    source_type: 'natural_language',
-    platforms: [],
-    data_types: [],
-  })
-  onTaskCreated?.(task.id)
-  const result = await generateCollectionPlanFromText({
-    task_id: task.id,
-    intent_text: intentText,
-    provider_id: null,
-    model_id: null,
-  })
-  if (!result.collection_plan) {
-    throw new NaturalParseNeedsReviewError(
-      task.id,
-      result.issues,
-      result.issues.length > 0
-        ? `解析完成，需要补充信息：${result.issues.join('；')}`
-        : '解析完成，需要补充信息；请切换到表单修正任务',
-    )
-  }
-  const intent = result.parsed_intent
-  const runtimePlan = planFromBackend(
+  return naturalAttemptToRuntimePlan(await createNaturalTaskAttempt(intentText, onTaskCreated))
+}
+
+function naturalAttemptToRuntimePlan(attempt: SuccessfulNaturalTaskAttempt) {
+  const intent = attempt.intent
+  return planFromBackend(
     {
       platform: toUiPlatform(intent?.platform ?? ''),
       dataType: toUiDataType('account'),
@@ -564,26 +576,8 @@ async function createNaturalPlan(
       maxRecords: intent?.record_limit ?? 0,
       budget: (intent?.budget_limit_micros ?? 0) / 1_000_000,
     },
-    result.collection_plan,
+    attempt.plan,
   )
-
-  return runtimePlan
-}
-
-class NaturalParseNeedsReviewError extends Error {
-  readonly taskId: string
-  readonly issues: string[]
-
-  constructor(
-    taskId: string,
-    issues: string[],
-    message: string,
-  ) {
-    super(message)
-    this.name = 'NaturalParseNeedsReviewError'
-    this.taskId = taskId
-    this.issues = issues
-  }
 }
 
 function isNaturalParseInProgress(phase: NaturalParseState['phase']) {
