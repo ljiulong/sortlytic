@@ -1,0 +1,64 @@
+{
+  "account_profile": {
+    "code": 200,
+    "data": {
+      "user": {
+        "user_id": "xhs-user-1",
+        "red_id": "sortlytic_xhs",
+        "nickname": "小红书公开账号",
+        "desc": "公开简介",
+        "images": "https://example.com/xiaohongshu-avatar.jpg",
+        "fans": 0,
+        "follows": 16,
+        "notes_count": 7
+      }
+    }
+  },
+  "user_search": {
+    "code": 200,
+    "data": {
+      "users": [
+        {
+          "user": {
+            "user_id": "xhs-search-1",
+            "red_id": "xhs_search_result",
+            "nickname": "小红书用户搜索结果",
+            "fans": 11
+          }
+        }
+      ],
+      "page": 1,
+      "has_more": false
+    }
+  },
+  "item_detail": {
+    "code": 200,
+    "data": {
+      "note": {
+        "note_id": "xhs-note-1",
+        "user": {
+          "user_id": "xhs-author-1",
+          "red_id": "note_author",
+          "nickname": "笔记作者"
+        }
+      }
+    }
+  },
+  "comments": {
+    "code": 200,
+    "data": {
+      "comments": [
+        {
+          "id": "xhs-comment-1",
+          "content": "公开评论",
+          "user_info": {
+            "user_id": "xhs-commenter-1",
+            "red_id": "comment_author",
+            "nickname": "评论用户"
+          }
+        }
+      ],
+      "has_more": false
+    }
+  }
+}

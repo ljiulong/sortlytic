@@ -1419,6 +1419,112 @@ fn douyin_account_fixtures_preserve_source_arrays_and_demographic_evidence() {
 }
 
 #[test]
+fn xiaohongshu_account_fixtures_preserve_app_v2_identity_and_field_evidence() {
+  use crate::accounts::{normalize_account_with_evidence, SourceKind};
+
+  let fixtures: Value = serde_json::from_str(include_str!(
+    "fixtures/xiaohongshu_account_responses.json"
+  ))
+  .expect("小红书固化响应应为有效 JSON");
+  let collected_at = "2026-07-20T08:00:00+08:00";
+  let source_params = |data_type: &str| match data_type {
+    "user_search" => serde_json::json!({ "keyword": "汽车" }),
+    "account_profile" => serde_json::json!({ "account_id": "xhs-user-1" }),
+    "item_detail" | "comments" => serde_json::json!({ "item_id": "665f95200000000006005624" }),
+    _ => unreachable!("fixture data type should be covered"),
+  };
+
+  let search_request = build_collection_request(
+    "xiaohongshu",
+    "user_search",
+    &source_params("user_search"),
+    None,
+  )
+  .expect("小红书用户搜索请求应构建");
+  let search = parse_collection_page(&search_request, fixtures["user_search"].clone())
+    .expect("小红书用户搜索响应应解析");
+  assert_eq!(search.records.len(), 1);
+  assert_eq!(search.records[0]["user_id"], "xhs-search-1");
+  let account = normalize_account_with_evidence(
+    "xiaohongshu",
+    SourceKind::UserSearch,
+    "xiaohongshu.user_search",
+    collected_at,
+    &search.records[0],
+  )
+  .unwrap();
+  assert_eq!(account.platform_user_id.as_deref(), Some("xhs-search-1"));
+  assert_eq!(account.account.as_deref(), Some("xhs_search_result"));
+  assert_eq!(account.field_evidence["platform_user_id"].raw_path, "/user_id");
+  assert_eq!(
+    account.field_evidence["platform_user_id"].collected_at,
+    collected_at
+  );
+
+  let profile_request = build_collection_request(
+    "xiaohongshu",
+    "account_profile",
+    &source_params("account_profile"),
+    None,
+  )
+  .unwrap();
+  let profile = parse_collection_page(
+    &profile_request,
+    fixtures["account_profile"].clone(),
+  )
+  .unwrap();
+  let profile_user = profile.records[0]
+    .pointer("/user")
+    .expect("App V2 资料响应应包含 user");
+  let account = normalize_account_with_evidence(
+    "xiaohongshu",
+    SourceKind::AccountProfile,
+    "xiaohongshu.account_profile",
+    collected_at,
+    profile_user,
+  )
+  .unwrap();
+  assert_eq!(account.account_fields["followers_count"], 0);
+  assert_eq!(account.account_fields["following_count"], 16);
+  assert_eq!(account.account_fields["posts_count"], 7);
+  assert_eq!(account.account_fields["bio"], "公开简介");
+  assert_eq!(account.field_evidence["avatar_url"].raw_path, "/images");
+  assert_eq!(
+    account.field_evidence["posts_count"].endpoint_key,
+    "xiaohongshu.account_profile"
+  );
+
+  for (data_type, source_kind, author_path, expected_id) in [
+    ("item_detail", SourceKind::ContentAuthor, "/note/user", "xhs-author-1"),
+    ("comments", SourceKind::CommentAuthor, "/user_info", "xhs-commenter-1"),
+  ] {
+    let request = build_collection_request(
+      "xiaohongshu",
+      data_type,
+      &source_params(data_type),
+      None,
+    )
+    .expect("小红书作者来源请求应构建");
+    let page = parse_collection_page(&request, fixtures[data_type].clone())
+      .expect("小红书作者来源响应应解析");
+    let author = page.records[0]
+      .pointer(author_path)
+      .expect("小红书来源记录应包含作者");
+    let endpoint_key = format!("xiaohongshu.{data_type}");
+    let account = normalize_account_with_evidence(
+      "xiaohongshu",
+      source_kind,
+      &endpoint_key,
+      collected_at,
+      author,
+    )
+    .expect("小红书作者应归一化");
+    assert_eq!(account.platform_user_id.as_deref(), Some(expected_id));
+    assert_eq!(account.field_evidence["platform_user_id"].endpoint_key, endpoint_key);
+  }
+}
+
+#[test]
 fn account_enrichment_parsers_keep_detail_payloads() {
   for (platform, data_type, data) in [
     (
