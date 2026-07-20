@@ -384,9 +384,7 @@ fn field_capability(platform: &str, definition: &FieldDefinition) -> AccountFiel
     missing_reason: missing_reason.map(ToString::to_string),
     supported_platforms: ["tiktok", "douyin", "xiaohongshu"]
       .into_iter()
-      .filter(|candidate| {
-        field_support(candidate, key).0 != AccountFieldAvailability::Unsupported
-      })
+      .filter(|candidate| field_support(candidate, key).0 != AccountFieldAvailability::Unsupported)
       .map(ToString::to_string)
       .collect(),
     covered_by_source_keys: account_sources(platform)
@@ -589,7 +587,11 @@ mod tests {
           .iter()
           .find(|source| source.key == source_key)
           .unwrap();
-        assert_eq!(source.max_page_size, 20, "{}.{}", capability.platform, source_key);
+        assert_eq!(
+          source.max_page_size, 20,
+          "{}.{}",
+          capability.platform, source_key
+        );
       }
     }
   }

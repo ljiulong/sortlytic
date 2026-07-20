@@ -251,7 +251,8 @@ pub fn validate_collection_plan_v4(plan_json: &Value) -> CollectionPlanValidatio
     {
       let discovery = format!("discover.{account_source}");
       expected_source_params.push(source_param_key(source.input_kind));
-      if capability.platform == "xiaohongshu" && source.input_kind != AccountSourceInputKind::Keyword
+      if capability.platform == "xiaohongshu"
+        && source.input_kind != AccountSourceInputKind::Keyword
       {
         expected_source_params.push("share_text");
       }
@@ -630,12 +631,8 @@ fn normalize_account_source_params(
     .map(str::trim)
     .filter(|value| !value.is_empty())
     .ok_or_else(|| validation_error("账号来源输入不能为空"))?;
-  let source_input = normalize_account_source_input(
-    platform,
-    account_source,
-    input_kind,
-    source_input,
-  )?;
+  let source_input =
+    normalize_account_source_input(platform, account_source, input_kind, source_input)?;
   let mut normalized = Map::from_iter([(
     source_input.key.as_str().to_string(),
     Value::String(source_input.value),

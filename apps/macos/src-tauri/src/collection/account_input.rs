@@ -56,7 +56,9 @@ fn normalize_item_input(
       .segment_after("video")
       .filter(|value| is_ascii_digits(value))
       .map(|value| normalized(AccountSourceParamKey::ItemId, value))
-      .ok_or_else(|| validation_error("TikTok 作品链接必须包含可识别的数字 video ID；短链接需先展开")),
+      .ok_or_else(|| {
+        validation_error("TikTok 作品链接必须包含可识别的数字 video ID；短链接需先展开")
+      }),
     "douyin" if url.host_matches("douyin.com") || url.host_matches("iesdouyin.com") => url
       .segment_after("video")
       .filter(|value| is_ascii_digits(value))
@@ -205,7 +207,10 @@ impl<'a> ParsedUrl<'a> {
     let path = path.split(['?', '#']).next().unwrap_or_default();
     Ok(Some(Self {
       host,
-      segments: path.split('/').filter(|segment| !segment.is_empty()).collect(),
+      segments: path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect(),
     }))
   }
 
@@ -233,17 +238,62 @@ mod tests {
   #[test]
   fn normalizes_canonical_account_and_item_links() {
     let cases = [
-      ("tiktok", "direct_account", AccountSourceInputKind::Account, "https://www.tiktok.com/@openai", AccountSourceParamKey::AccountId, "openai"),
-      ("douyin", "direct_account", AccountSourceInputKind::Account, "https://www.douyin.com/user/MS4wLjAB-test", AccountSourceParamKey::AccountId, "MS4wLjAB-test"),
-      ("xiaohongshu", "direct_account", AccountSourceInputKind::Account, "https://www.xiaohongshu.com/user/profile/abc123", AccountSourceParamKey::AccountId, "abc123"),
-      ("tiktok", "item_author", AccountSourceInputKind::Item, "https://www.tiktok.com/@user/video/123456", AccountSourceParamKey::ItemId, "123456"),
-      ("douyin", "comment_authors", AccountSourceInputKind::Item, "https://www.douyin.com/video/987654", AccountSourceParamKey::ItemId, "987654"),
-      ("xiaohongshu", "item_author", AccountSourceInputKind::Item, "https://www.xiaohongshu.com/explore/665f95200000000006005624", AccountSourceParamKey::ItemId, "665f95200000000006005624"),
+      (
+        "tiktok",
+        "direct_account",
+        AccountSourceInputKind::Account,
+        "https://www.tiktok.com/@openai",
+        AccountSourceParamKey::AccountId,
+        "openai",
+      ),
+      (
+        "douyin",
+        "direct_account",
+        AccountSourceInputKind::Account,
+        "https://www.douyin.com/user/MS4wLjAB-test",
+        AccountSourceParamKey::AccountId,
+        "MS4wLjAB-test",
+      ),
+      (
+        "xiaohongshu",
+        "direct_account",
+        AccountSourceInputKind::Account,
+        "https://www.xiaohongshu.com/user/profile/abc123",
+        AccountSourceParamKey::AccountId,
+        "abc123",
+      ),
+      (
+        "tiktok",
+        "item_author",
+        AccountSourceInputKind::Item,
+        "https://www.tiktok.com/@user/video/123456",
+        AccountSourceParamKey::ItemId,
+        "123456",
+      ),
+      (
+        "douyin",
+        "comment_authors",
+        AccountSourceInputKind::Item,
+        "https://www.douyin.com/video/987654",
+        AccountSourceParamKey::ItemId,
+        "987654",
+      ),
+      (
+        "xiaohongshu",
+        "item_author",
+        AccountSourceInputKind::Item,
+        "https://www.xiaohongshu.com/explore/665f95200000000006005624",
+        AccountSourceParamKey::ItemId,
+        "665f95200000000006005624",
+      ),
     ];
     for (platform, source, kind, input, key, value) in cases {
       assert_eq!(
         normalize_account_source_input(platform, source, kind, input).unwrap(),
-        NormalizedAccountSourceInput { key, value: value.to_string() }
+        NormalizedAccountSourceInput {
+          key,
+          value: value.to_string()
+        }
       );
     }
   }
@@ -252,26 +302,38 @@ mod tests {
   fn preserves_supported_xiaohongshu_share_links_and_rejects_ambiguous_short_links() {
     let share = "https://xhslink.com/m/3ZSCJZAMz0a";
     assert_eq!(
-      normalize_account_source_input("xiaohongshu", "direct_account", AccountSourceInputKind::Account, share).unwrap(),
-      NormalizedAccountSourceInput { key: AccountSourceParamKey::ShareText, value: share.to_string() }
+      normalize_account_source_input(
+        "xiaohongshu",
+        "direct_account",
+        AccountSourceInputKind::Account,
+        share
+      )
+      .unwrap(),
+      NormalizedAccountSourceInput {
+        key: AccountSourceParamKey::ShareText,
+        value: share.to_string()
+      }
     );
     assert!(normalize_account_source_input(
       "douyin",
       "item_author",
       AccountSourceInputKind::Item,
       "https://v.douyin.com/abc123/",
-    ).is_err());
+    )
+    .is_err());
     assert!(normalize_account_source_input(
       "tiktok",
       "followers",
       AccountSourceInputKind::Account,
       "https://www.tiktok.com/@openai",
-    ).is_err());
+    )
+    .is_err());
     assert!(normalize_account_source_input(
       "xiaohongshu",
       "comment_authors",
       AccountSourceInputKind::Item,
       share,
-    ).is_err());
+    )
+    .is_err());
   }
 }
