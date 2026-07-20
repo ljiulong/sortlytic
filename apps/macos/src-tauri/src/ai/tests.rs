@@ -19,7 +19,7 @@ use crate::tasks::{
   list_task_logs, CreateCollectionTaskInput,
 };
 use crate::tikhub::test_support::override_tikhub_base_url_for_current_test;
-use crate::workspace::create_workspace;
+use crate::workspace::{create_workspace, open_workspace_database, DATABASE_FILE_NAME};
 
 const TIKHUB_E2E_TOKEN: &str = "sortlytic-e2e-tikhub-token";
 
@@ -41,7 +41,7 @@ fn natural_language_generation_requires_an_active_ai_profile() {
   let error = generate_collection_plan_from_text(
     &root_path,
     GenerateCollectionPlanFromTextInput {
-      task_id: task.id,
+      task_id: task.id.clone(),
       intent_text: "采集最近 7 天美国 TikTok 汽车内容".to_string(),
       provider_id: None,
       model_id: None,
@@ -51,6 +51,30 @@ fn natural_language_generation_requires_an_active_ai_profile() {
 
   assert_eq!(error.code, AppErrorCode::ValidationError);
   assert!(error.message.contains("AI 配置"));
+  let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
+  let attempt = connection
+    .query_row(
+      "SELECT intent_text, parse_status, parse_phase, error_code, error_message, retryable
+       FROM task_intent WHERE task_id = ?1 ORDER BY created_at DESC LIMIT 1",
+      [task.id],
+      |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, String>(1)?,
+          row.get::<_, Option<String>>(2)?,
+          row.get::<_, Option<String>>(3)?,
+          row.get::<_, Option<String>>(4)?,
+          row.get::<_, Option<i64>>(5)?,
+        ))
+      },
+    )
+    .expect("前置配置失败也必须保留解析尝试");
+  assert_eq!(attempt.0, "采集最近 7 天美国 TikTok 汽车内容");
+  assert_eq!(attempt.1, "failed");
+  assert_eq!(attempt.2.as_deref(), Some("preparing"));
+  assert_eq!(attempt.3.as_deref(), Some("VALIDATION_ERROR"));
+  assert!(attempt.4.is_some_and(|message| message.contains("AI 配置")));
+  assert_eq!(attempt.5, Some(0));
 
   std::fs::remove_dir_all(root_path).ok();
 }
@@ -171,6 +195,24 @@ fn invalid_model_plan_does_not_change_existing_task_scope() {
     updated_task.data_types_json,
     serde_json::json!(["comments"])
   );
+  let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
+  let attempt = connection
+    .query_row(
+      "SELECT parse_status, parse_phase, ai_run_id FROM task_intent
+       WHERE task_id = ?1 ORDER BY created_at DESC LIMIT 1",
+      [task.id],
+      |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, Option<String>>(1)?,
+          row.get::<_, Option<String>>(2)?,
+        ))
+      },
+    )
+    .unwrap();
+  assert_eq!(attempt.0, "needs_review");
+  assert_eq!(attempt.1.as_deref(), Some("success"));
+  assert_eq!(attempt.2.as_deref(), Some(result.ai_run.id.as_str()));
 
   std::fs::remove_dir_all(root_path).ok();
 }
@@ -379,7 +421,7 @@ fn provider_failure_is_persisted_without_secret_or_body() {
   )
   .expect_err("401 must fail");
   server.join().expect("test server should finish");
-  let runs = list_ai_runs(&root_path, task.id, None).expect("failed run should list");
+  let runs = list_ai_runs(&root_path, task.id.clone(), None).expect("failed run should list");
 
   assert_eq!(error.code, AppErrorCode::ModelAuthError);
   assert_eq!(runs.len(), 1);
@@ -388,6 +430,34 @@ fn provider_failure_is_persisted_without_secret_or_body() {
   let serialized = serde_json::to_string(&runs[0]).expect("run should serialize");
   assert!(!serialized.contains("sk-ai-secret"));
   assert!(!serialized.contains("provider-private-body"));
+  let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
+  let attempt = connection
+    .query_row(
+      "SELECT parse_status, parse_phase, ai_run_id, error_code, error_message,
+              retryable, error_safe_details_json
+       FROM task_intent WHERE task_id = ?1 ORDER BY created_at DESC LIMIT 1",
+      [task.id],
+      |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, Option<String>>(1)?,
+          row.get::<_, Option<String>>(2)?,
+          row.get::<_, Option<String>>(3)?,
+          row.get::<_, Option<String>>(4)?,
+          row.get::<_, Option<i64>>(5)?,
+          row.get::<_, String>(6)?,
+        ))
+      },
+    )
+    .unwrap();
+  assert_eq!(attempt.0, "failed");
+  assert_eq!(attempt.1.as_deref(), Some("requesting_ai"));
+  assert_eq!(attempt.2.as_deref(), Some(runs[0].id.as_str()));
+  assert_eq!(attempt.3.as_deref(), Some("MODEL_AUTH_ERROR"));
+  assert_eq!(attempt.5, Some(0));
+  let persisted_attempt = serde_json::to_string(&attempt).unwrap();
+  assert!(!persisted_attempt.contains("sk-ai-secret"));
+  assert!(!persisted_attempt.contains("provider-private-body"));
 
   std::fs::remove_dir_all(root_path).ok();
 }

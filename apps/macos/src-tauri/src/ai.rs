@@ -123,40 +123,64 @@ pub fn generate_collection_plan_from_text(
   if intent_text.is_empty() {
     return Err(ai_error("自然语言采集需求不能为空"));
   }
-  seed_builtin_prompts(&root_path)?;
   let connection = open_workspace_connection(&root_path)?;
   ensure_task_exists(&connection, &input.task_id)?;
-  let prompt = active_prompt_version(&connection, "collection_plan_from_text")?;
-  let profile = active_ai_profile(&root_path, &input)?;
   let now = Utc::now().to_rfc3339();
+  let attempt_id = Uuid::new_v4().to_string();
+  create_task_intent_attempt(&connection, &attempt_id, &input.task_id, intent_text, &now)?;
+  preserve_attempt_error(
+    seed_builtin_prompts(&root_path),
+    &connection,
+    &attempt_id,
+    "preparing",
+  )?;
+  let prompt = preserve_attempt_error(
+    active_prompt_version(&connection, "collection_plan_from_text"),
+    &connection,
+    &attempt_id,
+    "preparing",
+  )?;
+  let profile = preserve_attempt_error(
+    active_ai_profile(&root_path, &input),
+    &connection,
+    &attempt_id,
+    "preparing",
+  )?;
   let runtime_snapshot_id = Uuid::new_v4().to_string();
   let ai_run_id = Uuid::new_v4().to_string();
 
-  connection
-    .execute(
-      "INSERT INTO runtime_snapshot (
+  update_task_intent_phase(&connection, &attempt_id, "requesting_ai", None)?;
+  preserve_attempt_error(
+    connection
+      .execute(
+        "INSERT INTO runtime_snapshot (
         id, task_id, provider_id, model_id, api_format, base_url_type, prompt_version_id,
         output_schema_id, capabilities_json, config_source, created_at
       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'collection_plan_v4', ?8, 'active_api_profile', ?9)",
-      params![
-        runtime_snapshot_id,
-        input.task_id,
-        profile.profile_id,
-        profile.config.model_id,
-        api_format_name(profile.config.api_format),
-        base_url_type(profile.config.provider_type),
-        prompt.id,
-        serde_json::json!({
-          "structured_output": true,
-          "schema_enforced_locally": true,
-          "prompt_content_hash": prompt.content_hash,
-          "provider_type": provider_type_name(profile.config.provider_type)
-        })
-        .to_string(),
-        now
-      ],
-    )
-    .map_err(database_error)?;
+        params![
+          runtime_snapshot_id,
+          input.task_id,
+          profile.profile_id,
+          profile.config.model_id,
+          api_format_name(profile.config.api_format),
+          base_url_type(profile.config.provider_type),
+          prompt.id,
+          serde_json::json!({
+            "structured_output": true,
+            "schema_enforced_locally": true,
+            "prompt_content_hash": prompt.content_hash,
+            "provider_type": provider_type_name(profile.config.provider_type)
+          })
+          .to_string(),
+          now
+        ],
+      )
+      .map(|_| ())
+      .map_err(database_error),
+    &connection,
+    &attempt_id,
+    "requesting_ai",
+  )?;
 
   let request = collection_plan_request(&prompt.content, intent_text);
   let call_started_at = std::time::Instant::now();
@@ -168,6 +192,7 @@ pub fn generate_collection_plan_from_text(
         &connection,
         FailedAiRunInput {
           ai_run_id: &ai_run_id,
+          attempt_id: &attempt_id,
           task_id: &input.task_id,
           runtime_snapshot_id: &runtime_snapshot_id,
           intent_text,
@@ -179,6 +204,7 @@ pub fn generate_collection_plan_from_text(
       return Err(error);
     }
   };
+  update_task_intent_phase(&connection, &attempt_id, "validating_intent", None)?;
   let schema_errors = validate_collection_plan_schema(&response.output_json);
   let generated = normalize_model_plan(response.output_json);
   let mut plan_validation = validate_collection_plan_v4(&generated);
@@ -187,29 +213,15 @@ pub fn generate_collection_plan_from_text(
   plan_validation.errors.dedup();
   plan_validation.valid = plan_validation.errors.is_empty();
   let schema_valid = plan_validation.valid;
-  let generated_platforms = json_string_array(generated.get("platforms"));
-  if schema_valid
-    && !generated_platforms.is_empty()
-    && generated.get("entity").and_then(Value::as_str) == Some("account")
-  {
-    update_collection_task(
-      &root_path,
-      &input.task_id,
-      UpdateCollectionTaskInput {
-        name: None,
-        platforms: Some(generated_platforms),
-        data_types: Some(vec!["account".to_string()]),
-      },
-    )?;
-  }
   let validation_status = if schema_valid {
     "valid"
   } else {
     "needs_review"
   };
 
-  connection
-    .execute(
+  preserve_attempt_error(
+    connection
+      .execute(
       "INSERT INTO ai_run (
         id, task_id, runtime_snapshot_id, run_type, input_summary, output_json, schema_valid,
         validation_status, input_tokens, output_tokens, latency_ms, retry_count,
@@ -233,35 +245,54 @@ pub fn generate_collection_plan_from_text(
           .to_string(),
         now
       ],
-    )
-    .map_err(database_error)?;
-
-  connection
-    .execute(
-      "INSERT INTO task_intent (id, task_id, intent_text, language, parse_status, ai_run_id, created_at)
-       VALUES (?1, ?2, ?3, 'zh-CN', ?4, ?5, ?6)",
-      params![
-        Uuid::new_v4().to_string(),
-        input.task_id,
-        intent_text,
-        validation_status,
-        ai_run_id,
-        now
-      ],
-    )
-    .map_err(database_error)?;
-
-  let collection_plan = save_collection_plan(
-    &root_path,
-    SaveCollectionPlanInput {
-      task_id: input.task_id.clone(),
-      source: "ai_generated".to_string(),
-      plan_json: generated.clone(),
-      validation_status: validation_status.to_string(),
-      validation_errors_json: Some(serde_json::json!(plan_validation.errors)),
-      cost_estimate_json: generated.get("cost_estimate").cloned(),
-    },
+      )
+      .map(|_| ())
+      .map_err(database_error),
+    &connection,
+    &attempt_id,
+    "validating_intent",
   )?;
+
+  update_task_intent_phase(&connection, &attempt_id, "building_plan", Some(&ai_run_id))?;
+  let generated_platforms = json_string_array(generated.get("platforms"));
+  if schema_valid
+    && !generated_platforms.is_empty()
+    && generated.get("entity").and_then(Value::as_str) == Some("account")
+  {
+    preserve_attempt_error(
+      update_collection_task(
+        &root_path,
+        &input.task_id,
+        UpdateCollectionTaskInput {
+          name: None,
+          platforms: Some(generated_platforms),
+          data_types: Some(vec!["account".to_string()]),
+        },
+      )
+      .map(|_| ()),
+      &connection,
+      &attempt_id,
+      "building_plan",
+    )?;
+  }
+
+  let collection_plan = preserve_attempt_error(
+    save_collection_plan(
+      &root_path,
+      SaveCollectionPlanInput {
+        task_id: input.task_id.clone(),
+        source: "ai_generated".to_string(),
+        plan_json: generated.clone(),
+        validation_status: validation_status.to_string(),
+        validation_errors_json: Some(serde_json::json!(plan_validation.errors)),
+        cost_estimate_json: generated.get("cost_estimate").cloned(),
+      },
+    ),
+    &connection,
+    &attempt_id,
+    "building_plan",
+  )?;
+  update_task_intent_success(&connection, &attempt_id, validation_status, &ai_run_id)?;
   let ai_run = get_ai_run(&root_path, &ai_run_id)?;
   let runtime_snapshot = get_runtime_snapshot(&connection, &runtime_snapshot_id)?;
 
@@ -422,20 +453,116 @@ fn persist_failed_ai_run(connection: &Connection, input: FailedAiRunInput<'_>) -
       ],
     )
     .map_err(database_error)?;
+  update_task_intent_failure(
+    connection,
+    input.attempt_id,
+    "requesting_ai",
+    input.error,
+    Some(input.ai_run_id),
+  )
+}
+
+fn create_task_intent_attempt(
+  connection: &Connection,
+  attempt_id: &str,
+  task_id: &str,
+  intent_text: &str,
+  now: &str,
+) -> AppResult<()> {
   connection
     .execute(
-      "INSERT INTO task_intent (id, task_id, intent_text, language, parse_status, ai_run_id, created_at)
-       VALUES (?1, ?2, ?3, 'zh-CN', 'failed', ?4, ?5)",
+      "INSERT INTO task_intent (
+        id, task_id, intent_text, language, parse_status, parse_phase,
+        error_safe_details_json, created_at, updated_at
+      ) VALUES (?1, ?2, ?3, 'zh-CN', 'running', 'preparing', '{}', ?4, ?4)",
+      params![attempt_id, task_id, intent_text, now],
+    )
+    .map(|_| ())
+    .map_err(database_error)
+}
+
+fn update_task_intent_phase(
+  connection: &Connection,
+  attempt_id: &str,
+  phase: &str,
+  ai_run_id: Option<&str>,
+) -> AppResult<()> {
+  connection
+    .execute(
+      "UPDATE task_intent
+       SET parse_phase = ?1, ai_run_id = COALESCE(?2, ai_run_id), updated_at = ?3
+       WHERE id = ?4",
+      params![phase, ai_run_id, Utc::now().to_rfc3339(), attempt_id],
+    )
+    .map(|_| ())
+    .map_err(database_error)
+}
+
+fn update_task_intent_success(
+  connection: &Connection,
+  attempt_id: &str,
+  parse_status: &str,
+  ai_run_id: &str,
+) -> AppResult<()> {
+  connection
+    .execute(
+      "UPDATE task_intent
+       SET parse_status = ?1, parse_phase = 'success', ai_run_id = ?2,
+           error_code = NULL, error_message = NULL, retryable = NULL,
+           error_safe_details_json = '{}', updated_at = ?3
+       WHERE id = ?4",
+      params![parse_status, ai_run_id, Utc::now().to_rfc3339(), attempt_id],
+    )
+    .map(|_| ())
+    .map_err(database_error)
+}
+
+fn update_task_intent_failure(
+  connection: &Connection,
+  attempt_id: &str,
+  phase: &str,
+  error: &AppError,
+  ai_run_id: Option<&str>,
+) -> AppResult<()> {
+  connection
+    .execute(
+      "UPDATE task_intent
+       SET parse_status = 'failed', parse_phase = ?1, ai_run_id = COALESCE(?2, ai_run_id),
+           error_code = ?3, error_message = ?4, retryable = ?5,
+           error_safe_details_json = ?6, updated_at = ?7
+       WHERE id = ?8",
       params![
-        Uuid::new_v4().to_string(),
-        input.task_id,
-        input.intent_text,
-        input.ai_run_id,
-        input.created_at
+        phase,
+        ai_run_id,
+        error_code_name(error),
+        error.message,
+        bool_to_i64(error.retryable),
+        serde_json::to_string(&error.safe_details).unwrap_or_else(|_| "{}".to_string()),
+        Utc::now().to_rfc3339(),
+        attempt_id
       ],
     )
     .map(|_| ())
     .map_err(database_error)
+}
+
+fn preserve_attempt_error<T>(
+  result: AppResult<T>,
+  connection: &Connection,
+  attempt_id: &str,
+  phase: &str,
+) -> AppResult<T> {
+  result.map_err(|error| {
+    let _ = update_task_intent_failure(connection, attempt_id, phase, &error, None);
+    error
+  })
+}
+
+fn error_code_name(error: &AppError) -> String {
+  serde_json::to_value(&error.code)
+    .ok()
+    .and_then(|value| value.as_str().map(ToString::to_string))
+    .unwrap_or_else(|| "MODEL_PROTOCOL_ERROR".to_string())
 }
 
 fn normalize_model_plan(mut output: Value) -> Value {
@@ -637,6 +764,7 @@ struct ResolvedAiProfile {
 
 struct FailedAiRunInput<'a> {
   ai_run_id: &'a str,
+  attempt_id: &'a str,
   task_id: &'a str,
   runtime_snapshot_id: &'a str,
   intent_text: &'a str,
