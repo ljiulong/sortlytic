@@ -422,6 +422,28 @@ describe('CollectionPlanPreview', () => {
     expect(markup).toContain('/api/v1/douyin/web/handler_user_profile_v4')
   })
 
+  it('自然语言计划明确显示目标检索语言和翻译后的实际检索词', () => {
+    const markup = renderToStaticMarkup(
+      createElement(CollectionPlanPreview, {
+        actionMessage: '等待确认',
+        isBusy: false,
+        onConfirmPlan: vi.fn(),
+        plan: {
+          ...draftPlan,
+          platform: 'TikTok',
+          regionCode: 'GB',
+          queryLocale: 'en-GB',
+          keyword: 'pet supplies',
+        },
+      }),
+    )
+
+    expect(markup).toContain('目标检索语言')
+    expect(markup).toContain('en-GB')
+    expect(markup).toContain('实际检索词或标识')
+    expect(markup).toContain('pet supplies')
+  })
+
   it('能力平台不匹配或缺失时不猜测补全字段分类', () => {
     const plan = {
       ...draftPlan,

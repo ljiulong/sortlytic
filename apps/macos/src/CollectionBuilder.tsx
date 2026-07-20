@@ -650,6 +650,13 @@ export function CollectionPlanPreview({
               value={t('preview.selectedFieldCount', { count: selectedFieldCount })}
             />
           ) : null}
+          {plan.queryLocale ? (
+            <PlanFact label={t('preview.queryLocale')} value={plan.queryLocale} />
+          ) : null}
+          <PlanFact
+            label={t('preview.actualQuery')}
+            value={plan.keyword || t('preview.pendingTarget')}
+          />
           <PlanFact label={t('preview.region')} value={regionLabel ?? t('preview.regionUnavailable')} />
           <PlanFact label={t('preview.range')} value={range} />
         </dl>
