@@ -387,16 +387,16 @@ fn natural_language_plan_runs_through_tikhub_and_persists_records() {
 fn prompt_regression_calls_the_active_model_with_the_candidate_content() {
   let root_path = unique_temp_workspace("ai-prompt-regression");
   create_workspace("提示词真实回归测试", &root_path).expect("workspace should be created");
-  let plan = valid_keyword_plan();
+  let intent = valid_collection_intent();
   let response = serde_json::json!({
-    "choices": [{ "message": { "content": plan.to_string() } }],
+    "choices": [{ "message": { "content": intent.to_string() } }],
     "usage": { "prompt_tokens": 36, "completion_tokens": 64 }
   })
   .to_string();
   let (base_url, server) = serve_ai_once(200, response, |request| {
     assert!(request.contains("候选提示词正文-必须真实发送"));
     assert!(request.contains("回归样例-最近 7 天美国 TikTok 汽车内容"));
-    assert!(request.contains("collection_plan_v4"));
+    assert!(request.contains("collection_intent_v1"));
   });
   let profile_id = configure_active_ai(&root_path, base_url);
 
@@ -410,7 +410,7 @@ fn prompt_regression_calls_the_active_model_with_the_candidate_content() {
 
   assert_eq!(result.provider_id, profile_id);
   assert_eq!(result.model_id, "deepseek-test");
-  assert_eq!(result.output_json, normalize_model_plan(plan));
+  assert_eq!(result.output_json, intent);
 
   std::fs::remove_dir_all(root_path).ok();
 }
@@ -486,67 +486,6 @@ fn provider_failure_is_persisted_without_secret_or_body() {
   assert!(!persisted_attempt.contains("provider-private-body"));
 
   std::fs::remove_dir_all(root_path).ok();
-}
-
-fn valid_keyword_plan() -> Value {
-  serde_json::json!({
-    "schema_version": 4,
-    "entity": "account",
-    "platforms": ["tiktok"],
-    "account_source": "content_search_authors",
-    "selected_fields": [],
-    "enrichment_policy": "auto_costed",
-    "region": "US",
-    "time_range": "7",
-    "age_range": null,
-    "gender_filter": null,
-    "steps": [{
-      "step_key": "discover",
-      "operation_key": "discover.content_search_authors",
-      "role": "discovery",
-      "depends_on_step_key": null,
-      "input_binding": null,
-      "endpoint_key": "tiktok.keyword_search",
-      "platform": "tiktok",
-      "data_type": "keyword_search",
-      "params": {
-        "keyword": "car",
-        "item_id": null,
-        "account_id": null,
-        "region": "US",
-        "time_range": "7",
-        "page_size": 20
-      },
-      "request_limit": 1,
-      "output_selected": true
-    }],
-    "record_limit": 20,
-    "request_limit": 1,
-    "budget_limit": { "currency": "USD", "amount_micros": 2_000_000 },
-    "output_rules": {
-      "entity": "account",
-      "required_fields": [
-        "platform", "display_name", "account_handle", "platform_user_id",
-        "data_source", "collected_at"
-      ],
-      "selected_fields": [],
-      "dedupe_key": ["platform", "platform_user_id"],
-      "fallback_dedupe_key": ["platform", "account_handle"],
-      "unselected_value_label": "任务未设置",
-      "missing_value_label": "未采集到",
-      "evidence_required": true
-    },
-    "cost_estimate": {
-      "request_count_estimate": 1,
-      "discovery_request_count": 1,
-      "enrichment_request_count": 0,
-      "enrichment_operation_count": 0,
-      "requires_confirmation": true
-    },
-    "missing_fields": [],
-    "confidence": 0.96,
-    "requires_user_confirmation": true
-  })
 }
 
 fn valid_collection_intent() -> Value {

@@ -25,8 +25,8 @@ pub use collection_intent_schema::{CollectionIntentV1, IntentAgeRange};
 pub use generation::generate_collection_plan_from_text;
 pub use intent_plan::IntentPlanBuildResult;
 
-use collection_plan_schema::validate_collection_plan_schema;
-use provider_client::{call_model, collection_plan_request, ProviderConfig};
+use collection_intent_schema::parse_collection_intent;
+use provider_client::{call_model, collection_intent_request, ProviderConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GenerateCollectionPlanFromTextInput {
@@ -106,17 +106,20 @@ pub fn run_collection_prompt_regression(
       model_id: None,
     },
   )?;
-  let request = collection_plan_request(prompt_content, intent_text);
+  let request = collection_intent_request(prompt_content, intent_text);
   let response = call_model(&profile.config, &request)?;
-  let schema_errors = validate_collection_plan_schema(&response.output_json);
-  if !schema_errors.is_empty() {
-    return Err(ai_error(schema_errors.join("；")));
-  }
+  let parsed = parse_collection_intent(&response.output_json).map_err(|errors| {
+    ai_error(format!(
+      "真实模型回归未通过 collection_intent_v1 Schema：{}",
+      errors.join("；")
+    ))
+  })?;
 
   Ok(PromptRegressionModelOutput {
     provider_id: profile.profile_id,
     model_id: profile.config.model_id,
-    output_json: normalize_model_plan(response.output_json),
+    output_json: serde_json::to_value(parsed)
+      .map_err(|_| ai_error("无法序列化真实模型回归意图"))?,
   })
 }
 
@@ -378,17 +381,6 @@ fn error_code_name(error: &AppError) -> String {
     .ok()
     .and_then(|value| value.as_str().map(ToString::to_string))
     .unwrap_or_else(|| "MODEL_PROTOCOL_ERROR".to_string())
-}
-
-fn normalize_model_plan(mut output: Value) -> Value {
-  if let Some(steps) = output.get_mut("steps").and_then(Value::as_array_mut) {
-    for step in steps {
-      if let Some(params) = step.get_mut("params").and_then(Value::as_object_mut) {
-        params.retain(|_, value| !value.is_null());
-      }
-    }
-  }
-  output
 }
 
 fn api_format_name(format: AiApiFormat) -> &'static str {
