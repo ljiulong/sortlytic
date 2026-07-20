@@ -26,7 +26,16 @@ pub fn save_collection_plan(
   let transaction = connection
     .transaction_with_behavior(TransactionBehavior::Immediate)
     .map_err(database_error)?;
-  let task = get_task_by_id(&transaction, &input.task_id)?;
+  let id = save_collection_plan_in_transaction(&transaction, input)?;
+  transaction.commit().map_err(database_error)?;
+  get_collection_plan(&connection, &id)
+}
+
+pub(super) fn save_collection_plan_in_transaction(
+  connection: &Connection,
+  input: SaveCollectionPlanInput,
+) -> AppResult<String> {
+  let task = get_task_by_id(connection, &input.task_id)?;
 
   if !["draft", "waiting_confirmation"].contains(&task.status.as_str()) {
     return Err(task_error("只允许给草稿或等待确认状态的任务保存采集计划"));
@@ -63,7 +72,7 @@ pub fn save_collection_plan(
     .flatten()
     .map(|value| value.to_string());
 
-  transaction
+  connection
     .execute(
       "UPDATE collection_plan
        SET confirmed_by_user = 0, updated_at = ?1
@@ -72,7 +81,7 @@ pub fn save_collection_plan(
     )
     .map_err(database_error)?;
 
-  transaction
+  connection
     .execute(
       "INSERT INTO collection_plan (
         id, task_id, source, schema_version, plan_json, validation_status,
@@ -93,9 +102,9 @@ pub fn save_collection_plan(
     )
     .map_err(database_error)?;
 
-  persist_api_call_steps(&transaction, &id, &input.plan_json, validation_status, &now)?;
+  persist_api_call_steps(connection, &id, &input.plan_json, validation_status, &now)?;
 
-  transaction
+  connection
     .execute(
       "UPDATE collection_task
        SET status = ?1, confirmed_at = NULL,
@@ -115,8 +124,7 @@ pub fn save_collection_plan(
     )
     .map_err(database_error)?;
 
-  transaction.commit().map_err(database_error)?;
-  get_collection_plan(&connection, &id)
+  Ok(id)
 }
 
 fn persist_api_call_steps(
