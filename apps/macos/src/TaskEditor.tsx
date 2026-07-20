@@ -19,6 +19,7 @@ import {
 import { accountSourceFilterCapabilities, sourceInputCopy } from './account-source-rules'
 import { countryRegionSelectOptions } from './collection-select-options'
 import { createTaskEditDraft, type TaskEditDraft } from './task-edit-draft'
+import TaskRevisionPreview from './TaskRevisionPreview'
 
 type TaskEditorProps = {
   taskId: string
@@ -516,6 +517,8 @@ function TaskEditor({
           ) : null}
         </div>
       )}
+
+      <TaskRevisionPreview draft={draft} attempt={naturalParseAttempt} />
 
       <section className="task-editor__audit" aria-labelledby="task-editor-audit-heading">
         <div>
