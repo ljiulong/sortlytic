@@ -399,8 +399,13 @@ fn xiaohongshu_profile_and_detail_send_share_text_without_fake_ids() {
       None,
     )
     .expect("documented share_text request should build");
-    assert!(request.query().contains(&("share_text".to_string(), share_text.to_string())));
-    assert!(!request.query().iter().any(|(key, _)| matches!(key.as_str(), "user_id" | "note_id")));
+    assert!(request
+      .query()
+      .contains(&("share_text".to_string(), share_text.to_string())));
+    assert!(!request
+      .query()
+      .iter()
+      .any(|(key, _)| matches!(key.as_str(), "user_id" | "note_id")));
   }
 }
 
@@ -1149,10 +1154,9 @@ fn account_source_parsers_prioritize_and_unwrap_user_arrays() {
 fn tiktok_account_fixtures_preserve_source_arrays_and_field_evidence() {
   use crate::accounts::{normalize_account_with_evidence, SourceKind};
 
-  let fixtures: Value = serde_json::from_str(include_str!(
-    "fixtures/tiktok_account_responses.json"
-  ))
-  .expect("TikTok 固化响应应为有效 JSON");
+  let fixtures: Value =
+    serde_json::from_str(include_str!("fixtures/tiktok_account_responses.json"))
+      .expect("TikTok 固化响应应为有效 JSON");
   let collected_at = "2026-07-20T08:00:00+08:00";
   let source_params = |data_type: &str| match data_type {
     "user_search" => serde_json::json!({ "keyword": "汽车" }),
@@ -1164,8 +1168,18 @@ fn tiktok_account_fixtures_preserve_source_arrays_and_field_evidence() {
   };
   let cases = [
     ("user_search", SourceKind::UserSearch, "/uid", "tt-search-1"),
-    ("followers", SourceKind::Relationship, "/uid", "tt-follower-1"),
-    ("followings", SourceKind::Relationship, "/uid", "tt-following-1"),
+    (
+      "followers",
+      SourceKind::Relationship,
+      "/uid",
+      "tt-follower-1",
+    ),
+    (
+      "followings",
+      SourceKind::Relationship,
+      "/uid",
+      "tt-following-1",
+    ),
     (
       "similar_accounts",
       SourceKind::Relationship,
@@ -1174,13 +1188,8 @@ fn tiktok_account_fixtures_preserve_source_arrays_and_field_evidence() {
     ),
   ];
   for (data_type, source_kind, identity_path, expected_id) in cases {
-    let request = build_collection_request(
-      "tiktok",
-      data_type,
-      &source_params(data_type),
-      None,
-    )
-    .expect("TikTok 账号来源请求应构建");
+    let request = build_collection_request("tiktok", data_type, &source_params(data_type), None)
+      .expect("TikTok 账号来源请求应构建");
     let page = parse_collection_page(&request, fixtures[data_type].clone())
       .expect("TikTok 账号来源响应应解析");
     assert_eq!(page.records.len(), 1);
@@ -1216,11 +1225,8 @@ fn tiktok_account_fixtures_preserve_source_arrays_and_field_evidence() {
     None,
   )
   .unwrap();
-  let profile_page = parse_collection_page(
-    &profile_request,
-    fixtures["account_profile"].clone(),
-  )
-  .unwrap();
+  let profile_page =
+    parse_collection_page(&profile_request, fixtures["account_profile"].clone()).unwrap();
   let profile = profile_page.records[0]
     .pointer("/user")
     .expect("资料响应应包含 user");
@@ -1244,8 +1250,18 @@ fn tiktok_account_fixtures_preserve_source_arrays_and_field_evidence() {
   );
 
   for (data_type, source_kind, author_path, expected_id) in [
-    ("item_detail", SourceKind::ContentAuthor, "/aweme_detail/author", "tt-author-1"),
-    ("comments", SourceKind::CommentAuthor, "/user", "tt-commenter-1"),
+    (
+      "item_detail",
+      SourceKind::ContentAuthor,
+      "/aweme_detail/author",
+      "tt-author-1",
+    ),
+    (
+      "comments",
+      SourceKind::CommentAuthor,
+      "/user",
+      "tt-commenter-1",
+    ),
   ] {
     let request = build_collection_request("tiktok", data_type, &source_params(data_type), None)
       .expect("TikTok 作者来源请求应构建");
@@ -1255,16 +1271,14 @@ fn tiktok_account_fixtures_preserve_source_arrays_and_field_evidence() {
       .pointer(author_path)
       .expect("TikTok 来源记录应包含作者");
     let endpoint_key = format!("tiktok.{data_type}");
-    let account = normalize_account_with_evidence(
-      "tiktok",
-      source_kind,
-      &endpoint_key,
-      collected_at,
-      author,
-    )
-    .expect("TikTok 作者应归一化");
+    let account =
+      normalize_account_with_evidence("tiktok", source_kind, &endpoint_key, collected_at, author)
+        .expect("TikTok 作者应归一化");
     assert_eq!(account.platform_user_id.as_deref(), Some(expected_id));
-    assert_eq!(account.field_evidence["platform_user_id"].endpoint_key, endpoint_key);
+    assert_eq!(
+      account.field_evidence["platform_user_id"].endpoint_key,
+      endpoint_key
+    );
   }
 }
 
@@ -1272,10 +1286,9 @@ fn tiktok_account_fixtures_preserve_source_arrays_and_field_evidence() {
 fn douyin_account_fixtures_preserve_source_arrays_and_demographic_evidence() {
   use crate::accounts::{normalize_account_with_evidence, SourceKind};
 
-  let fixtures: Value = serde_json::from_str(include_str!(
-    "fixtures/douyin_account_responses.json"
-  ))
-  .expect("抖音固化响应应为有效 JSON");
+  let fixtures: Value =
+    serde_json::from_str(include_str!("fixtures/douyin_account_responses.json"))
+      .expect("抖音固化响应应为有效 JSON");
   let collected_at = "2026-07-20T08:00:00+08:00";
   let source_params = |data_type: &str| match data_type {
     "user_search" => serde_json::json!({ "keyword": "汽车" }),
@@ -1290,15 +1303,10 @@ fn douyin_account_fixtures_preserve_source_arrays_and_demographic_evidence() {
     ("followers", SourceKind::Relationship, "dy-follower-1"),
     ("followings", SourceKind::Relationship, "dy-following-1"),
   ] {
-    let request = build_collection_request(
-      "douyin",
-      data_type,
-      &source_params(data_type),
-      None,
-    )
-    .expect("抖音账号来源请求应构建");
-    let page = parse_collection_page(&request, fixtures[data_type].clone())
-      .expect("抖音账号来源响应应解析");
+    let request = build_collection_request("douyin", data_type, &source_params(data_type), None)
+      .expect("抖音账号来源请求应构建");
+    let page =
+      parse_collection_page(&request, fixtures[data_type].clone()).expect("抖音账号来源响应应解析");
     assert_eq!(page.records.len(), 1);
     assert_eq!(page.records[0]["uid"], expected_id);
     let endpoint_key = format!("douyin.{data_type}");
@@ -1312,7 +1320,10 @@ fn douyin_account_fixtures_preserve_source_arrays_and_demographic_evidence() {
     .expect("抖音来源账号应归一化");
     assert_eq!(account.platform_user_id.as_deref(), Some(expected_id));
     assert_eq!(account.field_evidence["platform_user_id"].raw_path, "/uid");
-    assert_eq!(account.field_evidence["platform_user_id"].endpoint_key, endpoint_key);
+    assert_eq!(
+      account.field_evidence["platform_user_id"].endpoint_key,
+      endpoint_key
+    );
     assert_eq!(
       account.field_evidence["platform_user_id"].collected_at,
       collected_at
@@ -1326,11 +1337,8 @@ fn douyin_account_fixtures_preserve_source_arrays_and_demographic_evidence() {
     None,
   )
   .unwrap();
-  let profile_page = parse_collection_page(
-    &profile_request,
-    fixtures["account_profile"].clone(),
-  )
-  .unwrap();
+  let profile_page =
+    parse_collection_page(&profile_request, fixtures["account_profile"].clone()).unwrap();
   let profile = profile_page.records[0]
     .pointer("/user")
     .expect("资料响应应包含 user");
@@ -1394,27 +1402,35 @@ fn douyin_account_fixtures_preserve_source_arrays_and_demographic_evidence() {
   assert!(!unknown.account_fields.contains_key("age"));
 
   for (data_type, source_kind, author_path, expected_id) in [
-    ("item_detail", SourceKind::ContentAuthor, "/aweme_detail/author", "dy-author-1"),
-    ("comments", SourceKind::CommentAuthor, "/user", "dy-commenter-1"),
+    (
+      "item_detail",
+      SourceKind::ContentAuthor,
+      "/aweme_detail/author",
+      "dy-author-1",
+    ),
+    (
+      "comments",
+      SourceKind::CommentAuthor,
+      "/user",
+      "dy-commenter-1",
+    ),
   ] {
     let request = build_collection_request("douyin", data_type, &source_params(data_type), None)
       .expect("抖音作者来源请求应构建");
-    let page = parse_collection_page(&request, fixtures[data_type].clone())
-      .expect("抖音作者来源响应应解析");
+    let page =
+      parse_collection_page(&request, fixtures[data_type].clone()).expect("抖音作者来源响应应解析");
     let author = page.records[0]
       .pointer(author_path)
       .expect("抖音来源记录应包含作者");
     let endpoint_key = format!("douyin.{data_type}");
-    let account = normalize_account_with_evidence(
-      "douyin",
-      source_kind,
-      &endpoint_key,
-      collected_at,
-      author,
-    )
-    .expect("抖音作者应归一化");
+    let account =
+      normalize_account_with_evidence("douyin", source_kind, &endpoint_key, collected_at, author)
+        .expect("抖音作者应归一化");
     assert_eq!(account.platform_user_id.as_deref(), Some(expected_id));
-    assert_eq!(account.field_evidence["platform_user_id"].endpoint_key, endpoint_key);
+    assert_eq!(
+      account.field_evidence["platform_user_id"].endpoint_key,
+      endpoint_key
+    );
   }
 }
 
@@ -1422,10 +1438,9 @@ fn douyin_account_fixtures_preserve_source_arrays_and_demographic_evidence() {
 fn xiaohongshu_account_fixtures_preserve_app_v2_identity_and_field_evidence() {
   use crate::accounts::{normalize_account_with_evidence, SourceKind};
 
-  let fixtures: Value = serde_json::from_str(include_str!(
-    "fixtures/xiaohongshu_account_responses.json"
-  ))
-  .expect("小红书固化响应应为有效 JSON");
+  let fixtures: Value =
+    serde_json::from_str(include_str!("fixtures/xiaohongshu_account_responses.json"))
+      .expect("小红书固化响应应为有效 JSON");
   let collected_at = "2026-07-20T08:00:00+08:00";
   let source_params = |data_type: &str| match data_type {
     "user_search" => serde_json::json!({ "keyword": "汽车" }),
@@ -1455,7 +1470,10 @@ fn xiaohongshu_account_fixtures_preserve_app_v2_identity_and_field_evidence() {
   .unwrap();
   assert_eq!(account.platform_user_id.as_deref(), Some("xhs-search-1"));
   assert_eq!(account.account.as_deref(), Some("xhs_search_result"));
-  assert_eq!(account.field_evidence["platform_user_id"].raw_path, "/user_id");
+  assert_eq!(
+    account.field_evidence["platform_user_id"].raw_path,
+    "/user_id"
+  );
   assert_eq!(
     account.field_evidence["platform_user_id"].collected_at,
     collected_at
@@ -1468,11 +1486,8 @@ fn xiaohongshu_account_fixtures_preserve_app_v2_identity_and_field_evidence() {
     None,
   )
   .unwrap();
-  let profile = parse_collection_page(
-    &profile_request,
-    fixtures["account_profile"].clone(),
-  )
-  .unwrap();
+  let profile =
+    parse_collection_page(&profile_request, fixtures["account_profile"].clone()).unwrap();
   let profile_user = profile.records[0]
     .pointer("/user")
     .expect("App V2 资料响应应包含 user");
@@ -1495,16 +1510,22 @@ fn xiaohongshu_account_fixtures_preserve_app_v2_identity_and_field_evidence() {
   );
 
   for (data_type, source_kind, author_path, expected_id) in [
-    ("item_detail", SourceKind::ContentAuthor, "/note/user", "xhs-author-1"),
-    ("comments", SourceKind::CommentAuthor, "/user_info", "xhs-commenter-1"),
+    (
+      "item_detail",
+      SourceKind::ContentAuthor,
+      "/note/user",
+      "xhs-author-1",
+    ),
+    (
+      "comments",
+      SourceKind::CommentAuthor,
+      "/user_info",
+      "xhs-commenter-1",
+    ),
   ] {
-    let request = build_collection_request(
-      "xiaohongshu",
-      data_type,
-      &source_params(data_type),
-      None,
-    )
-    .expect("小红书作者来源请求应构建");
+    let request =
+      build_collection_request("xiaohongshu", data_type, &source_params(data_type), None)
+        .expect("小红书作者来源请求应构建");
     let page = parse_collection_page(&request, fixtures[data_type].clone())
       .expect("小红书作者来源响应应解析");
     let author = page.records[0]
@@ -1520,7 +1541,10 @@ fn xiaohongshu_account_fixtures_preserve_app_v2_identity_and_field_evidence() {
     )
     .expect("小红书作者应归一化");
     assert_eq!(account.platform_user_id.as_deref(), Some(expected_id));
-    assert_eq!(account.field_evidence["platform_user_id"].endpoint_key, endpoint_key);
+    assert_eq!(
+      account.field_evidence["platform_user_id"].endpoint_key,
+      endpoint_key
+    );
   }
 }
 

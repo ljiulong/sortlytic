@@ -164,8 +164,8 @@ pub(super) fn apply_account_fields_migration(connection: &mut Connection) -> App
     update_workspace_schema_version(connection, MIGRATION_VERSION)?;
     return ensure_foreign_key_integrity(connection);
   }
-  let requires_table_rebuild = !record_schema_is_current(connection)?
-    || !target_schema_is_current(connection)?;
+  let requires_table_rebuild =
+    !record_schema_is_current(connection)? || !target_schema_is_current(connection)?;
   if requires_table_rebuild {
     match declared_schema_version(connection)? {
       Some(9) => {
@@ -410,9 +410,11 @@ mod tests {
     let backup = Connection::open(&backup_path).unwrap();
     assert_eq!(
       backup
-        .query_row("SELECT COUNT(*) FROM raw_record WHERE id = 'raw-v9'", [], |row| {
-          row.get::<_, i64>(0)
-        })
+        .query_row(
+          "SELECT COUNT(*) FROM raw_record WHERE id = 'raw-v9'",
+          [],
+          |row| { row.get::<_, i64>(0) }
+        )
         .unwrap(),
       1
     );

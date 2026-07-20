@@ -40,10 +40,9 @@ fn v8_backup_precedes_cleanup_and_only_fresh_queue_snapshots_are_removed() {
 
   let backup_path = only_v8_backup(&root);
   let manifest_path = backup_path.with_extension("manifest.json");
-  let manifest: serde_json::Value = serde_json::from_slice(
-    &fs::read(&manifest_path).expect("rollback manifest should exist"),
-  )
-  .expect("rollback manifest should be valid JSON");
+  let manifest: serde_json::Value =
+    serde_json::from_slice(&fs::read(&manifest_path).expect("rollback manifest should exist"))
+      .expect("rollback manifest should be valid JSON");
   assert_eq!(manifest["from_schema_version"], 7);
   assert_eq!(manifest["to_schema_version"], 8);
   assert_eq!(
