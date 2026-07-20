@@ -41,10 +41,41 @@ jobs:
     with:
       checkout_ref: ${{ inputs.rebuild_tag || github.sha }}
 
+  validate-apple-signing:
+    name: Validate Apple signing and notarization credentials
+    needs: verify
+    runs-on: ubuntu-latest
+    env:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+    steps:
+      - name: Require complete Developer ID credentials before versioning
+        run: |
+          missing=()
+          for name in \
+            APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
+            APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID KEYCHAIN_PASSWORD
+          do
+            if [[ -z "${!name}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing required Apple release secrets: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
   release:
     name: Determine and create release
-    needs: verify
-    if: needs.verify.result == 'success'
+    needs: [verify, validate-apple-signing]
+    if: >-
+      needs.verify.result == 'success' &&
+      needs.validate-apple-signing.result == 'success'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -163,18 +194,64 @@ jobs:
         working-directory: apps/macos
         run: pnpm install --frozen-lockfile
 
+      - name: Import Developer ID Application certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          CERTIFICATE_PATH="$RUNNER_TEMP/developer-id.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/sortlytic-signing.keychain-db"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$CERTIFICATE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -t cert -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
+            | grep -F "\"$APPLE_SIGNING_IDENTITY\""
+
       - name: Build and upload macOS release assets
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: apps/macos
           tagName: ${{ needs.release.outputs.tag }}
           releaseDraft: ${{ inputs.rebuild_tag == '' }}
           prerelease: false
           args: --target ${{ matrix.target }} --bundles app,dmg
+
+      - name: Verify Developer ID signature, notarization, and Gatekeeper acceptance
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          APP="apps/macos/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Sortlytic.app"
+          test -d "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          SIGNATURE="$(codesign -dv --verbose=4 "$APP" 2>&1)"
+          grep -F "Authority=$APPLE_SIGNING_IDENTITY" <<< "$SIGNATURE"
+          grep -F "TeamIdentifier=$APPLE_TEAM_ID" <<< "$SIGNATURE"
+          if grep -Fq 'Signature=adhoc' <<< "$SIGNATURE"; then
+            echo 'Ad-hoc signatures are forbidden for public releases.' >&2
+            exit 1
+          fi
+          xcrun stapler validate "$APP"
+          spctl --assess --type execute --verbose=4 "$APP"
 
   finalize-release:
     name: Publish complete macOS release

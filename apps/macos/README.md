@@ -60,7 +60,9 @@ Use **Run workflow** and set `rebuild_tag` only to an existing `app-vX.Y.Z` tag.
 
 In a packaged Sortlytic app, open **Settings → About Sortlytic**, choose **Check for Updates**, and review the version and Release notes. Choose **Download and install** to verify and prepare the signed artifact. When it is ready, choose **Restart and update**; the updater never restarts the app automatically. Browser preview does not have updater permission.
 
-The current workflow configures Tauri updater signing but does not configure an Apple Developer ID certificate or notarization credentials. Updater signatures authenticate update artifacts; they do not replace Apple code signing or notarization, so Gatekeeper may still warn about a browser-downloaded app. Use only the official Sortlytic Release and the DMG matching the Mac architecture. If macOS blocks the verified app, follow the targeted quarantine-removal guidance in the root README; do not disable Gatekeeper system-wide.
+Public releases require both Tauri updater signing and Apple Developer ID signing with notarization. The workflow validates all Apple credentials before `semantic-release` is allowed to create a version or tag, imports the Developer ID Application certificate into a temporary keychain, and rejects an artifact unless `codesign`, notarization stapling, and Gatekeeper assessment all pass. Ad-hoc signatures are forbidden on the public release path.
+
+Configure these GitHub Actions secrets before the next release: `APPLE_CERTIFICATE` (base64-encoded Developer ID Application `.p12`), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password), `APPLE_TEAM_ID`, and `KEYCHAIN_PASSWORD`. Existing `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secrets remain required for updater signatures. Local unsigned or ad-hoc development builds are not public release candidates.
 
 For a local macOS bundle, run:
 
