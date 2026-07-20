@@ -46,6 +46,39 @@ fn persists_raw_file_and_normalized_record_atomically() {
 }
 
 #[test]
+fn audits_unmapped_raw_leaf_paths_without_promoting_them_to_account_fields() {
+  let workspace = TestWorkspace::new("unmapped-audit", &["user_search"]);
+  let run_id = workspace.insert_running_task_run();
+  let result = persist_page(
+    &workspace,
+    &run_id,
+    "user_search",
+    vec![serde_json::json!({
+      "uid": "user-audit-1",
+      "nickname": "审计账号",
+      "follower_count": 0,
+      "future/contract~field": {
+        "nested": 1
+      }
+    })],
+  )
+  .expect("record with an unknown field should persist");
+
+  assert_eq!(
+    result.raw_records[0].summary_json["unmapped_field_paths"],
+    serde_json::json!(["/future~1contract~0field/nested"])
+  );
+  assert!(result.normalized_records[0]
+    .account_fields_json
+    .get("future/contract~field")
+    .is_none());
+  assert_eq!(
+    result.normalized_records[0].account_fields_json["followers_count"],
+    0
+  );
+}
+
+#[test]
 fn normalizes_xiaohongshu_app_v2_note_author_fields() {
   let raw = serde_json::json!({
     "id": "note-1",

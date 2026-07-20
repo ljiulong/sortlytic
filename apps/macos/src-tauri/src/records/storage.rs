@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
 #[cfg(unix)]
@@ -88,9 +89,12 @@ fn persist_records(
     let raw_id = Uuid::new_v4().to_string();
     let normalized_id = format!("normalized-{raw_id}");
     let now = Utc::now().to_rfc3339();
+    let unmapped_field_paths =
+      audit_unmapped_field_paths(&record.raw_bytes, &record.normalized.field_evidence_json)?;
     let summary_json = serde_json::json!({
       "source": "tikhub",
-      "normalized_schema_version": NORMALIZED_SCHEMA_VERSION
+      "normalized_schema_version": NORMALIZED_SCHEMA_VERSION,
+      "unmapped_field_paths": unmapped_field_paths
     });
     connection
       .execute(
@@ -133,6 +137,101 @@ fn persist_records(
   }
 
   Ok(result)
+}
+
+fn audit_unmapped_field_paths(raw_bytes: &[u8], field_evidence: &Value) -> AppResult<Vec<String>> {
+  let raw: Value = serde_json::from_slice(raw_bytes).map_err(super::json_error)?;
+  let mapped_evidence = field_evidence
+    .as_object()
+    .into_iter()
+    .flatten()
+    .filter_map(|(_, evidence)| evidence.get("raw_path").and_then(Value::as_str))
+    .filter(|path| path.starts_with('/'))
+    .collect::<BTreeSet<_>>();
+  let mut leaves = BTreeSet::new();
+  collect_json_leaf_paths(&raw, "", &mut leaves);
+  Ok(
+    leaves
+      .into_iter()
+      .filter(|path| !is_mapped_raw_path(path, &mapped_evidence))
+      .collect(),
+  )
+}
+
+fn collect_json_leaf_paths(value: &Value, prefix: &str, paths: &mut BTreeSet<String>) {
+  match value {
+    Value::Object(object) => {
+      for (key, child) in object {
+        let key = key.replace('~', "~0").replace('/', "~1");
+        collect_json_leaf_paths(child, &format!("{prefix}/{key}"), paths);
+      }
+    }
+    Value::Array(items) => {
+      for (index, child) in items.iter().enumerate() {
+        collect_json_leaf_paths(child, &format!("{prefix}/{index}"), paths);
+      }
+    }
+    _ if !prefix.is_empty() => {
+      paths.insert(prefix.to_string());
+    }
+    _ => {}
+  }
+}
+
+fn is_mapped_raw_path(path: &str, evidence: &BTreeSet<&str>) -> bool {
+  if evidence.contains(path) {
+    return true;
+  }
+  const KNOWN_LEAF_SUFFIXES: &[&str] = &[
+    "/aweme_id",
+    "/cid",
+    "/comment_id",
+    "/id",
+    "/note_id",
+    "/uid",
+    "/user_id",
+    "/userid",
+    "/sec_uid",
+    "/sec_user_id",
+    "/unique_id",
+    "/username",
+    "/red_id",
+    "/author_id",
+    "/nickname",
+    "/name",
+    "/desc",
+    "/text",
+    "/content",
+    "/title",
+    "/display_title",
+    "/signature",
+    "/share_url",
+    "/url",
+    "/note_url",
+    "/link",
+    "/create_time",
+    "/create_timestamp",
+    "/publish_time",
+    "/published_at",
+    "/region",
+    "/region_code",
+    "/ip_label",
+    "/digg_count",
+    "/liked_count",
+    "/comment_count",
+    "/share_count",
+    "/collect_count",
+    "/play_count",
+    "/view_count",
+    "/follower_count",
+    "/following_count",
+  ];
+  KNOWN_LEAF_SUFFIXES
+    .iter()
+    .any(|suffix| path.ends_with(suffix))
+    || ["/hashtags/", "/tags/", "/cha_list/", "/tag_list/"]
+      .iter()
+      .any(|segment| path.contains(segment))
 }
 
 fn materialize_raw_snapshot(
