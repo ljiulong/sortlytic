@@ -1437,6 +1437,44 @@ describe('planFromBackend', () => {
     expect(result.requestCountEstimate).toBe(11)
   })
 
+  it('自然语言 Schema v4 计划保留年龄闭区间供确认页展示', () => {
+    const plan: CollectionPlanView = {
+      id: 'plan-natural-age',
+      task_id: 'task-natural-age',
+      source: 'ai_generated',
+      schema_version: 4,
+      plan_json: {
+        platforms: ['douyin'],
+        account_source: 'user_search',
+        selected_fields: ['age'],
+        age_range: { min: 18, max: 35 },
+        record_limit: 10,
+        budget_limit: { currency: 'USD', amount_micros: 1_000_000 },
+        steps: [],
+      },
+      validation_status: 'valid',
+      validation_errors_json: [],
+      cost_estimate_json: { request_count_estimate: 11 },
+      confirmed_by_user: false,
+      created_at: '2026-07-20T00:00:00Z',
+      updated_at: '2026-07-20T00:00:00Z',
+    }
+
+    const result = planFromBackend({
+      platform: '抖音',
+      dataType: '账号数据',
+      regionCode: '',
+      keyword: '',
+      range: '',
+      maxRecords: 0,
+      budget: 0,
+    }, plan)
+
+    expect(result.ageRangeEnabled).toBe(true)
+    expect(result.ageMin).toBe(18)
+    expect(result.ageMax).toBe(35)
+  })
+
   it('确认视图使用后端多平台计划且不虚构记录数和金额预算', () => {
     const plan: CollectionPlanView = {
       id: 'plan-1',

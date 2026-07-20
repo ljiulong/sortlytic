@@ -531,6 +531,7 @@ export function planFromBackend(values: CollectionFormPayload, plan: CollectionP
   const genders = stringArrayFromJson(plan.plan_json.gender_filter).filter(
     (value): value is 'male' | 'female' | 'other' => ['male', 'female', 'other'].includes(value),
   )
+  const ageRange = ageRangeFromPlan(plan.plan_json.age_range)
 
   return {
     ...values,
@@ -548,6 +549,9 @@ export function planFromBackend(values: CollectionFormPayload, plan: CollectionP
     range: nonEmptyString(plan.plan_json.time_range) ?? '未提供时间范围',
     maxRecords: recordLimit ?? (useSubmittedLimits ? values.maxRecords : 0),
     budget: budgetMicros ? budgetMicros / 1_000_000 : (useSubmittedLimits ? values.budget : 0),
+    ageRangeEnabled: Boolean(ageRange),
+    ageMin: ageRange?.min,
+    ageMax: ageRange?.max,
     genderFilterEnabled: genders.length > 0,
     genders,
     status: plan.validation_status === 'valid' ? '等待确认' : '待人工确认',
@@ -563,6 +567,17 @@ export function planFromBackend(values: CollectionFormPayload, plan: CollectionP
     budgetMicros,
     pricingReady: false,
   }
+}
+
+function ageRangeFromPlan(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const min = (value as Record<string, unknown>).min
+  const max = (value as Record<string, unknown>).max
+  if (!Number.isInteger(min) || !Number.isInteger(max)) return undefined
+  const normalizedMin = min as number
+  const normalizedMax = max as number
+  if (normalizedMin < 0 || normalizedMax > 130 || normalizedMin > normalizedMax) return undefined
+  return { min: normalizedMin, max: normalizedMax }
 }
 
 async function preparePlanPricing(plan: RuntimeCollectionPlan) {
