@@ -779,12 +779,12 @@ describe('collection form controls', () => {
       platform: 'TikTok',
       range: '30',
     }).success).toBe(true)
-    expect(collectionFormSchema.safeParse({ ...baseInput, range: '30' }).success).toBe(false)
+    expect(collectionFormSchema.safeParse({ ...baseInput, range: '30' }).success).toBe(true)
     expect(collectionFormSchema.safeParse({
       ...baseInput,
       platform: '抖音',
       range: '30',
-    }).success).toBe(false)
+    }).success).toBe(true)
     expect(collectionFormSchema.safeParse({
       ...baseInput,
       range: '最近一个月',

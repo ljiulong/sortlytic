@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   AGE_RANGE_LIMITS,
+  collectionFormSchema,
   collectionDataTypeOptions,
   countryRegionOptions,
 } from './collection-options'
@@ -14,6 +15,32 @@ describe('collectionDataTypeOptions', () => {
       'account_posts',
       'comments',
     ])
+  })
+})
+
+describe('collectionFormSchema time range', () => {
+  const base = {
+    accountSource: 'user_search',
+    selectedFields: [],
+    dataType: '关键词搜索',
+    dataTypes: ['keyword_search'],
+    regionCode: '',
+    keyword: 'pet supplies',
+    maxRecords: 10,
+    budget: 0.1,
+    ageRangeEnabled: false,
+    genderFilterEnabled: false,
+    genders: [],
+  }
+
+  it('只校验规范时间值，来源是否支持由能力目录决定', () => {
+    for (const platform of ['TikTok', '抖音', '小红书'] as const) {
+      for (const range of ['1', '7', '30', '180']) {
+        expect(collectionFormSchema.safeParse({ ...base, platform, range }).success).toBe(true)
+      }
+    }
+    expect(collectionFormSchema.safeParse({ ...base, platform: 'TikTok', range: '最近一周' }).success)
+      .toBe(false)
   })
 })
 

@@ -57,14 +57,7 @@ export function getCollectionDataTypeOptions(t: CollectionTranslator) {
 
 export const AGE_RANGE_LIMITS = { min: 0, max: 130 } as const
 
-const PLATFORM_TIME_RANGE_VALUES: Record<
-  (typeof platformOptions)[number],
-  readonly string[]
-> = {
-  TikTok: ['1', '7', '30', '180'],
-  抖音: ['1', '7', '180'],
-  小红书: ['1', '7', '180'],
-}
+const CANONICAL_TIME_RANGE_VALUES = ['1', '7', '30', '180'] as const
 
 export const genderFilterOptions = [
   { value: 'female', labelKey: 'options.gender.female' },
@@ -169,7 +162,9 @@ export function createCollectionFormSchema(t: CollectionTranslator) {
           path: ['range'],
           message: t('validation.rangeRequired'),
         })
-      } else if (!PLATFORM_TIME_RANGE_VALUES[values.platform].includes(values.range)) {
+      } else if (!CANONICAL_TIME_RANGE_VALUES.includes(
+        values.range as (typeof CANONICAL_TIME_RANGE_VALUES)[number],
+      )) {
         context.addIssue({
           code: 'custom',
           path: ['range'],
