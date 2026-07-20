@@ -402,6 +402,67 @@ fn version_four_account_plan_saves_scope_cost_and_confirmation() {
 }
 
 #[test]
+fn version_four_confirmation_rejects_endpoint_params_outside_the_runtime_allowlist() {
+  let root_path = unique_temp_workspace("tasks-v4-endpoint-allowlist");
+  create_workspace("v4 白名单测试", &root_path).expect("workspace should be created");
+  let task = create_collection_task(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "小红书用户搜索".to_string(),
+      source_type: "form".to_string(),
+      platforms: vec!["xiaohongshu".to_string()],
+      data_types: vec!["account".to_string()],
+    },
+  )
+  .expect("v4 account task should create");
+  let mut draft = crate::collection::generate_account_collection_plan(
+    crate::collection::AccountFormCollectionPlanRequest {
+      platform: "xiaohongshu".to_string(),
+      account_source: "user_search".to_string(),
+      selected_fields: Vec::new(),
+      enrichment_policy: "auto_costed".to_string(),
+      params: serde_json::json!({ "keyword": "宠物园区", "region": "CN", "time_range": "7" }),
+      age_range: None,
+      gender_filter: None,
+      request_limit: Some(1),
+      record_limit: Some(1),
+      budget_limit_micros: Some(1_000_000),
+    },
+  )
+  .expect("v4 account draft should generate");
+  draft.plan_json["steps"][0]["params"]["region"] = serde_json::json!("CN");
+  draft.plan_json["steps"][0]["params"]["time_range"] = serde_json::json!("7");
+
+  let plan = save_collection_plan(
+    &root_path,
+    SaveCollectionPlanInput {
+      task_id: task.id.clone(),
+      source: draft.source,
+      plan_json: draft.plan_json,
+      validation_status: "valid".to_string(),
+      validation_errors_json: Some(serde_json::json!([])),
+      cost_estimate_json: Some(draft.cost_estimate_json),
+    },
+  )
+  .expect("invalid plan should remain available for editing");
+
+  assert_eq!(plan.validation_status, "needs_review");
+  assert!(plan
+    .validation_errors_json
+    .as_array()
+    .is_some_and(|errors| errors.iter().any(|error| {
+      error
+        .as_str()
+        .is_some_and(|message| message.contains("参数 region 不在 endpoint 白名单内"))
+    })));
+  let error = confirm_collection_plan(&root_path, &task.id, &plan.id)
+    .expect_err("allowlist-invalid plan must not confirm");
+  assert_eq!(error.code, AppErrorCode::ValidationError);
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn persisted_cost_estimate_counts_the_confirmed_request_limit() {
   let root_path = unique_temp_workspace("request-limit-cost");
   create_workspace("任务测试", &root_path).expect("workspace should be created");

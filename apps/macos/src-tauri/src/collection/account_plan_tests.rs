@@ -71,6 +71,41 @@ fn direct_account_reuses_the_discovery_profile_response() {
 }
 
 #[test]
+fn xiaohongshu_user_search_keeps_local_filters_out_of_endpoint_params() {
+  let mut plan_request = request("xiaohongshu", "user_search");
+  plan_request.params = serde_json::json!({
+    "keyword": "宠物园区",
+    "region": "CN",
+    "time_range": "7"
+  });
+  let plan = generate_account_collection_plan(plan_request)
+    .expect("plan should generate")
+    .plan_json;
+
+  assert_eq!(plan["region"], "CN");
+  assert_eq!(plan["time_range"], "7");
+  assert_eq!(
+    plan["steps"][0]["params"],
+    serde_json::json!({ "keyword": "宠物园区" })
+  );
+
+  let mut tampered = plan;
+  tampered["steps"][0]["params"]["region"] = serde_json::json!("CN");
+  tampered["steps"][0]["params"]["time_range"] = serde_json::json!("7");
+  let validation = validate_collection_plan_v4(&tampered);
+
+  assert!(!validation.valid);
+  assert!(validation
+    .errors
+    .iter()
+    .any(|error| error.contains("参数 region 不在 endpoint 白名单内")));
+  assert!(validation
+    .errors
+    .iter()
+    .any(|error| error.contains("参数 time_range 不在 endpoint 白名单内")));
+}
+
+#[test]
 fn douyin_search_reuses_direct_fields_and_deduplicates_extended_profile() {
   let mut request = request("douyin", "user_search");
   request.params = serde_json::json!({ "keyword": "汽车" });

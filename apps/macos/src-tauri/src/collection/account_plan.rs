@@ -6,9 +6,9 @@ use serde_json::{Map, Value};
 use super::account_capabilities::source_covers_field;
 use super::account_input::normalize_account_source_input;
 use super::{
-  get_account_collection_capabilities, AccountCollectionCapabilityView, AccountFieldAvailability,
-  AccountSourceInputKind, AgeRangeInput, CollectionPlanDraftView, CollectionPlanValidationResult,
-  PaginationMode,
+  get_account_collection_capabilities, validate_collection_params, AccountCollectionCapabilityView,
+  AccountFieldAvailability, AccountSourceInputKind, AgeRangeInput, CollectionPlanDraftView,
+  CollectionPlanValidationResult, PaginationMode,
 };
 use crate::domain::{AppError, AppErrorStage, AppResult};
 
@@ -54,6 +54,7 @@ pub fn generate_account_collection_plan(
   let source_params = normalize_account_source_params(
     &capability.platform,
     &source.key,
+    &source.endpoint_key,
     source.input_kind,
     &request.params,
   )?;
@@ -373,6 +374,25 @@ pub fn validate_collection_plan_v4(plan_json: &Value) -> CollectionPlanValidatio
         if step.get("platform").and_then(Value::as_str) != platform {
           errors.push(format!("{prefix}.platform 与顶层平台不一致"));
         }
+        if let (Some(step_platform), Some(data_type), Some(params)) = (
+          step.get("platform").and_then(Value::as_str),
+          step.get("data_type").and_then(Value::as_str),
+          step.get("params"),
+        ) {
+          match validate_collection_params(step_platform, data_type, params.clone()) {
+            Ok(validation) => {
+              for field in validation.missing_fields {
+                errors.push(format!("{prefix}.params 缺少 {field}"));
+              }
+              for error in validation.errors {
+                errors.push(format!("{prefix}.params：{error}"));
+              }
+            }
+            Err(error) => errors.push(format!("{prefix}.params：{}", error.message)),
+          }
+        } else if step.get("params").is_none() {
+          errors.push(format!("{prefix}.params 必须是对象"));
+        }
         let step_request_limit = step
           .get("request_limit")
           .and_then(Value::as_i64)
@@ -614,6 +634,7 @@ fn enrichment_input_field(platform: &str, operation_key: &str) -> &'static str {
 fn normalize_account_source_params(
   platform: &str,
   account_source: &str,
+  endpoint_key: &str,
   input_kind: AccountSourceInputKind,
   params: &Value,
 ) -> AppResult<Value> {
@@ -637,9 +658,14 @@ fn normalize_account_source_params(
     source_input.key.as_str().to_string(),
     Value::String(source_input.value),
   )]);
+  let endpoint = super::capabilities::endpoint_for(platform, endpoint_data_type(endpoint_key))?;
   for key in ["region", "time_range"] {
-    if let Some(value) = params.get(key).cloned().filter(|value| !value.is_null()) {
-      normalized.insert(key.to_string(), value);
+    let is_allowed =
+      endpoint.required_params.contains(&key) || endpoint.optional_params.contains(&key);
+    if is_allowed {
+      if let Some(value) = params.get(key).cloned().filter(|value| !value.is_null()) {
+        normalized.insert(key.to_string(), value);
+      }
     }
   }
   Ok(Value::Object(normalized))
