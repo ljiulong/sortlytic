@@ -21,7 +21,10 @@ pub mod workspace;
 
 use std::{fs, path::PathBuf};
 
-use ai::{AiRunView, GenerateCollectionPlanFromTextInput, GeneratedCollectionPlanView};
+use ai::{
+  AiRunView, GenerateCollectionPlanFromTextInput, GeneratedCollectionPlanView,
+  NaturalParseAttemptView,
+};
 use api_profile_commands::{
   activate_api_profile, delete_api_profile, get_api_profile_registry, save_api_profile,
   test_api_profile,
@@ -89,11 +92,16 @@ fn ensure_default_workspace_for_state(
   root_path: PathBuf,
   state: &AppState,
 ) -> AppResult<WorkspaceSummary> {
-  let summary = if let Some(active) = state.active_workspace() {
+  let active_workspace = state.active_workspace();
+  let is_initial_activation = active_workspace.is_none();
+  let summary = if let Some(active) = active_workspace {
     workspace::open_workspace(active.root_path)?
   } else {
     workspace::ensure_workspace("本地研究工作区", root_path)?
   };
+  if is_initial_activation {
+    ai::mark_interrupted_task_intents(&summary.root_path)?;
+  }
   state.set_active_workspace(workspace_context_from_summary(&summary));
   Ok(summary)
 }
@@ -104,6 +112,7 @@ fn open_workspace(
   state: tauri::State<'_, AppState>,
 ) -> AppResult<WorkspaceSummary> {
   let summary = workspace::open_workspace(root_path)?;
+  ai::mark_interrupted_task_intents(&summary.root_path)?;
   state.set_active_workspace(workspace_context_from_summary(&summary));
   Ok(summary)
 }
@@ -111,6 +120,15 @@ fn open_workspace(
 #[tauri::command]
 fn get_active_workspace(state: tauri::State<'_, AppState>) -> AppResult<Option<WorkspaceContext>> {
   Ok(state.active_workspace())
+}
+
+#[tauri::command]
+fn list_latest_task_intents(
+  root_path: Option<String>,
+  state: tauri::State<'_, AppState>,
+) -> AppResult<Vec<NaturalParseAttemptView>> {
+  let root_path = resolve_workspace_root(root_path, &state)?;
+  ai::list_latest_task_intents(root_path)
 }
 
 #[tauri::command]
@@ -426,6 +444,7 @@ pub fn run() {
       ensure_default_workspace,
       open_workspace,
       get_active_workspace,
+      list_latest_task_intents,
       run_workspace_health_check,
       close_workspace,
       get_api_profile_registry,
