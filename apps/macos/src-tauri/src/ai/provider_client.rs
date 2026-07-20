@@ -9,7 +9,6 @@ use crate::api_profiles::{AiApiFormat, AiProviderType};
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 
 use super::collection_intent_schema::collection_intent_schema;
-use super::collection_plan_schema::collection_plan_schema;
 
 const MAX_MODEL_RESPONSE_BYTES: u64 = 2 * 1024 * 1024;
 
@@ -60,20 +59,6 @@ pub(crate) fn call_model(
   parse_response(config.api_format, response, latency_ms)
 }
 
-pub(crate) fn collection_plan_request(prompt_content: &str, intent_text: &str) -> ModelRequest {
-  ModelRequest {
-    system_prompt: format!(
-      "{}\n\n{}",
-      prompt_content,
-      authoritative_collection_contract()
-    ),
-    user_prompt: json!({ "input_json": { "text": intent_text } }).to_string(),
-    schema_name: "collection_plan_v4".to_string(),
-    output_schema: collection_plan_schema(),
-  }
-}
-
-#[allow(dead_code)]
 pub(crate) fn collection_intent_request(prompt_content: &str, intent_text: &str) -> ModelRequest {
   ModelRequest {
     system_prompt: format!("{prompt_content}\n\n{}", authoritative_intent_contract()),
@@ -99,18 +84,6 @@ pub(crate) fn connection_test_request() -> ModelRequest {
       "required": ["ok"]
     }),
   }
-}
-
-fn authoritative_collection_contract() -> &'static str {
-  r#"你必须把 input_json.text 转为 collection_plan_v4 账号计划 JSON，只输出 JSON，不得输出 Markdown。
-每条计划只能选择 tiktok、douyin、xiaohongshu 中的一个平台和一个 account_source。三平台支持 user_search、content_search_authors、direct_account、item_author、comment_authors；followers 和 followings 只支持 TikTok、抖音；similar_accounts 只支持 TikTok。
-发现步骤 operation_key 必须为 discover.<account_source>，role 为 discovery。补全步骤只能使用 enrich.profile、enrich.extended_demographics、enrich.account_country、enrich.account_posts，role 为 enrichment，并依赖 discover。
-TikTok 和小红书不得选择 gender、age；抖音选择 gender 或 age 时必须共用 enrich.extended_demographics。TikTok 的 country_region 使用 enrich.account_country。不得生成平台不支持的来源、字段或补全步骤。
-基础身份字段由系统固定采集，不放入 selected_fields。selected_fields 只包含用户明确要求的公开业务字段；不得把分页游标、日志 ID、缓存 URL、临时 CDN 地址或签名令牌作为业务字段。
-output_rules 必须区分未选择的“任务未设置”和已选择但未返回的“未采集到”，并要求逐字段证据。数值 0 是合法值；性别 0、年龄 -1 或超出 0 至 130 为未知。
-年龄和性别只允许使用公开接口明确返回值，禁止根据头像、姓名、简介或模型推断；筛选必须在账号合并后执行，未知值不能通过已启用筛选。
-用户给出的预算必须精确换算为 USD 微美元写入 budget_limit.amount_micros，不得使用固定默认预算覆盖用户输入。
-任何缺失或不确定字段必须写入 missing_fields，不得猜测；requires_user_confirmation 必须为 true。"#
 }
 
 fn authoritative_intent_contract() -> &'static str {
@@ -520,9 +493,9 @@ mod tests {
   }
 
   #[test]
-  fn official_openai_sends_the_strict_collection_plan_schema() {
+  fn official_openai_sends_the_strict_collection_intent_schema() {
     let response_body = json!({
-      "choices": [{ "message": { "content": "{\"schema_version\":4}" } }]
+      "choices": [{ "message": { "content": "{\"schema_version\":1}" } }]
     })
     .to_string();
     let (base_url, server) = serve_once(200, response_body, |request| {
@@ -540,22 +513,24 @@ mod tests {
         Some(&json!(true))
       );
       assert_eq!(
-        payload.pointer(
-          "/response_format/json_schema/schema/properties/steps/items/properties/params/additionalProperties"
-        ),
-        Some(&json!(false))
+        payload.pointer("/response_format/json_schema/schema/properties/schema_version/const"),
+        Some(&json!(1))
       );
       assert_eq!(
-        payload.pointer(
-          "/response_format/json_schema/schema/properties/output_rules/additionalProperties"
-        ),
+        payload.pointer("/response_format/json_schema/schema/additionalProperties"),
         Some(&json!(false))
       );
+      assert!(payload
+        .pointer("/response_format/json_schema/schema/properties/steps")
+        .is_none());
+      assert!(payload
+        .pointer("/response_format/json_schema/schema/properties/endpoint_key")
+        .is_none());
     });
 
     call_model(
       &config(AiProviderType::Openai, base_url),
-      &collection_plan_request("真实提示词正文", "采集 TikTok 汽车账号"),
+      &collection_intent_request("真实提示词正文", "采集 TikTok 汽车账号"),
     )
     .expect("official OpenAI request should succeed");
     server.join().expect("test server should finish");

@@ -14,7 +14,6 @@ use crate::workspace::{open_workspace_database, DATABASE_FILE_NAME};
 
 mod attempts;
 pub(crate) mod collection_intent_schema;
-pub(crate) mod collection_plan_schema;
 mod generation;
 pub(crate) mod intent_plan;
 pub(crate) mod provider_client;
