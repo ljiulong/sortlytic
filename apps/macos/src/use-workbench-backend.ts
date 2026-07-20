@@ -76,6 +76,7 @@ export type CollectionFormPayload = {
   platform: Platform
   dataType: DataType
   regionCode: string
+  queryLocale?: string
   keyword: string
   range: string
   maxRecords: number
@@ -571,6 +572,7 @@ function naturalAttemptToRuntimePlan(attempt: SuccessfulNaturalTaskAttempt) {
       platform: toUiPlatform(intent?.platform ?? ''),
       dataType: toUiDataType('account'),
       regionCode: intent?.region_code ?? '',
+      queryLocale: intent?.query_locale ?? '',
       keyword: intent?.source_input ?? '',
       range: intent?.time_range_days ? String(intent.time_range_days) : '未提供时间范围',
       maxRecords: intent?.record_limit ?? 0,
@@ -628,6 +630,7 @@ export function planFromBackend(values: CollectionFormPayload, plan: CollectionP
       ? selectedFields
       : values.selectedFields,
     regionCode: regionFromPlan(plan.plan_json.region),
+    queryLocale: nonEmptyString(plan.plan_json.query_locale) ?? values.queryLocale,
     keyword: targetFromPlan(plan.plan_json) || '未提供采集对象',
     range: nonEmptyString(plan.plan_json.time_range) ?? '未提供时间范围',
     maxRecords: recordLimit ?? (useSubmittedLimits ? values.maxRecords : 0),

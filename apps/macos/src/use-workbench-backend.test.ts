@@ -775,6 +775,7 @@ describe('计划生成失败的草稿清理', () => {
     )).resolves.toMatchObject({
       taskId: 'task-natural-1',
       keyword: 'pet supplies',
+      queryLocale: 'en-GB',
       regionCode: 'GB',
       pricingReady: false,
     })
