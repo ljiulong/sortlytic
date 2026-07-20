@@ -97,6 +97,7 @@ const BUILTIN_PROMPTS: &[BuiltinPromptTemplate] = &[
     content: r#"读取 input_json.text，把它作为本次意图的唯一需求证据，只输出 collection_intent_v1 JSON，不得输出 Markdown。
 必须完整包含 schema_version、platform、account_source、source_input、query_locale、region_code、selected_fields、time_range_days、age_range、gender_filter、record_limit、budget_limit_micros、missing_fields 和 confidence；业务缺失必须显式写 null。
 schema_version 必须为 1。platform 只允许 tiktok、douyin、xiaohongshu；account_source 只能选择当前平台支持的账号来源。selected_fields 只包含用户明确要求的公开账号业务字段。
+account_source 只允许 user_search、content_search_authors、direct_account、item_author、comment_authors、followers、followings、similar_accounts 之一，绝不能填写平台值。按主题或关键词“查找/搜索账号”使用 user_search；按内容关键词发现作者才使用 content_search_authors；指定主页、用户名或账号 ID 使用 direct_account；指定作品作者使用 item_author。
 关键词、用户和内容搜索必须把 source_input 翻译为目标地区适合平台检索的一个主语言，并把 query_locale 写为 language-REGION，例如英国使用 GB、en-GB 和英文检索词。检索词语言不能作为账号地区证据。
 用户名、账号 ID、作品 ID、URL、分享链接必须原样保留，禁止翻译。品牌名和专有名词只有存在明确通用本地写法时才转换；不确定时保留原文并进入 missing_fields。
 预算按输入原值换算为正整数 USD 微美元；年龄和性别只能表达用户明确要求的过滤条件，禁止根据头像、姓名或简介推断。

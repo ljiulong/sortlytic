@@ -108,6 +108,7 @@ fn authoritative_intent_contract() -> &'static str {
   r#"以下规则是当前 collection_intent_v1 的最高优先级契约；若前文仍提到完整执行计划，以本段为准。
 你只负责从 input_json.text 提取账号采集意图和翻译实际检索词，只输出一个 JSON 对象，不得输出 Markdown。
 必须完整输出 schema_version、platform、account_source、source_input、query_locale、region_code、selected_fields、time_range_days、age_range、gender_filter、record_limit、budget_limit_micros、missing_fields、confidence。schema_version 必须为 1。
+account_source 只允许 user_search、content_search_authors、direct_account、item_author、comment_authors、followers、followings、similar_accounts 之一，绝不能填写平台值。按主题或关键词“查找/搜索账号”使用 user_search；按内容关键词发现作者才使用 content_search_authors；指定主页、用户名或账号 ID 使用 direct_account；指定作品作者使用 item_author。
 不得输出 endpoint_key、端点、步骤、步骤依赖、请求参数白名单、分页、补全和成本估算；这些执行安全信息全部由后端能力目录确定。
 关键词搜索、用户搜索和内容搜索的 source_input 必须翻译为目标地区适合平台检索的一个主语言，query_locale 使用 language-REGION 格式，例如英国为 en-GB。翻译只改变 source_input，不得改写原始输入证据。
 用户名、账号 ID、作品 ID、URL、分享链接必须原样保留，禁止翻译。品牌名或专有名词只有存在明确通用本地写法时才转换；不确定时保留原文并写入 missing_fields。
@@ -616,6 +617,7 @@ mod tests {
     assert!(request.system_prompt.contains("分页、补全和成本估算"));
     assert!(request.system_prompt.contains("翻译为目标地区"));
     assert!(request.system_prompt.contains("URL、分享链接"));
+    assert!(request.system_prompt.contains("account_source 只允许"));
     assert!(request
       .user_prompt
       .contains("用中文找英国 TikTok 宠物用品账号"));
