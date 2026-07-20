@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import type { BackendProblem } from './backend-problem'
 import type { NaturalParseState } from './natural-parse-state'
+import './NaturalParseFeedback.css'
 
 type NaturalParseFeedbackProps = {
   state: NaturalParseState
