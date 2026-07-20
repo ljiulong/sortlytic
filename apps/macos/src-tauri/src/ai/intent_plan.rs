@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 
 use super::CollectionIntentV1;
 use crate::collection::{
@@ -153,13 +153,18 @@ pub(crate) fn build_collection_plan_from_intent(
   });
   intent.selected_fields = selected_fields;
   match plan {
-    Ok(plan) if plan.validation_status == "valid" => IntentPlanBuildResult {
-      intent,
-      missing_fields,
-      issues: Vec::new(),
-      validation_status: "valid".to_string(),
-      collection_plan: Some(plan),
-    },
+    Ok(mut plan) if plan.validation_status == "valid" => {
+      if let Some(query_locale) = intent.query_locale.as_deref() {
+        plan.plan_json["query_locale"] = Value::String(query_locale.to_string());
+      }
+      IntentPlanBuildResult {
+        intent,
+        missing_fields,
+        issues: Vec::new(),
+        validation_status: "valid".to_string(),
+        collection_plan: Some(plan),
+      }
+    }
     Ok(plan) => {
       let issues = plan
         .validation_errors_json
@@ -282,6 +287,7 @@ mod tests {
     assert_eq!(plan.plan_json["platforms"], json!(["tiktok"]));
     assert_eq!(plan.plan_json["account_source"], "user_search");
     assert_eq!(plan.plan_json["region"], "GB");
+    assert_eq!(plan.plan_json["query_locale"], "en-GB");
     assert_eq!(
       plan.plan_json["steps"][0]["endpoint_key"],
       "tiktok.user_search"
