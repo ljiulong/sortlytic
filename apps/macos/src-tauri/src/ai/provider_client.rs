@@ -2,6 +2,7 @@ use std::io::Read;
 use std::time::Instant;
 
 use reqwest::blocking::{Client, RequestBuilder, Response};
+use reqwest::header::RETRY_AFTER;
 use reqwest::{StatusCode, Url};
 use serde_json::{json, Value};
 
@@ -280,9 +281,15 @@ fn parse_response(
   latency_ms: i64,
 ) -> AppResult<ModelResponse> {
   let status = response.status();
+  let retry_after = response
+    .headers()
+    .get(RETRY_AFTER)
+    .and_then(|value| value.to_str().ok())
+    .and_then(safe_retry_after)
+    .map(ToString::to_string);
   let body = read_limited_body(response)?;
   if !status.is_success() {
-    return Err(status_error(status));
+    return Err(status_error(status, retry_after.as_deref()));
   }
   let envelope: Value = serde_json::from_str(&body).map_err(|_| {
     model_error(
@@ -424,7 +431,7 @@ fn integer_at(value: &Value, pointer: &str) -> Option<i64> {
   })
 }
 
-fn status_error(status: StatusCode) -> AppError {
+fn status_error(status: StatusCode, retry_after: Option<&str>) -> AppError {
   let (code, message, retryable) = match status.as_u16() {
     401 | 403 => (
       AppErrorCode::ModelAuthError,
@@ -447,7 +454,23 @@ fn status_error(status: StatusCode) -> AppError {
       false,
     ),
   };
-  model_error(code, message, retryable).with_safe_detail("http_status", status.as_u16().to_string())
+  let mut error = model_error(code, message, retryable)
+    .with_safe_detail("http_status", status.as_u16().to_string());
+  if status == StatusCode::TOO_MANY_REQUESTS {
+    if let Some(retry_after) = retry_after.and_then(safe_retry_after) {
+      error = error.with_safe_detail("retry_after", retry_after);
+    }
+  }
+  error
+}
+
+fn safe_retry_after(value: &str) -> Option<&str> {
+  let value = value.trim();
+  (!value.is_empty()
+    && value.len() <= 64
+    && (value.chars().all(|character| character.is_ascii_digit())
+      || chrono::DateTime::parse_from_rfc2822(value).is_ok()))
+  .then_some(value)
 }
 
 fn transport_error(error: reqwest::Error) -> AppError {
@@ -629,6 +652,18 @@ mod tests {
     server.join().expect("test server should finish");
 
     assert_eq!(error.code, AppErrorCode::ModelSchemaError);
+  }
+
+  #[test]
+  fn rate_limit_error_preserves_only_safe_retry_after_guidance() {
+    let error = status_error(StatusCode::TOO_MANY_REQUESTS, Some("17"));
+
+    assert_eq!(error.code, AppErrorCode::ModelRateLimit);
+    assert!(error.retryable);
+    assert_eq!(
+      error.safe_details.get("retry_after").map(String::as_str),
+      Some("17")
+    );
   }
 
   #[test]
