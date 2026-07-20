@@ -96,6 +96,7 @@ export type CollectionDataTypeCapabilityView = {
 export type AccountSourceInputKind = 'keyword' | 'account' | 'item'
 export type AccountFieldAvailability = 'direct' | 'enrichment' | 'conditional' | 'unsupported'
 export type AccountFieldValueType = 'text' | 'integer' | 'boolean' | 'text_list' | 'timestamp'
+export type FilterExecution = 'provider' | 'local' | 'unsupported'
 
 export type AccountSourceCapabilityView = {
   key: string
@@ -105,6 +106,9 @@ export type AccountSourceCapabilityView = {
   input_kind: AccountSourceInputKind
   endpoint_key: string
   pagination_mode: 'single' | 'cursor'
+  region_filter?: FilterExecution
+  time_range_filter?: FilterExecution
+  time_ranges?: string[]
   max_page_size: number
   max_request_count: number
 }

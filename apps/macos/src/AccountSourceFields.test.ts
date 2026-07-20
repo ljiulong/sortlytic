@@ -4,6 +4,7 @@ import type {
   AccountSourceCapabilityView,
 } from './backend-api'
 import {
+  accountSourceFilterCapabilities,
   reconcileAccountFields,
   sourceInputCopy,
 } from './account-source-rules'
@@ -87,6 +88,31 @@ describe('AccountSourceFields state rules', () => {
     )).toEqual({
       fields: ['avatar_url'],
       removedCount: 2,
+    })
+  })
+
+  it('按当前账号来源返回筛选能力且未知能力默认关闭', () => {
+    const sourceCapability = {
+      ...source('user_search', 'keyword'),
+      region_filter: 'unsupported' as const,
+      time_range_filter: 'local' as const,
+      time_ranges: ['1', '7', '30', '180'],
+    }
+    const withSource = {
+      ...capability,
+      platform: 'xiaohongshu',
+      account_sources: [sourceCapability],
+    }
+
+    expect(accountSourceFilterCapabilities(withSource, 'user_search')).toEqual({
+      regionFilter: 'unsupported',
+      timeRangeFilter: 'local',
+      timeRanges: ['1', '7', '30', '180'],
+    })
+    expect(accountSourceFilterCapabilities(withSource, 'direct_account')).toEqual({
+      regionFilter: 'unsupported',
+      timeRangeFilter: 'unsupported',
+      timeRanges: [],
     })
   })
 })

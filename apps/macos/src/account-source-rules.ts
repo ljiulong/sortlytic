@@ -1,7 +1,31 @@
 import type {
   AccountCollectionCapabilityView,
   AccountSourceCapabilityView,
+  FilterExecution,
 } from './backend-api'
+
+export type AccountSourceFilterCapabilities = {
+  regionFilter: FilterExecution
+  timeRangeFilter: FilterExecution
+  timeRanges: string[]
+}
+
+export function accountSourceFilterCapabilities(
+  capability?: AccountCollectionCapabilityView,
+  sourceKey?: string,
+): AccountSourceFilterCapabilities {
+  const source = capability?.account_sources.find((candidate) => candidate.key === sourceKey)
+  const regionFilter = normalizeFilterExecution(source?.region_filter)
+  const timeRangeFilter = normalizeFilterExecution(source?.time_range_filter)
+  const timeRanges = timeRangeFilter === 'unsupported'
+    ? []
+    : [...new Set(source?.time_ranges?.filter((value) => ['1', '7', '30', '180'].includes(value)) ?? [])]
+  return { regionFilter, timeRangeFilter, timeRanges }
+}
+
+function normalizeFilterExecution(value?: string): FilterExecution {
+  return value === 'provider' || value === 'local' ? value : 'unsupported'
+}
 
 export function sourceInputCopy(source?: AccountSourceCapabilityView) {
   if (!source) return { label: '来源参数', placeholder: '请先选择账号来源' }
