@@ -383,10 +383,15 @@ fn active_account_filters(
     .filter_map(Value::as_str)
     .map(ToString::to_string)
     .collect::<BTreeSet<_>>();
+  let evidence_filters_enabled = plan_json.get("schema_version").and_then(Value::as_i64) == Some(4);
   Ok(AccountFilters {
     gender: (!genders.is_empty()).then_some(genders),
-    region: plan_region_filter(&plan_json),
-    time_range_days: plan_time_range_filter(&plan_json),
+    region: evidence_filters_enabled
+      .then(|| plan_region_filter(&plan_json))
+      .unwrap_or(EvidenceFilter::Disabled),
+    time_range_days: evidence_filters_enabled
+      .then(|| plan_time_range_filter(&plan_json))
+      .unwrap_or(EvidenceFilter::Disabled),
     evaluated_at: timestamp_utc(collected_at),
   })
 }

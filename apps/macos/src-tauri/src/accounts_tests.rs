@@ -835,6 +835,7 @@ fn set_account_filters(connection: &Connection, region: &str, time_range_days: i
     .execute(
       "INSERT INTO collection_plan (id, plan_json) VALUES ('plan-1', ?1)",
       [serde_json::json!({
+        "schema_version": 4,
         "region": region,
         "time_range": time_range_days.to_string()
       })
