@@ -50,7 +50,7 @@ import {
   toneForPlanStatus,
 } from './collection-plan-localization'
 import type { RuntimeCollectionPlan } from './use-workbench-backend'
-import type { DataType } from './workbench-data'
+import type { DataType, Platform } from './workbench-data'
 
 export { StatusPill }
 
@@ -58,6 +58,12 @@ export type CollectionFormInput = z.input<typeof collectionFormSchema>
 export type CollectionFormValues = z.output<typeof collectionFormSchema>
 
 const emptySelectedFields: string[] = []
+
+function backendPlatformForUi(platform: Platform) {
+  if (platform === 'TikTok') return 'tiktok'
+  if (platform === '抖音') return 'douyin'
+  return 'xiaohongshu'
+}
 
 const legacySourceTypes: Record<AccountSourceKey, {
   dataType: DataType
@@ -573,8 +579,11 @@ export function CollectionPlanPreview({
     : undefined
   const selectedFieldCount = plan.selectedFields?.length ?? 0
   const selectedFieldSet = new Set(plan.selectedFields ?? [])
-  const sourceAwareEnrichmentGroups = accountCapability && plan.accountSource
-    ? new Set(accountCapability.fields
+  const matchingAccountCapability = accountCapability?.platform === backendPlatformForUi(plan.platform)
+    ? accountCapability
+    : undefined
+  const sourceAwareEnrichmentGroups = matchingAccountCapability && plan.accountSource
+    ? new Set(matchingAccountCapability.fields
       .filter((field) => selectedFieldSet.has(field.key)
         && field.required_operation_keys.length > 0
         && !field.covered_by_source_keys?.includes(plan.accountSource ?? ''))
@@ -584,11 +593,7 @@ export function CollectionPlanPreview({
     ? accountFieldGroups
       .filter((group) => sourceAwareEnrichmentGroups.has(group.key))
       .map((group) => t(`accountFieldGroups.${group.key}`))
-    : (plan.pricingEndpoints?.length ?? 0) > 1
-      ? accountFieldGroups
-        .filter((group) => group.fields.some((field) => selectedFieldSet.has(field)))
-        .map((group) => t(`accountFieldGroups.${group.key}`))
-      : []
+    : []
 
   return (
     <section className="collection-plan" aria-labelledby="collection-plan-heading">

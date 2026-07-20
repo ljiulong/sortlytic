@@ -344,6 +344,8 @@ describe('CollectionPlanPreview', () => {
         onConfirmPlan: vi.fn(),
         plan: {
           ...draftPlan,
+          platform: '抖音',
+          dataType: '账号数据',
           accountSource: 'user_search',
           selectedFields: ['bio', 'age', 'followers_count', 'last_posted_at'],
           discoveryRequestCount: 1,
@@ -367,6 +369,31 @@ describe('CollectionPlanPreview', () => {
     expect(markup).toContain('字段补全：40 次请求')
     expect(markup).toContain('涉及端点：/api/v1/douyin/search/fetch_user_search')
     expect(markup).toContain('/api/v1/douyin/web/handler_user_profile_v4')
+  })
+
+  it('能力平台不匹配或缺失时不猜测补全字段分类', () => {
+    const plan = {
+      ...draftPlan,
+      accountSource: 'user_search' as const,
+      selectedFields: ['bio', 'age', 'followers_count', 'last_posted_at'],
+      pricingEndpoints: ['discover', 'enrich'],
+    }
+    const mismatched = renderToStaticMarkup(createElement(CollectionPlanPreview, {
+      accountCapability: sourceAwareAccountCapability,
+      actionMessage: '等待确认',
+      isBusy: false,
+      onConfirmPlan: vi.fn(),
+      plan,
+    }))
+    const missing = renderToStaticMarkup(createElement(CollectionPlanPreview, {
+      actionMessage: '等待确认',
+      isBusy: false,
+      onConfirmPlan: vi.fn(),
+      plan,
+    }))
+
+    expect(mismatched).not.toContain('补全字段分类')
+    expect(missing).not.toContain('补全字段分类')
   })
 
   it('确认前展示已启用的明确性别筛选', () => {
