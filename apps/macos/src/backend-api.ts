@@ -157,6 +157,21 @@ export type CollectionPlanView = {
   updated_at: string
 }
 
+export type ReviseCollectionTaskInput = {
+  task_id: string
+  name: string
+  platforms: string[]
+  data_types: string[]
+  source: 'user_edited'
+  plan_json: Record<string, unknown>
+}
+
+export type RevisedCollectionTaskView = {
+  task: CollectionTaskView
+  collection_plan: CollectionPlanView
+  copied_from_task_id?: string | null
+}
+
 export type TaskRunView = {
   id: string
   task_id: string
@@ -474,6 +489,13 @@ export function listPlatformDataTypes(platform: string) {
 
 export function saveCollectionPlan(input: SavePlanInput) {
   return invoke<CollectionPlanView>('save_collection_plan', {
+    input,
+    rootPath: null,
+  })
+}
+
+export function reviseCollectionTask(input: ReviseCollectionTaskInput) {
+  return invoke<RevisedCollectionTaskView>('revise_collection_task', {
     input,
     rootPath: null,
   })

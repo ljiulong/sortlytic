@@ -5,6 +5,7 @@ import {
   listLatestTaskIntents,
   prepareAppUpdate,
   relaunchAfterAppUpdate,
+  reviseCollectionTask,
 } from './backend-api'
 
 const invokeMock = vi.hoisted(() => vi.fn())
@@ -34,6 +35,32 @@ describe('natural parse attempt API boundary', () => {
     await expect(listLatestTaskIntents()).resolves.toEqual([])
 
     expect(invokeMock).toHaveBeenCalledWith('list_latest_task_intents', { rootPath: null })
+  })
+})
+
+describe('task revision API boundary', () => {
+  it('passes the complete user-edited plan to the active workspace command', async () => {
+    invokeMock.mockResolvedValue({ task: { id: 'task-1' }, collection_plan: { id: 'plan-2' } })
+    const input = {
+      task_id: 'task-1',
+      name: '英国宠物账号',
+      platforms: ['tiktok'],
+      data_types: ['account'],
+      source: 'user_edited' as const,
+      plan_json: {
+        schema_version: 4,
+        account_source: 'user_search',
+        region: 'GB',
+        query_locale: 'en-GB',
+      },
+    }
+
+    await reviseCollectionTask(input)
+
+    expect(invokeMock).toHaveBeenCalledWith('revise_collection_task', {
+      input,
+      rootPath: null,
+    })
   })
 })
 
