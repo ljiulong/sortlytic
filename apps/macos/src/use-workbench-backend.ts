@@ -13,6 +13,7 @@ import {
   ensureDefaultWorkspace,
   generateAccountCollectionPlan,
   generateCollectionPlanFromText,
+  getActiveWorkspace,
   getLatestCollectionPlan,
   type GenerateFormPlanInput,
   type GenerateAccountPlanInput,
@@ -52,6 +53,7 @@ import {
 
 export {
   mapBackendData,
+  type BackendWorkbenchData,
   type WorkbenchRuntimeData,
 } from './workbench-backend-mapper'
 
@@ -199,6 +201,8 @@ export function useWorkbenchBackend() {
     queryKey,
     queryFn: loadBackendWorkbench,
     retry: 1,
+    retryDelay: 250,
+    placeholderData: (previousData) => previousData,
     refetchInterval: (query) => {
       const current = query.state.data as BackendWorkbenchData | undefined
       return current?.tasks.some((task) => ['已排队', '运行中'].includes(task.status))
@@ -363,7 +367,7 @@ export async function loadBackendWorkbench(): Promise<BackendWorkbenchData> {
     return browserFallbackData
   }
 
-  const workspace = await ensureDefaultWorkspace()
+  const workspace = await getActiveWorkspace() ?? await ensureDefaultWorkspace()
   const [status, tasks, latestRuns, recordCounts, registry] = await Promise.all([
     getBackendStatus(),
     listTasks(),

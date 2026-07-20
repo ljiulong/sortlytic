@@ -23,11 +23,11 @@ export type WorkspaceSummary = {
   id: string
   name: string
   root_path: string
-  database_path: string
   schema_version: number
-  created_at: string
-  updated_at: string
-  last_opened_at: string
+  database_path?: string
+  created_at?: string
+  updated_at?: string
+  last_opened_at?: string
 }
 
 export type TikhubPriceQuote = {
@@ -317,6 +317,10 @@ export function getBackendStatus() {
 
 export function ensureDefaultWorkspace() {
   return invoke<WorkspaceSummary>('ensure_default_workspace')
+}
+
+export function getActiveWorkspace() {
+  return invoke<WorkspaceSummary | null>('get_active_workspace')
 }
 
 export function quoteTikhubConnectorPrice(endpoint: string, requestPerDay: number) {

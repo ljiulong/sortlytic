@@ -29,6 +29,7 @@ import {
   loadBackendWorkbench,
   mapBackendData,
   planFromBackend,
+  type BackendWorkbenchData,
   type RuntimeCollectionPlan,
   useWorkbenchBackend,
 } from './use-workbench-backend'
@@ -48,6 +49,9 @@ type CapturedMutationOptions = {
 }
 
 type CapturedQueryOptions = {
+  retry?: boolean | number
+  retryDelay?: number
+  placeholderData?: (previousData: BackendWorkbenchData) => BackendWorkbenchData
   refetchInterval?: (query: { state: { data?: unknown } }) => number | false
   refetchIntervalInBackground?: boolean
 }
@@ -1631,7 +1635,7 @@ describe('useWorkbenchBackend 数据边界', () => {
   it('即使 API 配置 JSON 损坏也保留历史任务浏览', async () => {
     vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
     invokeMock.mockImplementation((command: string) => {
-      if (command === 'ensure_default_workspace') return Promise.resolve(workspace)
+      if (command === 'get_active_workspace') return Promise.resolve(workspace)
       if (command === 'get_backend_status') {
         return Promise.resolve({
           service: 'sortlytic',
@@ -1653,6 +1657,7 @@ describe('useWorkbenchBackend 数据边界', () => {
     expect(result.tasks).toHaveLength(1)
     expect(result.tasks[0]?.id).toBe(task.id)
     expect(result.connections[0]).toMatchObject({ status: '配置不可用' })
+    expect(invokeMock).not.toHaveBeenCalledWith('ensure_default_workspace')
     expect(invokeMock).not.toHaveBeenCalledWith('list_secret_refs', expect.anything())
     expect(invokeMock).not.toHaveBeenCalledWith('get_tikhub_connector', expect.anything())
     expect(invokeMock).not.toHaveBeenCalledWith('list_model_providers', expect.anything())
@@ -1666,6 +1671,16 @@ describe('useWorkbenchBackend 数据边界', () => {
     expect(result.data.records).toEqual([])
     expect(JSON.stringify(result.data)).not.toContain('example.local')
     expect(JSON.stringify(result.data)).not.toContain('8,742')
+  })
+
+  it('后台刷新使用短退避并保留最近一次成功快照', () => {
+    renderWorkbenchHook()
+    const options = queryOptionsMock.current
+    const previous = mapBackendData(workspace, [task], tikhubRegistryFixture(), 1_000)
+
+    expect(options?.retry).toBe(1)
+    expect(options?.retryDelay).toBe(250)
+    expect(options?.placeholderData?.(previous)).toBe(previous)
   })
 
   it('Tauri 查询失败时只返回错误空状态，不回退虚构成功数据', () => {
