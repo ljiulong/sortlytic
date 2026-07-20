@@ -139,6 +139,37 @@ describe('TaskQueue', () => {
     expect(markup).toContain('aria-valuenow="0"')
   })
 
+  it('自然语言失败任务显示解析失败、原始需求、真实错误和修改方式', () => {
+    const markup = renderQueue([{
+      ...waitingTask,
+      id: 'task-natural-failed',
+      source: '自然语言',
+      sourceType: 'natural_language',
+      status: '待人工确认',
+      naturalParseAttempt: {
+        id: 'attempt-1',
+        task_id: 'task-natural-failed',
+        intent_text: '用中文查找英国 TikTok 宠物用品账号',
+        parse_status: 'failed',
+        parse_phase: 'requesting_ai',
+        error_code: 'MODEL_RATE_LIMIT',
+        error_message: 'AI 服务请求过于频繁或额度不足，请稍后重试',
+        retryable: true,
+        error_safe_details_json: { retry_after: '17' },
+        created_at: '2026-07-20T08:00:00Z',
+        updated_at: '2026-07-20T08:00:17Z',
+      },
+    }])
+
+    expect(markup).toContain('解析失败')
+    expect(markup).toContain('原始需求：用中文查找英国 TikTok 宠物用品账号')
+    expect(markup).toContain('MODEL_RATE_LIMIT')
+    expect(markup).toContain('AI 服务请求过于频繁或额度不足')
+    expect(markup).toContain('修改方式')
+    expect(markup).toContain('重新尝试')
+    expect(markup).not.toContain('发生未知错误')
+  })
+
   it('等待确认任务提供编辑、取消、删除与确认运行四个独立入口', () => {
     const markup = renderQueue([waitingTask])
 

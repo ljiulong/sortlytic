@@ -13,7 +13,9 @@ import {
   taskStatusTranslationKeys,
 } from './task-queue-config'
 import TaskResultsPanel from './TaskResultsPanel'
-import TaskRunLogPanel from './TaskRunLogPanel'
+import TaskProblemPanel from './TaskProblemPanel'
+import TaskRunDetails from './TaskRunDetails'
+import type { TaskRemediationAction } from './task-remediation'
 import type { TaskExportInput, WorkbenchRuntimeData } from './use-workbench-backend'
 import type { TaskStatus } from './workbench-data'
 import './TaskQueue.css'
@@ -45,6 +47,9 @@ type TaskQueueProps = {
   onConfirmTask: (taskId: string) => Promise<unknown>
   onDeleteTask: (taskId: string) => Promise<unknown>
   onExportTask: (input: TaskExportInput) => Promise<ExportJobView>
+  onRetryNaturalTask?: (taskId: string, intentText: string) => Promise<unknown>
+  onOpenSettings?: () => void
+  onRefresh?: () => void
 }
 
 function TaskQueue({
@@ -55,6 +60,9 @@ function TaskQueue({
   onConfirmTask,
   onDeleteTask,
   onExportTask,
+  onRetryNaturalTask,
+  onOpenSettings,
+  onRefresh,
 }: TaskQueueProps) {
   const { t, i18n } = useTranslation('tasks')
   const [activeMode, setActiveMode] = useState<ActiveTaskMode>()
@@ -84,26 +92,6 @@ function TaskQueue({
     && !allDeletableTasksSelected
   const numberLocale = i18n.resolvedLanguage ?? i18n.language
   const showRawDiagnostics = numberLocale.toLowerCase().startsWith('zh')
-  const runTimeFormatter = new Intl.DateTimeFormat(numberLocale, {
-    dateStyle: 'medium',
-    timeStyle: 'medium',
-  })
-  const localizeRunStage = (code?: string, raw?: string | null) => {
-    const fallback = showRawDiagnostics && raw
-      ? raw
-      : String(t('taskQueue.diagnostics.unknownStage', { code: code ?? 'UNKNOWN_STAGE' }))
-    return code && code !== 'UNKNOWN_STAGE'
-      ? String(t(`taskQueue.diagnostics.stage.${code}`, { defaultValue: fallback }))
-      : fallback
-  }
-  const localizeRunError = (code: string | null | undefined, raw: string) => {
-    if (showRawDiagnostics) return raw
-    const fallback = String(t('taskQueue.diagnostics.unknownError', { code: code ?? 'UNKNOWN_ERROR' }))
-    return code
-      ? String(t(`taskQueue.diagnostics.error.${code}`, { defaultValue: fallback }))
-      : fallback
-  }
-
   const beginEditing = (task: TaskRow) => {
     setActiveMode({ taskId: task.id, type: 'edit' })
     setDraftName(task.name)
@@ -120,6 +108,24 @@ function TaskQueue({
       stopEditing()
     } catch {
       // 后端错误会显示在工作区状态栏，保留编辑态便于用户修正。
+    }
+  }
+
+  const handleProblemAction = (
+    task: TaskRow,
+    kind: 'natural_parse' | 'run',
+    action: TaskRemediationAction,
+  ) => {
+    if (action === 'edit_task') beginEditing(task)
+    else if (action === 'view_diagnostics') setPreviewTaskId(task.id)
+    else if (action === 'open_ai_settings' || action === 'open_tikhub_settings') onOpenSettings?.()
+    else if (action === 'reload' || action === 'workspace_health') onRefresh?.()
+    else if (action === 'retry') {
+      if (kind === 'natural_parse' && task.naturalParseAttempt) {
+        void onRetryNaturalTask?.(task.id, task.naturalParseAttempt.intent_text)
+      } else {
+        void onConfirmTask(task.id)
+      }
     }
   }
 
@@ -420,6 +426,11 @@ function TaskQueue({
                 ? t('taskQueue.requestEstimate', { count: task.requestCount })
                 : t('taskQueue.requestEstimateUnknown')} · ${t(dataTypeKey)}`
               : task.cost
+            const parseAttempt = task.naturalParseAttempt
+            const parseNeedsAttention = parseAttempt
+              && ['failed', 'interrupted', 'needs_review'].includes(parseAttempt.parse_status)
+            const parseFailed = parseAttempt
+              && ['failed', 'interrupted'].includes(parseAttempt.parse_status)
 
             return (
               <article
@@ -488,7 +499,10 @@ function TaskQueue({
                       </div>
                     )}
                   </div>
-                  <StatusPill tone={toneForStatus(task.status)} label={t(taskStatusTranslationKeys[task.status])} />
+                  <StatusPill
+                    tone={parseFailed ? 'danger' : toneForStatus(task.status)}
+                    label={parseFailed ? '解析失败' : t(taskStatusTranslationKeys[task.status])}
+                  />
                 </header>
 
                 <div className="task-card__summary">
@@ -520,69 +534,33 @@ function TaskQueue({
                   </div>
                 </div>
 
+                {parseNeedsAttention ? (
+                  <div className="task-card__parse-problem">
+                    <p>原始需求：{parseAttempt.intent_text}</p>
+                    <TaskProblemPanel
+                      kind="natural_parse"
+                      code={parseAttempt.error_code}
+                      message={parseAttempt.error_message
+                        ?? (parseAttempt.parse_status === 'needs_review'
+                          ? '解析完成，需要补充信息后才能生成安全计划'
+                          : '上次自然语言解析被中断，请重新解析')}
+                      retryable={parseAttempt.retryable ?? parseAttempt.parse_status === 'interrupted'}
+                      attemptedAt={parseAttempt.updated_at}
+                      safeDetails={parseAttempt.error_safe_details_json}
+                      onAction={(action) => handleProblemAction(task, 'natural_parse', action)}
+                    />
+                  </div>
+                ) : null}
+
                 {resultsTaskId === task.id ? (
                   <TaskResultsPanel taskId={task.id} taskName={task.name} />
                 ) : null}
 
                 {task.latestRun ? (
-                  <section
-                    aria-label={t('taskQueue.runDetails')}
-                    className="task-card__run-details"
-                  >
-                    <header className="task-card__run-heading">
-                      <h4>{t('taskQueue.runDetails')}</h4>
-                      <span>{t('taskQueue.attempt', { count: task.latestRun.attemptNumber })}</span>
-                    </header>
-                    <dl className="task-card__run-facts">
-                      <div>
-                        <dt>{t('taskQueue.currentStage')}</dt>
-                        <dd>{localizeRunStage(
-                          task.latestRun.currentStageCode,
-                          task.latestRun.currentStage,
-                        )}</dd>
-                      </div>
-                      <div>
-                        <dt>{t('taskQueue.startedAt')}</dt>
-                        <dd>
-                          <time dateTime={task.latestRun.startedAt}>
-                            {runTimeFormatter.format(new Date(task.latestRun.startedAt))}
-                          </time>
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>{t('taskQueue.endedAt')}</dt>
-                        <dd>
-                          {task.latestRun.endedAt ? (
-                            <time dateTime={task.latestRun.endedAt}>
-                              {runTimeFormatter.format(new Date(task.latestRun.endedAt))}
-                            </time>
-                          ) : t('taskQueue.inProgress')}
-                        </dd>
-                      </div>
-                      {task.latestRun.errorCode ? (
-                        <div className="task-card__run-fact--error">
-                          <dt>{t('taskQueue.errorCode')}</dt>
-                          <dd>{task.latestRun.errorCode}</dd>
-                        </div>
-                      ) : null}
-                      {task.latestRun.errorMessage ? (
-                        <div className="task-card__run-fact--error">
-                          <dt>{t('taskQueue.errorMessage')}</dt>
-                          <dd>{localizeRunError(
-                            task.latestRun.errorCode,
-                            task.latestRun.errorMessage,
-                          )}</dd>
-                        </div>
-                      ) : null}
-                      <div>
-                        <dt>{t('taskQueue.retryable')}</dt>
-                        <dd>{t(task.latestRun.retryable
-                          ? 'taskQueue.retryableYes'
-                          : 'taskQueue.retryableNo')}</dd>
-                      </div>
-                    </dl>
-                    <TaskRunLogPanel key={task.latestRun.id} runId={task.latestRun.id} />
-                  </section>
+                  <TaskRunDetails
+                    run={task.latestRun}
+                    onProblemAction={(action) => handleProblemAction(task, 'run', action)}
+                  />
                 ) : null}
 
                 <footer className="task-card__footer">
