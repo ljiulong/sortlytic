@@ -85,6 +85,16 @@ describe('NaturalParseFeedback', () => {
         safeDetails: {},
       },
     })
+    const legacyConfigMarkup = render({
+      ...base,
+      problem: {
+        code: 'VALIDATION_ERROR',
+        stage: 'preparing',
+        message: '尚未设置当前 AI 配置，请先在设置中完成真实连通性测试',
+        retryable: false,
+        safeDetails: {},
+      },
+    })
     const schemaMarkup = render({
       ...base,
       problem: {
@@ -99,6 +109,8 @@ describe('NaturalParseFeedback', () => {
     expect(authMarkup).toContain('打开 AI 设置')
     expect(configMarkup).toContain('打开 AI 设置')
     expect(configMarkup).not.toContain('切换到表单修正')
+    expect(legacyConfigMarkup).toContain('打开 AI 设置')
+    expect(legacyConfigMarkup).not.toContain('切换到表单修正')
     expect(schemaMarkup).toContain('切换到表单修正')
   })
 

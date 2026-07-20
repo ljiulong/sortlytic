@@ -143,12 +143,14 @@ function remediationForProblem(problem: BackendProblem) {
     'MODEL_PROTOCOL_ERROR',
     'MODEL_NOT_FOUND',
   ].includes(problem.code)
+  const legacyConfigurationError = problem.code === 'VALIDATION_ERROR'
+    && /(?:AI 配置|API Key|真实连通性测试)/.test(problem.message)
   const reviewError = [
     'VALIDATION_ERROR',
     'MODEL_SCHEMA_ERROR',
     'COST_LIMIT_ERROR',
   ].includes(problem.code)
-  if (configurationError) {
+  if (configurationError || legacyConfigurationError) {
     return {
       message: '打开 AI 设置，检查 Base URL、API Key 和模型 ID，完成真实连通性测试后重新解析。',
       showRetry: false,
