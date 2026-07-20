@@ -89,9 +89,11 @@ type MountedBuilder = {
 const mountedBuilders = new Set<MountedBuilder>()
 
 function mountBuilder({
+  activePlan,
   onGenerateFormPlan = vi.fn(async () => draftPlan),
   onGenerateNaturalPlan,
 }: {
+  activePlan?: RuntimeCollectionPlan
   onGenerateFormPlan?: (values: unknown) => Promise<RuntimeCollectionPlan>
   onGenerateNaturalPlan: (intentText: string) => Promise<RuntimeCollectionPlan>
 }) {
@@ -103,6 +105,7 @@ function mountBuilder({
 
   act(() => root.render(createElement(CollectionBuilder, {
     actionMessage: '等待生成',
+    activePlan,
     isBusy: false,
     onConfirmPlan: vi.fn(async () => undefined),
     onGenerateFormPlan,
@@ -399,6 +402,28 @@ describe('CollectionPlanPreview', () => {
 
     expect(mismatched).not.toContain('补全字段分类')
     expect(missing).not.toContain('补全字段分类')
+  })
+
+  it('自然语言计划按活动计划平台加载补全能力', async () => {
+    backendApiMocks.getAccountCollectionCapabilities.mockResolvedValue(
+      sourceAwareAccountCapability,
+    )
+    const mounted = mountBuilder({
+      activePlan: {
+        ...draftPlan,
+        platform: '抖音',
+        dataType: '账号数据',
+        accountSource: 'user_search',
+        selectedFields: ['age', 'last_posted_at'],
+        pricingEndpoints: ['discover', 'enrich'],
+      },
+      onGenerateNaturalPlan: vi.fn(async () => draftPlan),
+    })
+
+    await act(async () => undefined)
+
+    expect(backendApiMocks.getAccountCollectionCapabilities).toHaveBeenCalledWith('douyin')
+    expect(mounted.container.textContent).toContain('补全字段分类：人口属性、账号活跃')
   })
 
   it('确认前展示已启用的明确性别筛选', () => {

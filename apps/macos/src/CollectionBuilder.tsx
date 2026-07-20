@@ -37,6 +37,7 @@ import {
   countryRegionSelectOptions,
 } from './collection-select-options'
 import { useCollectionTimeRanges } from './collection-time-ranges'
+import { useAccountCapabilities } from './use-account-capabilities'
 import { i18n } from './i18n'
 import {
   confirmationBlocker,
@@ -136,6 +137,17 @@ export function CollectionBuilder({
     && accountCapability.account_sources.length > 0
     && accountCapability.fields.length > 0,
   )
+  const formCapabilityMatchesPlan = Boolean(
+    activePlan && accountCapability?.platform === backendPlatformForUi(activePlan.platform),
+  )
+  const { capability: loadedPlanCapability } = useAccountCapabilities(
+    activePlan && !formCapabilityMatchesPlan ? activePlan.platform : undefined,
+  )
+  const previewCapability = formCapabilityMatchesPlan
+    ? accountCapability
+    : loadedPlanCapability?.platform === (activePlan && backendPlatformForUi(activePlan.platform))
+      ? loadedPlanCapability
+      : undefined
   const ageFilterSupported = capabilityReady && accountCapability?.fields.some(
     (field) => field.key === 'age' && field.availability !== 'unsupported',
   ) === true
@@ -447,7 +459,7 @@ export function CollectionBuilder({
 
       {activePlan ? (
         <CollectionPlanPreview
-          accountCapability={capabilityReady ? accountCapability : undefined}
+          accountCapability={previewCapability}
           actionMessage={actionMessage}
           isBusy={isBusy}
           onConfirmPlan={onConfirmPlan}
