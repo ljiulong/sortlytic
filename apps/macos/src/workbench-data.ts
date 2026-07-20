@@ -1,5 +1,6 @@
 export const platformOptions = ['TikTok', '抖音', '小红书'] as const
 export const dataTypeOptions = [
+  '账号数据',
   '搜索结果账号',
   '作品/笔记作者',
   '账号公开信息',

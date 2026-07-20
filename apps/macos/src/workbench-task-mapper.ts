@@ -28,6 +28,7 @@ export function toUiPlatform(platform: string): Platform {
 }
 
 export function toUiDataType(dataType: string): DataType {
+  if (dataType === 'account') return '账号数据'
   if (dataType === 'keyword_search') return '搜索结果账号'
   if (dataType === 'account_profile') return '账号公开信息'
   if (dataType === 'item_detail') return '作品/笔记作者'
