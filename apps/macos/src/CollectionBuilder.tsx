@@ -15,7 +15,6 @@ import { useTranslation } from 'react-i18next'
 import type { z } from 'zod'
 import AccountSourceFields from './AccountSourceFields'
 import AppSelect from './AppSelect'
-import { accountFieldGroups } from './account-field-groups'
 import type { AccountCollectionCapabilityView } from './backend-api'
 import './CollectionBuilder.css'
 import CollectionFilterFields from './CollectionFilterFields'
@@ -590,9 +589,9 @@ export function CollectionPlanPreview({
       .map((field) => field.group))
     : undefined
   const enrichmentGroups = sourceAwareEnrichmentGroups
-    ? accountFieldGroups
+    ? (matchingAccountCapability?.field_groups ?? [])
       .filter((group) => sourceAwareEnrichmentGroups.has(group.key))
-      .map((group) => t(`accountFieldGroups.${group.key}`))
+      .map((group) => t(`accountFieldGroups.${group.key}`, { defaultValue: group.display_name }))
     : []
 
   return (

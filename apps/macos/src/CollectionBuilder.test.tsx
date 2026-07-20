@@ -51,7 +51,12 @@ const sourceAwareAccountCapability: AccountCollectionCapabilityView = {
   platform: 'douyin',
   display_name: '抖音',
   account_sources: [],
-  field_groups: [],
+  field_groups: [
+    { key: 'profile', display_name: '账号资料' },
+    { key: 'demographics', display_name: '人口属性' },
+    { key: 'statistics', display_name: '账号统计' },
+    { key: 'activity', display_name: '账号活跃' },
+  ],
   fields: [
     {
       key: 'bio', group: 'profile', display_name: '简介', description: '',
