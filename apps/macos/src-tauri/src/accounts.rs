@@ -176,6 +176,7 @@ pub fn normalize_account_with_evidence(
       "/uid",
       "/author/user_id",
       "/author/userid",
+      "/user/uid",
       "/user/user_id",
       "/user/userid",
       "/sec_user_id",
