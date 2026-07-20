@@ -174,6 +174,7 @@ describe('TaskQueue', () => {
     const markup = renderQueue([waitingTask])
 
     expect(markup).toContain('编辑')
+    expect(markup).toContain('title="编辑任务计划"')
     expect(markup).toContain('title="取消任务"')
     expect(markup).toContain('title="删除任务"')
     expect(markup).toContain('确认运行')
