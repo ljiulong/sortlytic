@@ -22,11 +22,14 @@ mod attempts;
 #[allow(dead_code)]
 pub(crate) mod collection_intent_schema;
 pub(crate) mod collection_plan_schema;
+#[allow(dead_code)]
+pub(crate) mod intent_plan;
 pub(crate) mod provider_client;
 
 pub(crate) use attempts::mark_interrupted_task_intents;
 pub use attempts::{list_latest_task_intents, NaturalParseAttemptView};
 pub use collection_intent_schema::{CollectionIntentV1, IntentAgeRange};
+pub use intent_plan::IntentPlanBuildResult;
 
 use collection_plan_schema::validate_collection_plan_schema;
 use provider_client::{call_model, collection_plan_request, ProviderConfig};
