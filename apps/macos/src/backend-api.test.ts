@@ -5,6 +5,7 @@ import {
   getCurrentAppVersion,
   getTask,
   listLatestTaskIntents,
+  listTaskIntents,
   listAiRuns,
   prepareAppUpdate,
   relaunchAfterAppUpdate,
@@ -38,6 +39,17 @@ describe('natural parse attempt API boundary', () => {
     await expect(listLatestTaskIntents()).resolves.toEqual([])
 
     expect(invokeMock).toHaveBeenCalledWith('list_latest_task_intents', { rootPath: null })
+  })
+
+  it('loads complete parse history for one task', async () => {
+    invokeMock.mockResolvedValue([])
+
+    await listTaskIntents('task-1')
+
+    expect(invokeMock).toHaveBeenCalledWith('list_task_intents', {
+      taskId: 'task-1',
+      rootPath: null,
+    })
   })
 })
 

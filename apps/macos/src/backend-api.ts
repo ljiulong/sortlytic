@@ -424,6 +424,13 @@ export function listLatestTaskIntents() {
   return invoke<NaturalParseAttemptView[]>('list_latest_task_intents', { rootPath: null })
 }
 
+export function listTaskIntents(taskId: string) {
+  return invoke<NaturalParseAttemptView[]>('list_task_intents', {
+    taskId,
+    rootPath: null,
+  })
+}
+
 export function getAiRun(aiRunId: string) {
   return invoke<AiRunView>('get_ai_run', { aiRunId, rootPath: null })
 }
