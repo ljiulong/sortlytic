@@ -17,6 +17,8 @@ import Dashboard from './Dashboard'
 import GuidePage from './GuidePage'
 import SettingsPage from './SettingsPage'
 import TaskQueue from './TaskQueue'
+import TaskEditor from './TaskEditor'
+import './TaskEditor.css'
 import ThemeToggle from './ThemeToggle'
 import {
   type NavKey,
@@ -80,8 +82,13 @@ function Workbench() {
   const backend = useWorkbenchBackend()
   const data = backend.data
   const [activeNav, setActiveNav] = useState<NavKey>('overview')
+  const [editingTaskId, setEditingTaskId] = useState<string>()
   const [selectedRecordId, setSelectedRecordId] = useState('')
   const pageLayoutClassName = `page-layout page-layout--${pageMeta[activeNav].layout}`
+  const navigate = (target: NavKey) => {
+    setEditingTaskId(undefined)
+    setActiveNav(target)
+  }
   return (
     <div className="app-shell" lang={i18n.resolvedLanguage ?? i18n.language}>
       <a className="skip-link" href="#main-content">{t('skipToContent')}</a>
@@ -102,7 +109,7 @@ function Workbench() {
                 data-active={activeNav === item.key}
                 key={item.key}
                 type="button"
-                onClick={() => setActiveNav(item.key)}
+                onClick={() => navigate(item.key)}
               >
                 <Icon size={17} aria-hidden="true" />
                 <span>{t(navigationLabelKeys[item.key])}</span>
@@ -114,14 +121,15 @@ function Workbench() {
       <main className="workspace" id="main-content" tabIndex={-1}>
         <TopBar
           activeNav={activeNav}
+          editingTask={Boolean(editingTaskId)}
           actionMessage={backend.actionMessage}
           isInitializing={backend.isInitializing}
-          onOpenGuide={() => setActiveNav('guide')}
+          onOpenGuide={() => navigate('guide')}
         />
         <div className="workspace-scroll">
           {activeNav === 'guide' ? (
             <div className={pageLayoutClassName}>
-              <GuidePage onOpenSettings={() => setActiveNav('settings')} />
+              <GuidePage onOpenSettings={() => navigate('settings')} />
             </div>
           ) : activeNav === 'settings' ? (
             <section className={pageLayoutClassName} aria-label={t('settingsSection')}>
@@ -138,26 +146,42 @@ function Workbench() {
                   onConfirmPlan={backend.confirmActivePlan}
                   onGenerateFormPlan={backend.generateFormPlan}
                   onGenerateNaturalPlan={backend.generateNaturalPlan}
-                  onOpenAiSettings={() => setActiveNav(parseFeedbackNavigationTarget('ai_settings'))}
-                  onViewParseDiagnostics={() => setActiveNav(parseFeedbackNavigationTarget('diagnostics'))}
+                  onOpenAiSettings={() => navigate(parseFeedbackNavigationTarget('ai_settings'))}
+                  onViewParseDiagnostics={() => navigate(parseFeedbackNavigationTarget('diagnostics'))}
                 />
               </div>
             </section>
           ) : activeNav === 'tasks' ? (
             <section className={pageLayoutClassName} aria-label={t('tasksSection')}>
               <div className="main-column">
-                <TaskQueue
-                  isBusy={backend.isBusy}
-                  tasks={data.tasks}
-                  onCancelTask={backend.cancelTask}
-                  onConfirmTask={backend.confirmTask}
-                  onDeleteTask={backend.deleteTask}
-                  onExportTask={backend.exportTask}
-                  onOpenSettings={() => setActiveNav('settings')}
-                  onRefresh={backend.refresh}
-                  onRetryNaturalTask={backend.retryNaturalParse}
-                  onUpdateTask={backend.updateTask}
-                />
+                {editingTaskId ? (
+                  <TaskEditor
+                    isBusy={backend.isBusy}
+                    naturalParseAttempt={data.naturalParseAttempts.find(
+                      (attempt) => attempt.task_id === editingTaskId,
+                    )}
+                    taskId={editingTaskId}
+                    onCancel={() => setEditingTaskId(undefined)}
+                    onRetryNaturalTask={backend.retryNaturalParse}
+                    onSaved={(result) => {
+                      setEditingTaskId(result.task.id)
+                      void backend.refresh()
+                    }}
+                  />
+                ) : (
+                  <TaskQueue
+                    isBusy={backend.isBusy}
+                    tasks={data.tasks}
+                    onCancelTask={backend.cancelTask}
+                    onConfirmTask={backend.confirmTask}
+                    onDeleteTask={backend.deleteTask}
+                    onEditTask={setEditingTaskId}
+                    onExportTask={backend.exportTask}
+                    onOpenSettings={() => navigate('settings')}
+                    onRefresh={backend.refresh}
+                    onRetryNaturalTask={backend.retryNaturalParse}
+                  />
+                )}
               </div>
             </section>
           ) : (
@@ -169,7 +193,7 @@ function Workbench() {
               records={data.records}
               selectedRecordId={selectedRecordId}
               workspace={data.workspace}
-              onCreateTask={() => setActiveNav('new-task')}
+              onCreateTask={() => navigate('new-task')}
               onRefresh={backend.refresh}
               onSelectRecord={setSelectedRecordId}
             />
@@ -181,11 +205,13 @@ function Workbench() {
 }
 function TopBar({
   activeNav,
+  editingTask,
   actionMessage,
   isInitializing,
   onOpenGuide,
 }: {
   activeNav: NavKey
+  editingTask: boolean
   actionMessage: string
   isInitializing: boolean
   onOpenGuide: () => void
@@ -198,9 +224,11 @@ function TopBar({
   return (
     <header className="topbar">
       <div className="topbar-copy">
-        <p className="eyebrow">{t(pageCopy.context)}</p>
-        <h1>{t(pageCopy.title)}</h1>
-        <p className="page-description">{t(pageCopy.description)}</p>
+        <p className="eyebrow">{editingTask ? '任务计划修订' : t(pageCopy.context)}</p>
+        <h1>{editingTask ? '编辑任务' : t(pageCopy.title)}</h1>
+        <p className="page-description">
+          {editingTask ? '修改真实计划字段并保存为新版本，历史运行与错误记录继续保留。' : t(pageCopy.description)}
+        </p>
       </div>
       <div className="topbar-actions">
         <p className="topbar-status" aria-live="polite">

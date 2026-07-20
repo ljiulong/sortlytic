@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Ban, Download, ListChecks, ListTodo, Pencil, Play, Save, Table2, Trash2, X } from 'lucide-react'
+import { Ban, Download, ListChecks, ListTodo, Pencil, Play, Table2, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import AppSelect from './AppSelect'
 import { backendErrorMessage, type ExportJobView } from './backend-api'
@@ -22,12 +22,10 @@ import './TaskQueue.css'
 import './TaskQueueActions.css'
 
 type TaskRow = WorkbenchRuntimeData['tasks'][number]
-type ActiveTaskMode =
-  | { taskId: string; type: 'edit' }
+type ConfirmationMode =
   | { taskId: string; type: 'confirm-run' }
   | { taskId: string; type: 'confirm-cancel' }
   | { taskId: string; type: 'confirm-delete' }
-type ConfirmationMode = Exclude<ActiveTaskMode, { type: 'edit' }>
 type TaskExportFeedback = {
   errorReason?: string
   errorType?: 'export' | 'missing-path' | 'open'
@@ -42,7 +40,7 @@ type BulkDeleteFailure = {
 type TaskQueueProps = {
   tasks: TaskRow[]
   isBusy: boolean
-  onUpdateTask: (input: { taskId: string; name: string }) => Promise<unknown>
+  onEditTask: (taskId: string) => void
   onCancelTask: (taskId: string) => Promise<unknown>
   onConfirmTask: (taskId: string) => Promise<unknown>
   onDeleteTask: (taskId: string) => Promise<unknown>
@@ -55,7 +53,7 @@ type TaskQueueProps = {
 function TaskQueue({
   tasks,
   isBusy,
-  onUpdateTask,
+  onEditTask,
   onCancelTask,
   onConfirmTask,
   onDeleteTask,
@@ -65,10 +63,9 @@ function TaskQueue({
   onRefresh,
 }: TaskQueueProps) {
   const { t, i18n } = useTranslation('tasks')
-  const [activeMode, setActiveMode] = useState<ActiveTaskMode>()
+  const [activeMode, setActiveMode] = useState<ConfirmationMode>()
   const [previewTaskId, setPreviewTaskId] = useState<string>()
   const [resultsTaskId, setResultsTaskId] = useState<string>()
-  const [draftName, setDraftName] = useState('')
   const [exportFormats, setExportFormats] = useState<Record<string, TaskExportInput['format']>>({})
   const [exportFeedback, setExportFeedback] = useState<Record<string, TaskExportFeedback>>({})
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({})
@@ -92,31 +89,12 @@ function TaskQueue({
     && !allDeletableTasksSelected
   const numberLocale = i18n.resolvedLanguage ?? i18n.language
   const showRawDiagnostics = numberLocale.toLowerCase().startsWith('zh')
-  const beginEditing = (task: TaskRow) => {
-    setActiveMode({ taskId: task.id, type: 'edit' })
-    setDraftName(task.name)
-  }
-
-  const stopEditing = () => {
-    setActiveMode(undefined)
-    setDraftName('')
-  }
-
-  const saveTaskName = async (taskId: string) => {
-    try {
-      await onUpdateTask({ taskId, name: draftName })
-      stopEditing()
-    } catch {
-      // 后端错误会显示在工作区状态栏，保留编辑态便于用户修正。
-    }
-  }
-
   const handleProblemAction = (
     task: TaskRow,
     kind: 'natural_parse' | 'run',
     action: TaskRemediationAction,
   ) => {
-    if (action === 'edit_task') beginEditing(task)
+    if (action === 'edit_task') onEditTask(task.id)
     else if (action === 'view_diagnostics') setPreviewTaskId(task.id)
     else if (action === 'open_ai_settings' || action === 'open_tikhub_settings') onOpenSettings?.()
     else if (action === 'reload' || action === 'workspace_health') onRefresh?.()
@@ -385,13 +363,7 @@ function TaskQueue({
       ) : (
         <div className="task-queue__list" role="list">
           {visibleTasks.map((task) => {
-            const taskMode = activeMode?.taskId === task.id ? activeMode : undefined
-            const isEditing = taskMode?.type === 'edit'
-            const confirmation = taskMode?.type === 'confirm-run'
-              || taskMode?.type === 'confirm-cancel'
-              || taskMode?.type === 'confirm-delete'
-              ? taskMode
-              : undefined
+            const confirmation = activeMode?.taskId === task.id ? activeMode : undefined
             const isConfirming = Boolean(confirmation)
             const actionError = actionErrors[task.id]
             const taskExportFeedback = exportFeedback[task.id]
@@ -436,7 +408,7 @@ function TaskQueue({
               <article
                 aria-labelledby={titleId}
                 className="task-card"
-                data-mode={taskMode?.type ?? 'default'}
+                data-mode={confirmation?.type ?? 'default'}
                 data-status={task.status}
                 key={task.id}
                 role="listitem"
@@ -459,45 +431,10 @@ function TaskQueue({
                     </label>
                   ) : null}
                   <div className="task-card__identity">
-                    {isEditing ? (
-                      <div className="task-card__edit-form" role="group" aria-label={t('taskQueue.editFormAriaLabel')}>
-                        <label id={titleId} htmlFor={`task-name-${task.id}`}>{t('taskQueue.taskNameLabel')}</label>
-                        <div className="task-card__edit-row">
-                          <input
-                            id={`task-name-${task.id}`}
-                            aria-label={t('taskQueue.newNameAriaLabel', { taskName: task.name })}
-                            autoFocus
-                            maxLength={80}
-                            value={draftName}
-                            onChange={(event) => setDraftName(event.target.value)}
-                          />
-                          <button
-                            className="primary-button"
-                            disabled={isBusy || draftName.trim().length < 2}
-                            type="button"
-                            onClick={() => void saveTaskName(task.id)}
-                          >
-                            <Save size={15} aria-hidden="true" />
-                            {t('taskQueue.save')}
-                          </button>
-                          <button
-                            className="ghost-button"
-                            disabled={isBusy}
-                            type="button"
-                            aria-label={t('taskQueue.discard')}
-                            onClick={stopEditing}
-                          >
-                            <X size={15} aria-hidden="true" />
-                            {t('taskQueue.discard')}
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="task-card__title-view">
-                        <h3 id={titleId}>{task.name}</h3>
-                        <p className="task-card__meta">{task.platform} · {sourceLabel}</p>
-                      </div>
-                    )}
+                    <div className="task-card__title-view">
+                      <h3 id={titleId}>{task.name}</h3>
+                      <p className="task-card__meta">{task.platform} · {sourceLabel}</p>
+                    </div>
                   </div>
                   <StatusPill
                     tone={parseFailed ? 'danger' : toneForStatus(task.status)}
@@ -573,18 +510,18 @@ function TaskQueue({
                       <div className="task-card__secondary-actions">
                         <button
                           className="ghost-button"
-                          disabled={isBusy || isEditing || !capabilities.canEdit || isConfirming}
+                          disabled={isBusy || !capabilities.canEdit || isConfirming}
                           aria-label={t('taskQueue.edit')}
                           title={capabilities.canEdit ? t('taskQueue.editTitle') : t('taskQueue.editDisabledTitle')}
                           type="button"
-                          onClick={() => beginEditing(task)}
+                          onClick={() => onEditTask(task.id)}
                         >
                           <Pencil size={15} aria-hidden="true" />
                           {t('taskQueue.edit')}
                         </button>
                         <button
                           className="ghost-button"
-                          disabled={isBusy || isEditing || !capabilities.canCancel || isConfirming}
+                          disabled={isBusy || !capabilities.canCancel || isConfirming}
                           aria-label={t('taskQueue.cancel')}
                           title={capabilities.canCancel ? t('taskQueue.cancelTitle') : t('taskQueue.cancelDisabledTitle')}
                           type="button"
@@ -595,7 +532,7 @@ function TaskQueue({
                         </button>
                         <button
                           className="ghost-button task-card__danger-button"
-                          disabled={isBusy || isEditing || !capabilities.canDelete || isConfirming}
+                          disabled={isBusy || !capabilities.canDelete || isConfirming}
                           aria-label={t('taskQueue.delete')}
                           title={capabilities.canDelete ? t('taskQueue.deleteTitle') : t('taskQueue.deleteDisabledTitle')}
                           type="button"
@@ -610,7 +547,7 @@ function TaskQueue({
                           <button
                             aria-label={t('taskQueue.viewResults')}
                             className="primary-button"
-                            disabled={isBusy || isEditing || isConfirming}
+                            disabled={isBusy || isConfirming}
                             type="button"
                             onClick={() => {
                               setActiveMode(undefined)
@@ -626,7 +563,7 @@ function TaskQueue({
                         {capabilities.canConfirm ? (
                           <button
                             className="primary-button"
-                            disabled={isBusy || isEditing || isConfirming}
+                            disabled={isBusy || isConfirming}
                             aria-label={t('taskQueue.confirmRun')}
                             type="button"
                             onClick={() => setActiveMode({ taskId: task.id, type: 'confirm-run' })}
@@ -641,7 +578,7 @@ function TaskQueue({
                           <label htmlFor={`task-export-format-${task.id}`}>{t('taskQueue.exportFormat')}</label>
                           <AppSelect
                             id={`task-export-format-${task.id}`}
-                            disabled={isBusy || isEditing || isConfirming}
+                            disabled={isBusy || isConfirming}
                             onChange={(format) => setExportFormats((formats) => ({
                               ...formats,
                               [task.id]: format as TaskExportInput['format'],
@@ -653,7 +590,7 @@ function TaskQueue({
                         </div>
                         <button
                           className="ghost-button"
-                          disabled={isBusy || isEditing || isConfirming || !capabilities.canExport}
+                          disabled={isBusy || isConfirming || !capabilities.canExport}
                           aria-label={t('taskQueue.export')}
                           title={capabilities.canExport ? t('taskQueue.exportTitle') : t('taskQueue.exportDisabledTitle')}
                           type="button"

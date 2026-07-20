@@ -56,7 +56,7 @@ function mountQueue(
   act(() => root.render(createElement(TaskQueue, {
     tasks,
     isBusy: false,
-    onUpdateTask: vi.fn(),
+    onEditTask: vi.fn(),
     onCancelTask: vi.fn(),
     onConfirmTask,
     onDeleteTask,
@@ -86,7 +86,7 @@ function renderQueue(tasks: WorkbenchRuntimeData['tasks']) {
     createElement(TaskQueue, {
       tasks,
       isBusy: false,
-      onUpdateTask: vi.fn(),
+      onEditTask: vi.fn(),
       onCancelTask: vi.fn(),
       onConfirmTask: vi.fn(),
       onDeleteTask: vi.fn(),
@@ -177,6 +177,29 @@ describe('TaskQueue', () => {
     expect(markup).toContain('title="取消任务"')
     expect(markup).toContain('title="删除任务"')
     expect(markup).toContain('确认运行')
+  })
+
+  it('编辑入口打开独立完整编辑页，不再只切换任务名称输入框', () => {
+    const onEditTask = vi.fn()
+    const container = document.createElement('div')
+    const root = createRoot(container)
+    act(() => root.render(createElement(TaskQueue, {
+      tasks: [waitingTask],
+      isBusy: false,
+      onEditTask,
+      onCancelTask: vi.fn(),
+      onConfirmTask: vi.fn(),
+      onDeleteTask: vi.fn(),
+      onExportTask: vi.fn(),
+    })))
+
+    const editButton = [...container.querySelectorAll('button')]
+      .find((button) => button.textContent?.includes('编辑'))
+    act(() => editButton?.click())
+
+    expect(onEditTask).toHaveBeenCalledWith(waitingTask.id)
+    expect(container.querySelector('[id^="task-name-"]')).toBeNull()
+    act(() => root.unmount())
   })
 
   it('两段确认只调用一次运行入口，并在预检失败时显示尚未入队原因', async () => {
