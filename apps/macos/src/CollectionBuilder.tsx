@@ -19,6 +19,7 @@ import type { AccountCollectionCapabilityView } from './backend-api'
 import { accountSourceFilterCapabilities } from './account-source-rules'
 import './CollectionBuilder.css'
 import CollectionFilterFields from './CollectionFilterFields'
+import NaturalParseFeedback from './NaturalParseFeedback'
 import {
   collectionFormSchema,
   countryRegionOptions,
@@ -49,6 +50,7 @@ import {
   toneForPlanStatus,
 } from './collection-plan-localization'
 import type { RuntimeCollectionPlan } from './use-workbench-backend'
+import type { NaturalParseState } from './natural-parse-state'
 import type { DataType, Platform } from './workbench-data'
 
 export { StatusPill }
@@ -85,6 +87,9 @@ export function CollectionBuilder({
   onConfirmPlan,
   onGenerateFormPlan,
   onGenerateNaturalPlan,
+  naturalParseState,
+  onOpenAiSettings,
+  onViewParseDiagnostics,
 }: {
   actionMessage: string
   activePlan?: RuntimeCollectionPlan
@@ -92,9 +97,13 @@ export function CollectionBuilder({
   onConfirmPlan: () => Promise<unknown>
   onGenerateFormPlan: (values: CollectionFormValues) => Promise<RuntimeCollectionPlan>
   onGenerateNaturalPlan: (intentText: string) => Promise<RuntimeCollectionPlan>
+  naturalParseState?: NaturalParseState
+  onOpenAiSettings?: () => void
+  onViewParseDiagnostics?: () => void
 }) {
   const { t } = useTranslation('collection', { i18n })
   const [naturalText, setNaturalText] = useState(naturalIntentDefault)
+  const [activeMode, setActiveMode] = useState('form')
   const [accountCapability, setAccountCapability] = useState<AccountCollectionCapabilityView>()
   const planSubmissionInFlightRef = useRef(false)
   const formSchema = useMemo(() => createCollectionFormSchema(t), [t])
@@ -247,7 +256,11 @@ export function CollectionBuilder({
         <StatusPill tone="warning" label={t('header.noChargeBeforeConfirmation')} />
       </header>
 
-      <Tabs.Root className="collection-builder__tabs" defaultValue="form">
+      <Tabs.Root
+        className="collection-builder__tabs"
+        value={activeMode}
+        onValueChange={setActiveMode}
+      >
         <div className="collection-builder__mode-bar">
           <Tabs.List className="collection-builder__mode-list" aria-label={t('modes.ariaLabel')}>
             <Tabs.Trigger className="collection-builder__mode-trigger" value="form">
@@ -437,6 +450,15 @@ export function CollectionBuilder({
               placeholder={t('placeholders.naturalIntent')}
               onChange={(event) => setNaturalText(event.target.value)}
             />
+            {naturalParseState && (
+              <NaturalParseFeedback
+                state={naturalParseState}
+                onRetry={submitNaturalText}
+                onOpenAiSettings={onOpenAiSettings}
+                onSwitchToForm={() => setActiveMode('form')}
+                onViewDiagnostics={onViewParseDiagnostics}
+              />
+            )}
             <div className="collection-builder__natural-footer">
               <p>{t('natural.footer')}</p>
               <button

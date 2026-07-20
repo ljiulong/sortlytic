@@ -33,6 +33,7 @@ import {
 import { i18n } from './i18n'
 import type { AccountCollectionCapabilityView } from './backend-api'
 import type { RuntimeCollectionPlan } from './use-workbench-backend'
+import type { NaturalParseState } from './natural-parse-state'
 
 const draftPlan: RuntimeCollectionPlan = {
   platform: '小红书',
@@ -92,10 +93,12 @@ function mountBuilder({
   activePlan,
   onGenerateFormPlan = vi.fn(async () => draftPlan),
   onGenerateNaturalPlan,
+  naturalParseState,
 }: {
   activePlan?: RuntimeCollectionPlan
   onGenerateFormPlan?: (values: unknown) => Promise<RuntimeCollectionPlan>
   onGenerateNaturalPlan: (intentText: string) => Promise<RuntimeCollectionPlan>
+  naturalParseState?: NaturalParseState
 }) {
   const container = document.createElement('div')
   const root = createRoot(container)
@@ -110,10 +113,44 @@ function mountBuilder({
     onConfirmPlan: vi.fn(async () => undefined),
     onGenerateFormPlan,
     onGenerateNaturalPlan,
+    naturalParseState,
   })))
 
   return mounted
 }
+
+describe('自然语言输入区反馈', () => {
+  it('没有计划预览时也在输入区显示持久、可操作的失败反馈', async () => {
+    const mounted = mountBuilder({
+      onGenerateNaturalPlan: vi.fn(async () => draftPlan),
+      naturalParseState: {
+        phase: 'failed',
+        taskId: 'task-natural-failed',
+        intentText: '查找英国 TikTok 宠物用品账号',
+        finishedAt: '2026-07-20T08:00:17Z',
+        problem: {
+          code: 'MODEL_AUTH_ERROR',
+          stage: 'preparing',
+          message: 'AI 服务鉴权失败，请检查 API Key',
+          retryable: false,
+          safeDetails: {},
+        },
+        draftPreserved: true,
+      },
+    })
+
+    act(() => findButton(mounted.container, '自然语言')?.dispatchEvent(
+      new MouseEvent('mousedown', { bubbles: true, button: 0 }),
+    ))
+
+    const alert = mounted.container.querySelector('[role="alert"]')
+    expect(alert?.textContent).toContain('AI 服务鉴权失败，请检查 API Key')
+    expect(alert?.textContent).toContain('MODEL_AUTH_ERROR')
+    expect(alert?.textContent).toContain('修改方式')
+    expect(alert?.textContent).toContain('已保留')
+    expect(mounted.container.textContent).not.toContain('发生未知错误')
+  })
+})
 
 function findButton(container: HTMLElement, text: string) {
   return Array.from(container.querySelectorAll('button'))
