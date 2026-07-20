@@ -2,6 +2,47 @@ use super::*;
 use crate::workspace::create_workspace;
 
 #[test]
+fn natural_language_draft_can_start_without_a_guessed_scope() {
+  let root_path = unique_temp_workspace("natural-empty-scope");
+  create_workspace("自然语言空范围草稿", &root_path).expect("workspace should be created");
+
+  let task = create_collection_task(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "等待 AI 解析".to_string(),
+      source_type: "natural_language".to_string(),
+      platforms: Vec::new(),
+      data_types: Vec::new(),
+    },
+  )
+  .expect("natural language draft must not require local inference");
+
+  assert_eq!(task.platforms_json, serde_json::json!([]));
+  assert_eq!(task.data_types_json, serde_json::json!([]));
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn form_draft_still_requires_an_explicit_scope() {
+  let root_path = unique_temp_workspace("form-empty-scope");
+  create_workspace("表单范围校验", &root_path).expect("workspace should be created");
+
+  let error = create_collection_task(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "表单任务".to_string(),
+      source_type: "form".to_string(),
+      platforms: Vec::new(),
+      data_types: Vec::new(),
+    },
+  )
+  .expect_err("form task must keep explicit scope validation");
+
+  assert!(error.message.contains("平台不能为空"));
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn task_plan_confirm_enqueue_and_logs_round_trip() {
   let root_path = unique_temp_workspace("tasks");
   create_workspace("任务测试", &root_path).expect("workspace should be created");

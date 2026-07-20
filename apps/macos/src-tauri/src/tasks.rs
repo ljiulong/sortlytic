@@ -364,23 +364,28 @@ fn normalize_create_task_input(
     "form" | "natural_language" => input.source_type.trim().to_string(),
     _ => return Err(task_error("任务来源只支持 form 或 natural_language")),
   };
+  let allow_empty_scope = source_type == "natural_language";
 
   Ok(CreateCollectionTaskInput {
     name,
     source_type,
-    platforms: normalize_string_list("平台", input.platforms)?,
-    data_types: normalize_string_list("数据类型", input.data_types)?,
+    platforms: normalize_string_list("平台", input.platforms, allow_empty_scope)?,
+    data_types: normalize_string_list("数据类型", input.data_types, allow_empty_scope)?,
   })
 }
 
-fn normalize_string_list(label: &str, values: Vec<String>) -> AppResult<Vec<String>> {
+fn normalize_string_list(
+  label: &str,
+  values: Vec<String>,
+  allow_empty: bool,
+) -> AppResult<Vec<String>> {
   let normalized = values
     .into_iter()
     .map(|value| value.trim().to_string())
     .filter(|value| !value.is_empty())
     .collect::<Vec<_>>();
 
-  if normalized.is_empty() {
+  if normalized.is_empty() && !allow_empty {
     return Err(task_error(format!("{label}不能为空")));
   }
 
