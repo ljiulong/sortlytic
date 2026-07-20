@@ -632,14 +632,13 @@ describe('计划生成失败的草稿清理', () => {
     })
   })
 
-  it('自然语言 AI 生成失败后删除已创建的草稿任务', async () => {
+  it('自然语言 AI 生成失败后保留草稿、原始输入和诊断记录', async () => {
     vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
     invokeMock.mockImplementation(async (command: string) => {
       if (command === 'create_collection_task') {
         return { ...task, id: 'task-natural-1', status: 'waiting_confirmation' }
       }
       if (command === 'generate_collection_plan_from_text') throw new Error('AI 结构化输出无效')
-      if (command === 'delete_task') return undefined
       throw new Error(`意外命令：${command}`)
     })
     renderWorkbenchHook()
@@ -650,12 +649,81 @@ describe('计划生成失败的草稿清理', () => {
     expect(invokeMock.mock.calls.map(([command]) => command)).toEqual([
       'create_collection_task',
       'generate_collection_plan_from_text',
-      'delete_task',
     ])
-    expect(invokeMock).toHaveBeenLastCalledWith('delete_task', {
-      taskId: 'task-natural-1',
+    expect(invokeMock).toHaveBeenNthCalledWith(1, 'create_collection_task', {
+      input: {
+        name: '采集小红书公开账号',
+        source_type: 'natural_language',
+        platforms: [],
+        data_types: [],
+      },
       rootPath: null,
     })
+  })
+
+  it('自然语言解析成功后不在确认前调用 TikHub 配置、余额或报价', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'create_collection_task') {
+        return { ...task, id: 'task-natural-1', status: 'draft' }
+      }
+      if (command === 'generate_collection_plan_from_text') {
+        return {
+          parsed_intent: {
+            schema_version: 1,
+            platform: 'tiktok',
+            account_source: 'user_search',
+            source_input: 'pet supplies',
+            query_locale: 'en-GB',
+            region_code: 'GB',
+            selected_fields: [],
+            time_range_days: null,
+            age_range: null,
+            gender_filter: null,
+            record_limit: 10,
+            budget_limit_micros: 100_000,
+            missing_fields: [],
+            confidence: 0.95,
+          },
+          issues: [],
+          collection_plan: {
+            ...savedFormPlan,
+            task_id: 'task-natural-1',
+            plan_json: {
+              ...savedFormPlan.plan_json,
+              platforms: ['tiktok'],
+              keywords: [],
+              account_source: 'user_search',
+              region: 'GB',
+              time_range: null,
+              record_limit: 10,
+              budget_limit: { currency: 'USD', amount_micros: 100_000 },
+              selected_fields: [],
+              steps: [{
+                endpoint_key: 'tiktok.user_search',
+                params: { keyword: 'pet supplies' },
+              }],
+            },
+          },
+        }
+      }
+      throw new Error(`意外命令：${command}`)
+    })
+    renderWorkbenchHook()
+    const generateNaturalMutation = mutationOptionsMock.current[1]
+
+    await expect(generateNaturalMutation?.mutationFn?.(
+      '用中文查找英国 TikTok 宠物用品账号，最多 10 个，预算 0.1 美元。',
+    )).resolves.toMatchObject({
+      taskId: 'task-natural-1',
+      keyword: 'pet supplies',
+      regionCode: 'GB',
+      pricingReady: false,
+    })
+    expect(invokeMock.mock.calls.map(([command]) => command)).toEqual([
+      'create_collection_task',
+      'generate_collection_plan_from_text',
+    ])
   })
 
   it('草稿清理失败时同时返回原始错误与明确的人工清理提示', async () => {

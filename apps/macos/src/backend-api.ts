@@ -192,6 +192,23 @@ export type NaturalParseAttemptView = {
   updated_at: string
 }
 
+export type CollectionIntentV1 = {
+  schema_version: 1
+  platform?: 'tiktok' | 'douyin' | 'xiaohongshu' | null
+  account_source?: string | null
+  source_input?: string | null
+  query_locale?: string | null
+  region_code?: string | null
+  selected_fields: string[]
+  time_range_days?: 1 | 7 | 30 | 180 | null
+  age_range?: { min: number; max: number } | null
+  gender_filter?: Array<'male' | 'female' | 'other'> | null
+  record_limit?: number | null
+  budget_limit_micros?: number | null
+  missing_fields: string[]
+  confidence: number
+}
+
 export type TaskLogView = {
   id: string
   task_run_id: string
@@ -468,7 +485,9 @@ export function generateCollectionPlanFromText(input: {
   model_id?: string | null
 }) {
   return invoke<{
-    collection_plan: CollectionPlanView
+    parsed_intent?: CollectionIntentV1 | null
+    issues: string[]
+    collection_plan?: CollectionPlanView | null
   }>('generate_collection_plan_from_text', {
     input,
     rootPath: null,

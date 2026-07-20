@@ -471,38 +471,40 @@ export function buildFormPlanRequest(values: CollectionFormPayload): GenerateFor
 
 async function createNaturalPlan(intentText: string): Promise<RuntimeCollectionPlan> {
   assertTauriRuntime()
-  const hints = inferNaturalPlanHints(intentText)
   const task = await createCollectionTask({
     name: intentText.trim().slice(0, 42) || '自然语言采集任务',
     source_type: 'natural_language',
-    platforms: [hints.platform],
-    data_types: [hints.dataType],
+    platforms: [],
+    data_types: [],
   })
-  let runtimePlan: RuntimeCollectionPlan
-  try {
-    const result = await generateCollectionPlanFromText({
-      task_id: task.id,
-      intent_text: intentText,
-      provider_id: null,
-      model_id: null,
-    })
-    runtimePlan = planFromBackend(
-      {
-        platform: toUiPlatform(hints.platform),
-        dataType: toUiDataType(hints.dataType),
-        regionCode: '',
-        keyword: '',
-        range: '未提供时间范围',
-        maxRecords: 0,
-        budget: 0,
-      },
-      result.collection_plan,
+  const result = await generateCollectionPlanFromText({
+    task_id: task.id,
+    intent_text: intentText,
+    provider_id: null,
+    model_id: null,
+  })
+  if (!result.collection_plan) {
+    throw new Error(
+      result.issues.length > 0
+        ? `解析完成，需要补充信息：${result.issues.join('；')}`
+        : '解析完成，需要补充信息；请切换到表单修正任务',
     )
-  } catch (error) {
-    return cleanupFailedDraftTask(task.id, error)
   }
+  const intent = result.parsed_intent
+  const runtimePlan = planFromBackend(
+    {
+      platform: toUiPlatform(intent?.platform ?? ''),
+      dataType: toUiDataType('account'),
+      regionCode: intent?.region_code ?? '',
+      keyword: intent?.source_input ?? '',
+      range: intent?.time_range_days ? String(intent.time_range_days) : '未提供时间范围',
+      maxRecords: intent?.record_limit ?? 0,
+      budget: (intent?.budget_limit_micros ?? 0) / 1_000_000,
+    },
+    result.collection_plan,
+  )
 
-  return preparePlanPricing(runtimePlan)
+  return runtimePlan
 }
 
 async function cleanupFailedDraftTask(taskId: string, originalError: unknown): Promise<never> {
@@ -596,20 +598,6 @@ async function preparePlanPricing(plan: RuntimeCollectionPlan) {
   } catch (error) {
     return { ...plan, pricingReady: false, pricingBlocker: backendErrorMessage(error) }
   }
-}
-
-function inferNaturalPlanHints(intentText: string) {
-  const lower = intentText.toLocaleLowerCase()
-  const platform = intentText.includes('抖音')
-    ? 'douyin'
-    : intentText.includes('小红书')
-      ? 'xiaohongshu'
-      : lower.includes('tiktok')
-        ? 'tiktok'
-        : 'xiaohongshu'
-  const dataType = intentText.includes('关键词') || lower.includes('keyword') ? 'keyword_search' : 'comments'
-
-  return { platform, dataType }
 }
 
 function toBackendPlatform(platform: Platform) {
