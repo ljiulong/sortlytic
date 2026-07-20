@@ -173,6 +173,25 @@ export type TaskRunView = {
   cost_actual_json: Record<string, unknown>
 }
 
+export type NaturalParseAttemptView = {
+  id: string
+  task_id: string
+  intent_text: string
+  language?: string | null
+  parse_status: 'running' | 'valid' | 'needs_review' | 'failed' | 'interrupted'
+  parse_phase?: string | null
+  ai_run_id?: string | null
+  error_code?: string | null
+  error_message?: string | null
+  retryable?: boolean | null
+  error_safe_details_json: Record<string, unknown>
+  provider_id?: string | null
+  model_id?: string | null
+  prompt_version_id?: string | null
+  created_at: string
+  updated_at: string
+}
+
 export type TaskLogView = {
   id: string
   task_run_id: string
@@ -344,6 +363,10 @@ export function listTasks(status?: string) {
 
 export function listLatestTaskRuns() {
   return invoke<TaskRunView[]>('list_latest_task_runs', { rootPath: null })
+}
+
+export function listLatestTaskIntents() {
+  return invoke<NaturalParseAttemptView[]>('list_latest_task_intents', { rootPath: null })
 }
 
 export function listTaskLogs(taskRunId: string) {

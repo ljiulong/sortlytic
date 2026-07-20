@@ -2,16 +2,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   checkForAppUpdate,
   getCurrentAppVersion,
+  listLatestTaskIntents,
   prepareAppUpdate,
   relaunchAfterAppUpdate,
 } from './backend-api'
 
+const invokeMock = vi.hoisted(() => vi.fn())
 const getVersionMock = vi.hoisted(() => vi.fn())
 const updaterCheckMock = vi.hoisted(() => vi.fn())
 const updaterInstallMock = vi.hoisted(() => vi.fn())
 const relaunchMock = vi.hoisted(() => vi.fn())
 
 vi.mock('@tauri-apps/api/app', () => ({ getVersion: getVersionMock }))
+vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }))
 vi.mock('@tauri-apps/plugin-updater', () => ({ check: updaterCheckMock }))
 vi.mock('@tauri-apps/plugin-process', () => ({ relaunch: relaunchMock }))
 
@@ -21,6 +24,17 @@ beforeEach(() => {
   updaterCheckMock.mockReset()
   updaterInstallMock.mockReset()
   relaunchMock.mockReset()
+  invokeMock.mockReset()
+})
+
+describe('natural parse attempt API boundary', () => {
+  it('loads all latest attempts with one active-workspace command', async () => {
+    invokeMock.mockResolvedValue([])
+
+    await expect(listLatestTaskIntents()).resolves.toEqual([])
+
+    expect(invokeMock).toHaveBeenCalledWith('list_latest_task_intents', { rootPath: null })
+  })
 })
 
 describe('application update API boundaries', () => {
