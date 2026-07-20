@@ -8,10 +8,9 @@ import {
   getAiRun,
   getLatestCollectionPlan,
   getTask,
-  listAiRuns,
+  listTaskIntents,
   reviseCollectionTask,
   type AccountCollectionCapabilityView,
-  type AiRunView,
   type CollectionIntentV1,
   type NaturalParseAttemptView,
   type RevisedCollectionTaskView,
@@ -55,7 +54,7 @@ function TaskEditor({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const [history, setHistory] = useState<AiRunView[]>()
+  const [history, setHistory] = useState<NaturalParseAttemptView[]>()
 
   useEffect(() => {
     let current = true
@@ -198,7 +197,7 @@ function TaskEditor({
 
   const loadHistory = async () => {
     try {
-      setHistory(await listAiRuns(taskId, 'collection_intent_generation'))
+      setHistory(await listTaskIntents(taskId))
     } catch (historyError) {
       setError(backendErrorMessage(historyError))
     }
@@ -539,7 +538,7 @@ function TaskEditor({
             <ol className="task-editor__history">
               {history.map((run) => (
                 <li key={run.id}>
-                  <strong>{run.validation_status}</strong>
+                  <strong>{run.parse_status} · {run.error_code ?? 'NO_ERROR'}</strong>
                   <span>{run.created_at}</span>
                   <span>{run.error_message ?? '结构化意图已保存'}</span>
                 </li>

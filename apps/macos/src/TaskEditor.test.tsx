@@ -17,6 +17,7 @@ const apiMocks = vi.hoisted(() => ({
   getLatestCollectionPlan: vi.fn(),
   getTask: vi.fn(),
   listAiRuns: vi.fn(),
+  listTaskIntents: vi.fn(),
   reviseCollectionTask: vi.fn(),
 }))
 
@@ -31,12 +32,15 @@ type MountedEditor = { container: HTMLDivElement; root: Root }
 const mountedEditors = new Set<MountedEditor>()
 
 beforeEach(() => {
+  ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean })
+    .IS_REACT_ACT_ENVIRONMENT = true
   Object.values(apiMocks).forEach((mock) => mock.mockReset())
   apiMocks.getTask.mockResolvedValue(task())
   apiMocks.getLatestCollectionPlan.mockResolvedValue(plan())
   apiMocks.getAiRun.mockResolvedValue({ output_json: parsedIntent() })
   apiMocks.getAccountCollectionCapabilities.mockResolvedValue(capability())
   apiMocks.listAiRuns.mockResolvedValue([])
+  apiMocks.listTaskIntents.mockResolvedValue([])
   apiMocks.generateAccountCollectionPlan.mockResolvedValue({
     source: 'form_generated',
     schema_version: 4,
@@ -140,6 +144,25 @@ describe('完整任务编辑器', () => {
     expect(mounted.container.textContent).toContain('当前平台或来源无法可靠筛选时间')
     expect(buttonByText(mounted.container, '移除地区条件')).toBeTruthy()
     expect(buttonByText(mounted.container, '移除时间条件')).toBeTruthy()
+  })
+
+  it('查看解析记录包含尚未创建 ai_run 的配置阶段失败', async () => {
+    apiMocks.listTaskIntents.mockResolvedValue([attempt({
+      id: 'attempt-config-failed',
+      ai_run_id: null,
+      parse_status: 'failed',
+      error_code: 'MODEL_AUTH_ERROR',
+      error_message: 'AI 配置鉴权失败',
+    })])
+    const mounted = mountEditor({ naturalParseAttempt: attempt({ parse_status: 'valid' }) })
+    await flushEditor()
+
+    await act(async () => buttonByText(mounted.container, '查看解析记录').click())
+    await flushEditor()
+
+    expect(apiMocks.listTaskIntents).toHaveBeenCalledWith('task-1')
+    expect(mounted.container.textContent).toContain('AI 配置鉴权失败')
+    expect(mounted.container.textContent).toContain('MODEL_AUTH_ERROR')
   })
 })
 
