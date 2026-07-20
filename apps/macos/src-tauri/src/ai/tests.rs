@@ -578,10 +578,12 @@ fn serve_tikhub_collection_flow() -> (String, thread::JoinHandle<()>) {
             "aweme_id": "video-e2e",
             "desc": "端到端测试记录",
             "share_url": "https://www.tiktok.com/@author/video/video-e2e",
+            "last_posted_at": "2026-07-19T00:00:00Z",
             "author": {
               "user_id": "author-e2e",
               "unique_id": "author",
-              "nickname": "测试作者"
+              "nickname": "测试作者",
+              "region": "US"
             }
           }],
           "has_more": false
