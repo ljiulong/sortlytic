@@ -185,9 +185,18 @@ CREATE TABLE IF NOT EXISTS task_intent (
   task_id TEXT NOT NULL,
   intent_text TEXT NOT NULL,
   language TEXT,
-  parse_status TEXT NOT NULL,
+  parse_status TEXT NOT NULL CHECK (parse_status IN (
+    'running', 'valid', 'needs_review', 'failed', 'interrupted'
+  )),
+  parse_phase TEXT,
   ai_run_id TEXT,
+  error_code TEXT,
+  error_message TEXT,
+  retryable INTEGER CHECK (retryable IS NULL OR retryable IN (0, 1)),
+  error_safe_details_json TEXT NOT NULL DEFAULT '{}'
+    CHECK (json_valid(error_safe_details_json) AND json_type(error_safe_details_json) = 'object'),
   created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT '',
   FOREIGN KEY (task_id) REFERENCES collection_task(id) ON DELETE CASCADE
 );
 

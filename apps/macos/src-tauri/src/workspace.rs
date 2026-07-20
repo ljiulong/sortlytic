@@ -37,6 +37,7 @@ use security::{
   validate_workspace_database, validate_workspace_directory_entries, validate_workspace_identity,
   validate_workspace_root_for_creation,
 };
+use task_intent_migration::{apply_task_intent_migration, validate_existing_task_intent_migration};
 
 mod account_fields_migration;
 mod active_run_migration;
@@ -47,8 +48,9 @@ mod plan_review_migration;
 mod run_checkpoint_migration;
 mod schema;
 mod security;
+mod task_intent_migration;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 10;
+pub const CURRENT_SCHEMA_VERSION: i64 = 11;
 pub const DATABASE_FILE_NAME: &str = "app.sqlite";
 
 const WORKSPACE_DIRS: &[&str] = &[
@@ -315,6 +317,7 @@ fn apply_schema(connection: &mut Connection) -> AppResult<()> {
   validate_existing_api_profile_migration(connection)?;
   validate_existing_plan_review_migration(connection)?;
   validate_existing_account_fields_migration(connection)?;
+  validate_existing_task_intent_migration(connection)?;
   connection
     .execute_batch(SCHEMA_SQL)
     .map_err(database_error)?;
@@ -335,7 +338,8 @@ fn apply_schema(connection: &mut Connection) -> AppResult<()> {
   apply_collection_pipeline_migration(connection)?;
   apply_api_profile_migration(connection)?;
   apply_plan_review_migration(connection)?;
-  apply_account_fields_migration(connection)
+  apply_account_fields_migration(connection)?;
+  apply_task_intent_migration(connection)
 }
 
 fn apply_record_observation_migration(connection: &mut Connection) -> AppResult<()> {
