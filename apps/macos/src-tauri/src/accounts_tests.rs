@@ -528,10 +528,7 @@ fn persisted_account_fields_keep_zero_and_latest_field_evidence() {
   assert_eq!(fields["account_handle"], "account-evidence");
   assert_eq!(fields["platform_user_id"], "user-evidence");
   assert_eq!(fields["data_source"], "tiktok.account_profile");
-  assert_eq!(
-    evidence["platform_user_id"]["raw_path"],
-    "/user_id"
-  );
+  assert_eq!(evidence["platform_user_id"]["raw_path"], "/user_id");
   assert_eq!(evidence["display_name"]["raw_path"], "/nickname");
   assert_eq!(evidence["account_handle"]["raw_path"], "/unique_id");
   assert_eq!(
@@ -631,8 +628,14 @@ fn account_posts_only_contribute_the_latest_post_time() {
   assert_eq!(last_posted_at.as_deref(), Some("300"));
   assert_eq!(fields["account_created_at"], 100);
   assert_eq!(fields["last_posted_at"], 300);
-  assert_eq!(evidence["account_created_at"]["endpoint_key"], "douyin.account_profile");
-  assert_eq!(evidence["last_posted_at"]["endpoint_key"], "douyin.account_posts");
+  assert_eq!(
+    evidence["account_created_at"]["endpoint_key"],
+    "douyin.account_profile"
+  );
+  assert_eq!(
+    evidence["last_posted_at"]["endpoint_key"],
+    "douyin.account_posts"
+  );
   assert_eq!(evidence["last_posted_at"]["raw_path"], "/create_time");
 }
 

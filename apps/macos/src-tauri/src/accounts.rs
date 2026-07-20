@@ -231,7 +231,11 @@ pub fn normalize_account_with_evidence(
   let mut account_fields = extracted.values;
   let mut field_evidence = extracted.evidence;
   for (field, field_value, raw_path) in [
-    ("platform", Some(platform.clone()), Some("$context.platform")),
+    (
+      "platform",
+      Some(platform.clone()),
+      Some("$context.platform"),
+    ),
     ("display_name", username.clone(), username_path),
     ("account_handle", account.clone(), account_path),
     (
@@ -454,10 +458,11 @@ fn timestamp_text_is_later(incoming: &str, existing: &str) -> bool {
 }
 
 fn timestamp_sort_key(value: &str) -> Option<i64> {
-  value
-    .parse::<i64>()
-    .ok()
-    .or_else(|| DateTime::parse_from_rfc3339(value).ok().map(|value| value.timestamp()))
+  value.parse::<i64>().ok().or_else(|| {
+    DateTime::parse_from_rfc3339(value)
+      .ok()
+      .map(|value| value.timestamp())
+  })
 }
 
 fn merge_field(
@@ -566,23 +571,22 @@ fn first_identifier_with_path<'a>(
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .map(ToString::to_string)
-        .or_else(|| value.pointer(path)?.as_i64().map(|number| number.to_string()))?;
+        .or_else(|| {
+          value
+            .pointer(path)?
+            .as_i64()
+            .map(|number| number.to_string())
+        })?;
       Some((text, *path))
     })
     .map_or((None, None), |(text, path)| (Some(text), Some(path)))
 }
 
-fn first_text_with_path<'a>(
-  value: &Value,
-  paths: &'a [&str],
-) -> (Option<String>, Option<&'a str>) {
+fn first_text_with_path<'a>(value: &Value, paths: &'a [&str]) -> (Option<String>, Option<&'a str>) {
   paths
     .iter()
     .find_map(|path| {
-      let text = value
-        .pointer(path)?
-        .as_str()?
-        .trim();
+      let text = value.pointer(path)?.as_str()?.trim();
       (!text.is_empty()).then(|| (text.to_string(), *path))
     })
     .map_or((None, None), |(text, path)| (Some(text), Some(path)))
