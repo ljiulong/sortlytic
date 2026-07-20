@@ -41,7 +41,7 @@ export const taskExportFormatOptions = taskExportFormatOptionKeys.map(({ value, 
 
 export function capabilitiesForStatus(status: TaskStatus) {
   return {
-    canEdit: status === '等待确认' || status === '待人工确认',
+    canEdit: status !== '已排队' && status !== '运行中',
     canCancel: ['等待确认', '待人工确认', '已排队', '运行中'].includes(status),
     canConfirm: status === '等待确认',
     canDelete: status !== '已排队' && status !== '运行中',
