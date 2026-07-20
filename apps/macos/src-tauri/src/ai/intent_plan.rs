@@ -69,16 +69,7 @@ pub(crate) fn build_collection_plan_from_intent(
       ));
     }
   }
-  let mut selected_fields = if intent.selected_fields.is_empty() {
-    capability
-      .fields
-      .iter()
-      .filter(|field| field.default_selected)
-      .map(|field| field.key.clone())
-      .collect::<Vec<_>>()
-  } else {
-    intent.selected_fields.clone()
-  };
+  let mut selected_fields = intent.selected_fields.clone();
   if !selected_fields
     .iter()
     .any(|field| field == "country_region")
@@ -391,5 +382,25 @@ mod tests {
     assert_eq!(plan.plan_json["time_range"], "7");
     assert_eq!(plan.plan_json["age_range"], json!({ "min": 21, "max": 45 }));
     assert_eq!(plan.plan_json["gender_filter"], json!(["female"]));
+  }
+
+  #[test]
+  fn does_not_add_unrequested_profile_fields_or_hidden_cost() {
+    let mut intent = british_tiktok_intent();
+    intent.selected_fields = Vec::new();
+
+    let result = build_collection_plan_from_intent(intent);
+    let plan = result.collection_plan.expect("地区证据可用时必须生成计划");
+    let fields = plan.plan_json["selected_fields"]
+      .as_array()
+      .expect("结果字段");
+
+    assert_eq!(fields, &vec![json!("country_region")]);
+    assert!(!fields.contains(&json!("avatar_url")));
+    assert!(!fields.contains(&json!("followers_count")));
+    assert_eq!(
+      plan.plan_json["cost_estimate"]["enrichment_operation_count"],
+      1
+    );
   }
 }
