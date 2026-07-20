@@ -249,11 +249,15 @@ fn build_field_catalog(
   selected_keys: &[String],
   accounts: &[ExportAccount],
 ) -> AppResult<Vec<ExportField>> {
-  let capabilities = platforms
+  let task_capabilities = platforms
     .iter()
     .map(|platform| get_account_collection_capabilities(platform))
     .collect::<AppResult<Vec<_>>>()?;
-  let definitions = capabilities
+  let catalog_capabilities = ["tiktok", "douyin", "xiaohongshu"]
+    .into_iter()
+    .map(get_account_collection_capabilities)
+    .collect::<AppResult<Vec<_>>>()?;
+  let definitions = task_capabilities
     .first()
     .ok_or_else(|| export_error("账号任务缺少平台能力"))?;
   let selected = selected_keys.iter().collect::<BTreeSet<_>>();
@@ -264,7 +268,13 @@ fn build_field_catalog(
     .map(|definition| {
       let mut supported_platforms = Vec::new();
       let mut declared_sources = BTreeSet::new();
-      for capability in &capabilities {
+      for platform in &definition.supported_platforms {
+        let Some(capability) = catalog_capabilities
+          .iter()
+          .find(|capability| capability.platform == *platform)
+        else {
+          continue;
+        };
         let Some(field) = capability
           .fields
           .iter()

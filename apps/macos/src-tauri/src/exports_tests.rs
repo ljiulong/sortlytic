@@ -231,6 +231,7 @@ fn account_v4_export_uses_selected_fields_and_adds_field_guide() {
   let workbook = unzip_entry(&xlsx_path, "xl/workbook.xml");
   let strings = unzip_entry(&xlsx_path, "xl/sharedStrings.xml");
   let accounts = unzip_entry(&xlsx_path, "xl/worksheets/sheet1.xml");
+  let field_guide = unzip_entry(&xlsx_path, "xl/worksheets/sheet2.xml");
 
   assert_eq!(workbook.matches("<sheet ").count(), 5);
   assert!(workbook.contains("name=\"用户数据收集表\""));
@@ -280,6 +281,16 @@ fn account_v4_export_uses_selected_fields_and_adds_field_guide() {
   assert!(strings.contains("tiktok.account_profile"));
   assert!(strings.contains("user.signature"));
   assert!(!strings.contains("SECRET_CURSOR_TOKEN"));
+  let age_index = shared_string_index(&strings, "age");
+  let douyin_support_index = shared_string_index(&strings, "抖音（需补全）");
+  let age_row = field_guide
+    .split("<row ")
+    .find(|row| row.contains(&format!("<v>{age_index}</v>")))
+    .expect("字段说明应包含年龄行");
+  assert!(
+    age_row.contains(&format!("<v>{douyin_support_index}</v>")),
+    "年龄字段说明应列出真实支持平台"
+  );
 
   std::fs::remove_dir_all(root_path).ok();
 }
@@ -585,6 +596,14 @@ fn xml_cell<'a>(sheet: &'a str, reference: &str) -> &'a str {
     .or_else(|| tail.find("/>").map(|index| index + 2))
     .expect("cell should terminate");
   &tail[..end]
+}
+
+fn shared_string_index(strings: &str, value: &str) -> usize {
+  strings
+    .split("<si>")
+    .skip(1)
+    .position(|item| item.contains(&format!(">{value}</t>")))
+    .unwrap_or_else(|| panic!("missing shared string {value}"))
 }
 
 fn unique_temp_workspace(label: &str) -> std::path::PathBuf {
