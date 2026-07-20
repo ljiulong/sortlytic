@@ -16,6 +16,7 @@ import type { z } from 'zod'
 import AccountSourceFields from './AccountSourceFields'
 import AppSelect from './AppSelect'
 import type { AccountCollectionCapabilityView } from './backend-api'
+import { accountSourceFilterCapabilities } from './account-source-rules'
 import './CollectionBuilder.css'
 import CollectionFilterFields from './CollectionFilterFields'
 import {
@@ -23,7 +24,6 @@ import {
   countryRegionOptions,
   createCollectionFormSchema,
   getGenderFilterOptions,
-  supportsRegionSelection,
   type AccountSourceKey,
   type CollectionDataType,
 } from './collection-options'
@@ -36,7 +36,6 @@ import { PlanFact, StatusPill } from './CollectionBuilderPrimitives'
 import {
   countryRegionSelectOptions,
 } from './collection-select-options'
-import { useCollectionTimeRanges } from './collection-time-ranges'
 import { useAccountCapabilities } from './use-account-capabilities'
 import { i18n } from './i18n'
 import {
@@ -116,7 +115,6 @@ export function CollectionBuilder({
   const { field: dataTypeField } = useController({ control, name: 'dataType' })
   const { field: dataTypesField } = useController({ control, name: 'dataTypes' })
   const selectedPlatform = platformField.value
-  const selectedDataTypes = dataTypesField.value ?? []
   const selectedFields = selectedFieldsField.value ?? emptySelectedFields
   const selectedRange = watch('range')
   const ageRangeEnabled = watch('ageRangeEnabled')
@@ -154,15 +152,19 @@ export function CollectionBuilder({
   const genderFilterSupported = capabilityReady && accountCapability?.fields.some(
     (field) => field.key === 'gender' && field.availability !== 'unsupported',
   ) === true
-  const timeRanges = useCollectionTimeRanges(selectedPlatform)
-  const timeRangeOptions = useMemo(() => timeRanges.values.map((value) => ({
+  const sourceFilters = useMemo(
+    () => accountSourceFilterCapabilities(accountCapability, accountSourceField.value),
+    [accountCapability, accountSourceField.value],
+  )
+  const timeRangeOptions = useMemo(() => sourceFilters.timeRanges.map((value) => ({
     value,
     label: t('options.timeRange.days', { count: Number(value) }),
     meta: `${value}d`,
-  })), [t, timeRanges.values])
-  const regionEnabled = selectedPlatform
-    ? supportsRegionSelection(selectedPlatform, selectedDataTypes)
-    : false
+  })), [sourceFilters.timeRanges, t])
+  const regionEnabled = capabilityReady && sourceFilters.regionFilter !== 'unsupported'
+  const timeRangeEnabled = capabilityReady
+    && sourceFilters.timeRangeFilter !== 'unsupported'
+    && sourceFilters.timeRanges.length > 0
 
   useEffect(() => {
     if (!regionEnabled) setValue('regionCode', '')
@@ -200,10 +202,10 @@ export function CollectionBuilder({
   ])
 
   useEffect(() => {
-    if (selectedRange && !timeRanges.values.includes(selectedRange)) {
+    if (selectedRange && !sourceFilters.timeRanges.includes(selectedRange)) {
       setValue('range', '', { shouldValidate: true })
     }
-  }, [selectedRange, setValue, timeRanges.values])
+  }, [selectedRange, setValue, sourceFilters.timeRanges])
 
   const submitPlanOnce = async (submission: () => Promise<RuntimeCollectionPlan>) => {
     if (planSubmissionInFlightRef.current) return
@@ -295,7 +297,7 @@ export function CollectionBuilder({
                   errorId="region-code-error"
                   htmlFor="region-code"
                   label={t('fields.region')}
-                  hint={regionEnabled ? t('fields.regionHintSupported') : t('fields.regionHintUnsupported')}
+                  hint={t(`fields.filter.${sourceFilters.regionFilter}`)}
                 >
                   <Controller
                     control={control}
@@ -318,13 +320,11 @@ export function CollectionBuilder({
                   />
                 </FormField>
                 <FormField
-                  error={timeRanges.error
-                    ? t('message.timeRangeCapabilityUnavailable')
-                    : errors.range?.message}
+                  error={errors.range?.message}
                   errorId="range-error"
                   htmlFor="range"
                   label={t('fields.range')}
-                  hint={t('fields.rangeHint')}
+                  hint={t(`fields.filter.${sourceFilters.timeRangeFilter}`)}
                 >
                   <Controller
                     control={control}
@@ -332,16 +332,14 @@ export function CollectionBuilder({
                     render={({ field }) => (
                       <AppSelect
                         id="range"
-                        ariaDescribedBy={timeRanges.error || errors.range ? 'range-error' : undefined}
-                        disabled={!selectedPlatform || timeRanges.isLoading || Boolean(timeRanges.error)}
-                        invalid={Boolean(timeRanges.error || errors.range)}
+                        ariaDescribedBy={errors.range ? 'range-error' : undefined}
+                        disabled={!timeRangeEnabled}
+                        invalid={Boolean(errors.range)}
                         onChange={field.onChange}
                         options={timeRangeOptions}
-                        placeholder={timeRanges.error
-                          ? t('placeholders.rangeUnavailable')
-                          : timeRanges.isLoading
-                            ? t('placeholders.rangeLoading')
-                            : t('placeholders.range')}
+                        placeholder={timeRangeEnabled
+                          ? t('placeholders.range')
+                          : t('placeholders.rangeUnavailable')}
                         value={field.value ?? ''}
                       />
                     )}

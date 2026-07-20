@@ -135,6 +135,9 @@ beforeEach(async () => {
       input_kind: 'keyword',
       endpoint_key: 'tiktok.user_search',
       pagination_mode: 'cursor',
+      region_filter: 'local',
+      time_range_filter: 'local',
+      time_ranges: ['1', '7', '30', '180'],
       max_page_size: 20,
       max_request_count: 100,
     }, {
@@ -144,6 +147,9 @@ beforeEach(async () => {
       input_kind: 'account',
       endpoint_key: 'tiktok.account_profile',
       pagination_mode: 'single',
+      region_filter: 'local',
+      time_range_filter: 'local',
+      time_ranges: ['1', '7', '30', '180'],
       max_page_size: 1,
       max_request_count: 1,
     }],
@@ -535,6 +541,64 @@ describe('collection form controls', () => {
     expect(markup).not.toContain('collection-builder__option-list')
     expect(markup).not.toContain('搜索结果中的账号')
     expect(markup).not.toContain('账号作品所属账号')
+  })
+
+  it('小红书用户搜索按来源能力禁用地区但保留本地时间证据筛选', async () => {
+    backendApiMocks.getAccountCollectionCapabilities.mockResolvedValue({
+      catalog_version: 1,
+      platform: 'xiaohongshu',
+      display_name: '小红书',
+      account_sources: [{
+        key: 'user_search',
+        display_name: '搜索用户',
+        description: '按关键词搜索公开账号。',
+        input_kind: 'keyword',
+        endpoint_key: 'xiaohongshu.user_search',
+        pagination_mode: 'cursor',
+        region_filter: 'unsupported',
+        time_range_filter: 'local',
+        time_ranges: ['1', '7', '30', '180'],
+        max_page_size: 20,
+        max_request_count: 100,
+      }],
+      field_groups: [{ key: 'activity', display_name: '账号活跃' }],
+      fields: [{
+        key: 'last_posted_at',
+        group: 'activity',
+        display_name: '最近发文',
+        description: '从账号作品确认。',
+        value_type: 'timestamp',
+        availability: 'enrichment',
+        default_selected: true,
+        required_operation_keys: ['enrich.account_posts'],
+      }],
+    })
+    const mounted = mountBuilder({
+      onGenerateNaturalPlan: vi.fn(async () => draftPlan),
+    })
+    const choose = async (selectId: string, optionId: string) => {
+      await act(async () => mounted.container.querySelector<HTMLButtonElement>(`#${selectId}`)?.click())
+      await act(async () => mounted.container.querySelector<HTMLButtonElement>(`#${optionId}`)?.click())
+    }
+
+    await act(async () => mounted.container.querySelector<HTMLButtonElement>('#platform')?.click())
+    await act(async () => Array.from(
+      mounted.container.querySelectorAll<HTMLButtonElement>('.app-select__option'),
+    ).find((option) => option.textContent?.includes('小红书'))?.click())
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(mounted.container.querySelector<HTMLButtonElement>('#account-source')?.disabled).toBe(false)
+    await choose('account-source', 'account-source-option-user_search')
+
+    expect(mounted.container.querySelector<HTMLButtonElement>('#region-code')?.disabled).toBe(true)
+    expect(
+      mounted.container.querySelector<HTMLButtonElement>('#range')?.disabled,
+      mounted.container.textContent ?? '',
+    ).toBe(false)
+    expect(mounted.container.textContent).toContain('当前平台或来源无法可靠筛选')
+    expect(mounted.container.textContent).toContain('采集并合并账号后按明确公开值筛选')
   })
 
   it('表单提交单一账号来源、字段集合和兼容数据类型映射', async () => {
