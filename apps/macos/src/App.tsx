@@ -153,6 +153,9 @@ function Workbench() {
                   onConfirmTask={backend.confirmTask}
                   onDeleteTask={backend.deleteTask}
                   onExportTask={backend.exportTask}
+                  onOpenSettings={() => setActiveNav('settings')}
+                  onRefresh={backend.refresh}
+                  onRetryNaturalTask={backend.retryNaturalParse}
                   onUpdateTask={backend.updateTask}
                 />
               </div>
