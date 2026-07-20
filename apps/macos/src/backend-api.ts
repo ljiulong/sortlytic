@@ -208,6 +208,28 @@ export type NaturalParseAttemptView = {
   updated_at: string
 }
 
+export type AiRunView = {
+  id: string
+  task_id: string
+  runtime_snapshot_id: string
+  run_type: string
+  input_record_set_id?: string | null
+  input_summary?: string | null
+  output_json?: Record<string, unknown> | null
+  raw_output_path?: string | null
+  schema_valid: boolean
+  validation_status: string
+  error_code?: string | null
+  error_message?: string | null
+  input_tokens?: number | null
+  output_tokens?: number | null
+  latency_ms?: number | null
+  first_token_latency_ms?: number | null
+  retry_count: number
+  cost_estimate_json: Record<string, unknown>
+  created_at: string
+}
+
 export type CollectionIntentV1 = {
   schema_version: 1
   platform?: 'tiktok' | 'douyin' | 'xiaohongshu' | null
@@ -400,6 +422,18 @@ export function listLatestTaskRuns() {
 
 export function listLatestTaskIntents() {
   return invoke<NaturalParseAttemptView[]>('list_latest_task_intents', { rootPath: null })
+}
+
+export function getAiRun(aiRunId: string) {
+  return invoke<AiRunView>('get_ai_run', { aiRunId, rootPath: null })
+}
+
+export function listAiRuns(taskId: string, runType?: string) {
+  return invoke<AiRunView[]>('list_ai_runs', {
+    taskId,
+    runType: runType ?? null,
+    rootPath: null,
+  })
 }
 
 export function listTaskLogs(taskRunId: string) {

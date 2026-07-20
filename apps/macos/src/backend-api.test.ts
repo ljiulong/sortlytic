@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   checkForAppUpdate,
+  getAiRun,
   getCurrentAppVersion,
   listLatestTaskIntents,
+  listAiRuns,
   prepareAppUpdate,
   relaunchAfterAppUpdate,
   reviseCollectionTask,
@@ -59,6 +61,31 @@ describe('task revision API boundary', () => {
 
     expect(invokeMock).toHaveBeenCalledWith('revise_collection_task', {
       input,
+      rootPath: null,
+    })
+  })
+})
+
+describe('AI run diagnostics API boundary', () => {
+  it('loads one parsed intent by its persisted run id', async () => {
+    invokeMock.mockResolvedValue({ id: 'ai-run-1' })
+
+    await getAiRun('ai-run-1')
+
+    expect(invokeMock).toHaveBeenCalledWith('get_ai_run', {
+      aiRunId: 'ai-run-1',
+      rootPath: null,
+    })
+  })
+
+  it('lists all natural-language intent runs for a task', async () => {
+    invokeMock.mockResolvedValue([])
+
+    await listAiRuns('task-1', 'collection_intent_generation')
+
+    expect(invokeMock).toHaveBeenCalledWith('list_ai_runs', {
+      taskId: 'task-1',
+      runType: 'collection_intent_generation',
       rootPath: null,
     })
   })
