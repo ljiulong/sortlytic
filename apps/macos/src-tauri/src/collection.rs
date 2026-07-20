@@ -23,6 +23,7 @@ pub use account_capabilities::{
   AccountSourceInputKind, DataTypeCapabilityView, FilterExecution, PaginationMode,
   PlatformCapabilityView,
 };
+pub(crate) use account_capabilities::{account_field_keys, account_source_keys};
 pub use account_plan::{
   generate_account_collection_plan, validate_collection_plan_v4, AccountFormCollectionPlanRequest,
 };

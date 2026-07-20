@@ -223,6 +223,23 @@ pub fn get_account_collection_capabilities(
   })
 }
 
+pub(crate) fn account_field_keys() -> Vec<String> {
+  FIELD_DEFINITIONS
+    .iter()
+    .map(|definition| definition.0.to_string())
+    .collect()
+}
+
+pub(crate) fn account_source_keys() -> Vec<String> {
+  ["tiktok", "douyin", "xiaohongshu"]
+    .into_iter()
+    .flat_map(account_sources)
+    .map(|source| source.key)
+    .collect::<BTreeSet<_>>()
+    .into_iter()
+    .collect()
+}
+
 fn account_sources(platform: &str) -> Vec<AccountSourceCapabilityView> {
   let mut sources = vec![
     source(

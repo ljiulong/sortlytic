@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::collection::{account_field_keys, account_source_keys};
+
 pub(super) fn collection_plan_schema() -> Value {
   let age_range = age_range_schema();
   let gender_filter = gender_filter_schema();
@@ -204,27 +206,16 @@ fn cost_estimate_schema() -> Value {
 }
 
 fn definitions_schema() -> Value {
+  let account_sources = account_source_keys();
+  let account_fields = account_field_keys();
   json!({
     "account_source": {
       "type": "string",
-      "enum": [
-        "user_search", "content_search_authors", "direct_account", "item_author",
-        "comment_authors", "followers", "followings", "similar_accounts"
-      ]
+      "enum": account_sources
     },
     "account_field": {
       "type": "string",
-      "enum": [
-        "secure_user_id", "avatar_url", "profile_url", "bio", "website_url",
-        "verification_status", "verification_reason", "account_type", "private_account",
-        "language", "country_region", "profile_tags", "gender", "age", "followers_count",
-        "following_count", "friends_count", "posts_count", "likes_received_count",
-        "liked_content_count", "account_created_at", "last_posted_at", "live_status",
-        "live_room_id", "username_modified_at", "nickname_modified_at", "commerce_status",
-        "commerce_category", "seller_status", "organization_status", "comments_permission",
-        "duet_permission", "stitch_permission", "download_permission", "favorites_visibility",
-        "following_visibility", "playlist_visibility", "live_level", "live_badge"
-      ]
+      "enum": account_fields
     },
     "data_type": {
       "type": "string",
@@ -529,6 +520,19 @@ mod tests {
   #[test]
   fn every_object_is_closed_and_requires_all_declared_properties() {
     assert_strict_object_schemas(&collection_plan_schema(), "$schema");
+  }
+
+  #[test]
+  fn account_enums_are_derived_from_the_capability_catalog() {
+    let schema = collection_plan_schema();
+    assert_eq!(
+      schema["$defs"]["account_source"]["enum"],
+      json!(account_source_keys())
+    );
+    assert_eq!(
+      schema["$defs"]["account_field"]["enum"],
+      json!(account_field_keys())
+    );
   }
 
   fn assert_strict_object_schemas(schema: &Value, path: &str) {
