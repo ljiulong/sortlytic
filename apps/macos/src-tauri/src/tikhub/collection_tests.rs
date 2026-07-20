@@ -1,4 +1,66 @@
 use super::*;
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::thread;
+
+fn collection_server(
+  responses: Vec<(&'static str, &'static str, &'static str)>,
+) -> (String, thread::JoinHandle<usize>) {
+  let listener = TcpListener::bind("127.0.0.1:0").expect("test server should bind");
+  let address = listener.local_addr().expect("test server should resolve");
+  let server = thread::spawn(move || {
+    let mut request_count = 0;
+    for (status, retry_after, body) in responses {
+      let (mut stream, _) = listener.accept().expect("test server should accept");
+      let mut request = [0_u8; 4096];
+      assert!(
+        stream
+          .read(&mut request)
+          .expect("request should be readable")
+          > 0
+      );
+      request_count += 1;
+      write!(
+        stream,
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{retry_after}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len(),
+      )
+      .expect("response should be writable");
+    }
+    request_count
+  });
+  (format!("http://{address}"), server)
+}
+
+#[test]
+fn collection_request_retries_http_429_and_honors_retry_after() {
+  let (base_url, server) = collection_server(vec![
+    (
+      "429 Too Many Requests",
+      "Retry-After: 0\r\n",
+      r#"{"code":429}"#,
+    ),
+    (
+      "200 OK",
+      "",
+      r#"{"code":200,"data":{"aweme_list":[],"user_list":[{"user_info":{"uid":"retry-user","unique_id":"retry_result"}}],"has_more":false}}"#,
+    ),
+  ]);
+  let _override = super::test_support::override_tikhub_base_url_for_current_test(base_url.clone());
+  let request = build_collection_request(
+    "tiktok",
+    "user_search",
+    &serde_json::json!({ "keyword": "汽车", "page_size": 1 }),
+    None,
+  )
+  .expect("user search request should build");
+
+  let page = send_collection_request(Some(base_url), "retry-token", &request)
+    .expect("HTTP 429 should retry and recover");
+
+  assert_eq!(page.records.len(), 1);
+  assert_eq!(server.join().expect("test server should finish"), 2);
+}
 
 #[test]
 fn maps_every_mvp_platform_and_data_type_to_official_endpoint() {
