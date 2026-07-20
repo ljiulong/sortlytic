@@ -2,11 +2,12 @@ use std::path::Path;
 
 use chrono::Utc;
 use rusqlite::params;
-use serde_json::Value;
 use uuid::Uuid;
 
+use super::collection_intent_schema::parse_collection_intent;
+use super::intent_plan::build_collection_plan_from_intent;
+use super::provider_client::collection_intent_request;
 use super::*;
-use crate::collection::validate_collection_plan_v4;
 use crate::prompts::seed_builtin_prompts;
 use crate::tasks::{
   save_collection_plan, update_collection_task, SaveCollectionPlanInput, UpdateCollectionTaskInput,
@@ -54,7 +55,7 @@ pub fn generate_collection_plan_from_text(
         "INSERT INTO runtime_snapshot (
         id, task_id, provider_id, model_id, api_format, base_url_type, prompt_version_id,
         output_schema_id, capabilities_json, config_source, created_at
-      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'collection_plan_v4', ?8, 'active_api_profile', ?9)",
+      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'collection_intent_v1', ?8, 'active_api_profile', ?9)",
         params![
           runtime_snapshot_id,
           input.task_id,
@@ -80,7 +81,7 @@ pub fn generate_collection_plan_from_text(
     "requesting_ai",
   )?;
 
-  let request = collection_plan_request(&prompt.content, intent_text);
+  let request = collection_intent_request(&prompt.content, intent_text);
   let call_started_at = std::time::Instant::now();
   let response = match call_model(&profile.config, &request) {
     Ok(response) => response,
@@ -103,19 +104,30 @@ pub fn generate_collection_plan_from_text(
     }
   };
   update_task_intent_phase(&connection, &attempt_id, "validating_intent", None)?;
-  let schema_errors = validate_collection_plan_schema(&response.output_json);
-  let generated = normalize_model_plan(response.output_json);
-  let mut plan_validation = validate_collection_plan_v4(&generated);
-  plan_validation.errors.extend(schema_errors);
-  plan_validation.errors.sort();
-  plan_validation.errors.dedup();
-  plan_validation.valid = plan_validation.errors.is_empty();
-  let schema_valid = plan_validation.valid;
-  let validation_status = if schema_valid {
-    "valid"
-  } else {
-    "needs_review"
-  };
+  let raw_intent = response.output_json;
+  let (parsed_intent, plan_draft, issues, schema_valid, validation_status) =
+    match parse_collection_intent(&raw_intent) {
+      Ok(mut intent) => {
+        let built = build_collection_plan_from_intent(intent.clone());
+        intent.missing_fields.clone_from(&built.missing_fields);
+        (
+          Some(intent),
+          built.collection_plan,
+          built.issues,
+          true,
+          built.validation_status,
+        )
+      }
+      Err(issues) => (None, None, issues, false, "needs_review".to_string()),
+    };
+  let persisted_intent = parsed_intent
+    .as_ref()
+    .and_then(|intent| serde_json::to_value(intent).ok())
+    .unwrap_or_else(|| raw_intent.clone());
+  let cost_estimate_json = plan_draft
+    .as_ref()
+    .map(|plan| plan.cost_estimate_json.clone())
+    .unwrap_or_else(|| serde_json::json!({}));
 
   preserve_attempt_error(
     connection
@@ -124,23 +136,19 @@ pub fn generate_collection_plan_from_text(
         id, task_id, runtime_snapshot_id, run_type, input_summary, output_json, schema_valid,
         validation_status, input_tokens, output_tokens, latency_ms, retry_count,
         cost_estimate_json, created_at
-      ) VALUES (?1, ?2, ?3, 'collection_plan_generation', ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, ?11, ?12)",
+      ) VALUES (?1, ?2, ?3, 'collection_intent_generation', ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, ?11, ?12)",
       params![
         ai_run_id,
         input.task_id,
         runtime_snapshot_id,
         intent_text,
-        generated.to_string(),
+        persisted_intent.to_string(),
         bool_to_i64(schema_valid),
         validation_status,
         response.input_tokens,
         response.output_tokens,
         response.latency_ms,
-        generated
-          .get("cost_estimate")
-          .cloned()
-          .unwrap_or_else(|| serde_json::json!({}))
-          .to_string(),
+        cost_estimate_json.to_string(),
         now
       ],
       )
@@ -152,10 +160,9 @@ pub fn generate_collection_plan_from_text(
   )?;
 
   update_task_intent_phase(&connection, &attempt_id, "building_plan", Some(&ai_run_id))?;
-  let generated_platforms = json_string_array(generated.get("platforms"));
-  if schema_valid
-    && !generated_platforms.is_empty()
-    && generated.get("entity").and_then(Value::as_str) == Some("account")
+  if let Some(platform) = parsed_intent
+    .as_ref()
+    .and_then(|intent| intent.platform.as_ref())
   {
     preserve_attempt_error(
       update_collection_task(
@@ -163,7 +170,7 @@ pub fn generate_collection_plan_from_text(
         &input.task_id,
         UpdateCollectionTaskInput {
           name: None,
-          platforms: Some(generated_platforms),
+          platforms: Some(vec![platform.clone()]),
           data_types: Some(vec!["account".to_string()]),
         },
       )
@@ -174,42 +181,34 @@ pub fn generate_collection_plan_from_text(
     )?;
   }
 
-  let collection_plan = preserve_attempt_error(
-    save_collection_plan(
-      &root_path,
-      SaveCollectionPlanInput {
-        task_id: input.task_id.clone(),
-        source: "ai_generated".to_string(),
-        plan_json: generated.clone(),
-        validation_status: validation_status.to_string(),
-        validation_errors_json: Some(serde_json::json!(plan_validation.errors)),
-        cost_estimate_json: generated.get("cost_estimate").cloned(),
-      },
-    ),
-    &connection,
-    &attempt_id,
-    "building_plan",
-  )?;
-  update_task_intent_success(&connection, &attempt_id, validation_status, &ai_run_id)?;
+  let collection_plan = match plan_draft {
+    Some(plan_draft) => Some(preserve_attempt_error(
+      save_collection_plan(
+        &root_path,
+        SaveCollectionPlanInput {
+          task_id: input.task_id.clone(),
+          source: "ai_generated".to_string(),
+          plan_json: plan_draft.plan_json,
+          validation_status: plan_draft.validation_status,
+          validation_errors_json: Some(plan_draft.validation_errors_json),
+          cost_estimate_json: Some(plan_draft.cost_estimate_json),
+        },
+      ),
+      &connection,
+      &attempt_id,
+      "building_plan",
+    )?),
+    None => None,
+  };
+  update_task_intent_success(&connection, &attempt_id, &validation_status, &ai_run_id)?;
   let ai_run = get_ai_run(&root_path, &ai_run_id)?;
   let runtime_snapshot = get_runtime_snapshot(&connection, &runtime_snapshot_id)?;
 
   Ok(GeneratedCollectionPlanView {
     ai_run,
     runtime_snapshot,
+    parsed_intent,
+    issues,
     collection_plan,
   })
-}
-
-fn json_string_array(value: Option<&Value>) -> Vec<String> {
-  value
-    .and_then(Value::as_array)
-    .map(|values| {
-      values
-        .iter()
-        .filter_map(Value::as_str)
-        .map(ToString::to_string)
-        .collect()
-    })
-    .unwrap_or_default()
 }

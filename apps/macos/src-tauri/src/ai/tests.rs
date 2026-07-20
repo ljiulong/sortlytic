@@ -83,16 +83,16 @@ fn natural_language_generation_requires_an_active_ai_profile() {
 fn text_generation_uses_active_prompt_and_real_provider_response() {
   let root_path = unique_temp_workspace("ai-plan");
   create_workspace("AI 测试", &root_path).expect("workspace should be created");
-  let plan = valid_keyword_plan();
+  let intent = valid_collection_intent();
   let response = serde_json::json!({
-    "choices": [{ "message": { "content": plan.to_string() } }],
+    "choices": [{ "message": { "content": intent.to_string() } }],
     "usage": { "prompt_tokens": 120, "completion_tokens": 80 }
   })
   .to_string();
   let (base_url, server) = serve_ai_once(200, response, |request| {
     assert!(request.starts_with("POST /v1/chat/completions HTTP/1.1"));
     assert!(request.contains("input_json.text"));
-    assert!(request.contains("collection_plan_v4"));
+    assert!(request.contains("collection_intent_v1"));
     assert!(request.contains("最近 7 天美国 TikTok 汽车内容"));
   });
   let profile_id = configure_active_ai(&root_path, base_url);
@@ -121,7 +121,7 @@ fn text_generation_uses_active_prompt_and_real_provider_response() {
   let runs = list_ai_runs(
     &root_path,
     result.ai_run.task_id.clone(),
-    Some("collection_plan_generation".to_string()),
+    Some("collection_intent_generation".to_string()),
   )
   .expect("runs should list");
   let updated_task = get_task(&root_path, &task.id).expect("task should reload");
@@ -134,14 +134,27 @@ fn text_generation_uses_active_prompt_and_real_provider_response() {
   assert_eq!(result.runtime_snapshot.model_id, "deepseek-test");
   assert_eq!(
     result.runtime_snapshot.output_schema_id,
-    "collection_plan_v4"
+    "collection_intent_v1"
   );
   assert_eq!(result.runtime_snapshot.config_source, "active_api_profile");
-  assert_eq!(result.collection_plan.validation_status, "valid");
   assert_eq!(
-    result.collection_plan.plan_json["budget_limit"]["amount_micros"],
+    result
+      .parsed_intent
+      .as_ref()
+      .and_then(|intent| intent.region_code.as_deref()),
+    Some("US")
+  );
+  let collection_plan = result
+    .collection_plan
+    .as_ref()
+    .expect("后端必须生成 v4 计划");
+  assert_eq!(collection_plan.validation_status, "valid");
+  assert_eq!(
+    collection_plan.plan_json["budget_limit"]["amount_micros"],
     2_000_000
   );
+  assert_eq!(collection_plan.plan_json["schema_version"], 4);
+  assert_eq!(result.ai_run.output_json.as_ref(), Some(&intent));
   assert_eq!(updated_task.platforms_json, serde_json::json!(["tiktok"]));
   assert_eq!(updated_task.data_types_json, serde_json::json!(["account"]));
   assert_eq!(runs.len(), 1);
@@ -150,13 +163,13 @@ fn text_generation_uses_active_prompt_and_real_provider_response() {
 }
 
 #[test]
-fn invalid_model_plan_does_not_change_existing_task_scope() {
+fn invalid_model_intent_does_not_change_existing_task_scope_or_create_a_plan() {
   let root_path = unique_temp_workspace("ai-invalid-plan-scope");
   create_workspace("AI 无效计划范围测试", &root_path).expect("workspace should be created");
-  let mut plan = valid_keyword_plan();
-  plan["platforms"] = serde_json::json!(["youtube"]);
+  let mut intent = valid_collection_intent();
+  intent["platform"] = serde_json::json!("youtube");
   let response = serde_json::json!({
-    "choices": [{ "message": { "content": plan.to_string() } }]
+    "choices": [{ "message": { "content": intent.to_string() } }]
   })
   .to_string();
   let (base_url, server) = serve_ai_once(200, response, |_| {});
@@ -181,12 +194,15 @@ fn invalid_model_plan_does_not_change_existing_task_scope() {
       model_id: None,
     },
   )
-  .expect("invalid plan should be saved for review");
+  .expect("invalid intent should be retained for review");
   server.join().expect("test server should finish");
   let updated_task = get_task(&root_path, &task.id).expect("task should reload");
 
   assert!(!result.ai_run.schema_valid);
-  assert_eq!(result.collection_plan.validation_status, "needs_review");
+  assert_eq!(result.ai_run.validation_status, "needs_review");
+  assert!(result.parsed_intent.is_none());
+  assert!(result.collection_plan.is_none());
+  assert!(result.issues.iter().any(|issue| issue.contains("platform")));
   assert_eq!(
     updated_task.platforms_json,
     serde_json::json!(["xiaohongshu"])
@@ -211,23 +227,23 @@ fn invalid_model_plan_does_not_change_existing_task_scope() {
     )
     .unwrap();
   assert_eq!(attempt.0, "needs_review");
-  assert_eq!(attempt.1.as_deref(), Some("success"));
+  assert_eq!(attempt.1.as_deref(), Some("needs_review"));
   assert_eq!(attempt.2.as_deref(), Some(result.ai_run.id.as_str()));
 
   std::fs::remove_dir_all(root_path).ok();
 }
 
 #[test]
-fn model_plan_missing_required_step_field_needs_review() {
+fn model_intent_missing_required_field_needs_review_without_a_plan() {
   let root_path = unique_temp_workspace("ai-incomplete-plan-schema");
   create_workspace("AI 不完整计划测试", &root_path).expect("workspace should be created");
-  let mut plan = valid_keyword_plan();
-  plan["steps"][0]
+  let mut intent = valid_collection_intent();
+  intent
     .as_object_mut()
-    .expect("step should be an object")
-    .remove("output_selected");
+    .expect("intent should be an object")
+    .remove("budget_limit_micros");
   let response = serde_json::json!({
-    "choices": [{ "message": { "content": plan.to_string() } }]
+    "choices": [{ "message": { "content": intent.to_string() } }]
   })
   .to_string();
   let (base_url, server) = serve_ai_once(200, response, |_| {});
@@ -257,7 +273,13 @@ fn model_plan_missing_required_step_field_needs_review() {
   let updated_task = get_task(&root_path, &task.id).expect("task should reload");
 
   assert!(!result.ai_run.schema_valid);
-  assert_eq!(result.collection_plan.validation_status, "needs_review");
+  assert_eq!(result.ai_run.validation_status, "needs_review");
+  assert!(result.parsed_intent.is_none());
+  assert!(result.collection_plan.is_none());
+  assert!(result
+    .issues
+    .iter()
+    .any(|issue| issue.contains("budget_limit_micros")));
   assert_eq!(
     updated_task.platforms_json,
     serde_json::json!(["xiaohongshu"])
@@ -274,16 +296,16 @@ fn model_plan_missing_required_step_field_needs_review() {
 fn natural_language_plan_runs_through_tikhub_and_persists_records() {
   let root_path = unique_temp_workspace("ai-tikhub-e2e");
   create_workspace("自然语言采集端到端测试", &root_path).expect("workspace should be created");
-  let plan = valid_keyword_plan();
+  let intent = valid_collection_intent();
   let ai_response = serde_json::json!({
-    "choices": [{ "message": { "content": plan.to_string() } }],
+    "choices": [{ "message": { "content": intent.to_string() } }],
     "usage": { "prompt_tokens": 44, "completion_tokens": 66 }
   })
   .to_string();
   let (ai_base_url, ai_server) = serve_ai_once(200, ai_response, |request| {
     assert!(request.starts_with("POST /v1/chat/completions HTTP/1.1"));
     assert!(request.contains("input_json.text"));
-    assert!(request.contains("collection_plan_v4"));
+    assert!(request.contains("collection_intent_v1"));
     assert!(request.contains("最近 7 天美国 TikTok 汽车内容"));
   });
   let ai_profile_id = configure_active_ai(&root_path, ai_base_url);
@@ -312,7 +334,11 @@ fn natural_language_plan_runs_through_tikhub_and_persists_records() {
 
   let (tikhub_base_url, tikhub_server) = serve_tikhub_collection_flow();
   configure_active_tikhub(&root_path);
-  confirm_collection_plan(&root_path, &task.id, &generated.collection_plan.id)
+  let generated_plan = generated
+    .collection_plan
+    .as_ref()
+    .expect("后端必须生成 v4 计划");
+  confirm_collection_plan(&root_path, &task.id, &generated_plan.id)
     .expect("AI plan should be confirmed");
   let queued = enqueue_task(&root_path, &task.id).expect("task should enqueue");
   let _base_url_override = override_tikhub_base_url_for_current_test(tikhub_base_url);
@@ -340,7 +366,7 @@ fn natural_language_plan_runs_through_tikhub_and_persists_records() {
   assert_eq!(generated.runtime_snapshot.model_id, "deepseek-test");
   assert_eq!(
     generated.runtime_snapshot.output_schema_id,
-    "collection_plan_v4"
+    "collection_intent_v1"
   );
   assert_eq!(generated.ai_run.input_tokens, Some(44));
   assert_eq!(generated.ai_run.output_tokens, Some(66));
@@ -523,6 +549,25 @@ fn valid_keyword_plan() -> Value {
   })
 }
 
+fn valid_collection_intent() -> Value {
+  serde_json::json!({
+    "schema_version": 1,
+    "platform": "tiktok",
+    "account_source": "content_search_authors",
+    "source_input": "car",
+    "query_locale": "en-US",
+    "region_code": "US",
+    "selected_fields": [],
+    "time_range_days": 7,
+    "age_range": null,
+    "gender_filter": null,
+    "record_limit": 20,
+    "budget_limit_micros": 2_000_000,
+    "missing_fields": [],
+    "confidence": 0.96
+  })
+}
+
 fn configure_active_ai(root_path: &Path, base_url: String) -> String {
   let profile_id = Uuid::new_v4().to_string();
   let credential_id = Uuid::new_v4().to_string();
@@ -622,23 +667,19 @@ fn serve_ai_once(
 fn serve_tikhub_collection_flow() -> (String, thread::JoinHandle<()>) {
   let listener = TcpListener::bind("127.0.0.1:0").expect("TikHub test server should bind");
   let address = listener.local_addr().expect("test address should resolve");
-  let responses = [
-    (
-      "/api/v1/tikhub/user/get_user_info",
-      serde_json::json!({
-        "code": 200,
-        "user_data": { "balance": 5.0, "free_credit": 1.0 }
-      })
-      .to_string(),
-    ),
-    (
-      "/api/v1/tikhub/user/calculate_price?",
-      serde_json::json!({
-        "code": 200,
-        "data": { "total_price": 0.01, "base_price": 0.01, "currency": "USD" }
-      })
-      .to_string(),
-    ),
+  let quota = serde_json::json!({
+    "code": 200,
+    "user_data": { "balance": 5.0, "free_credit": 1.0 }
+  })
+  .to_string();
+  let quote = serde_json::json!({
+    "code": 200,
+    "data": { "total_price": 0.01, "base_price": 0.01, "currency": "USD" }
+  })
+  .to_string();
+  let responses = vec![
+    ("/api/v1/tikhub/user/get_user_info", quota.clone()),
+    ("/api/v1/tikhub/user/calculate_price?", quote.clone()),
     (
       "/api/v1/tiktok/app/v3/fetch_video_search_result?",
       serde_json::json!({
@@ -651,9 +692,46 @@ fn serve_tikhub_collection_flow() -> (String, thread::JoinHandle<()>) {
             "last_posted_at": "2026-07-19T00:00:00Z",
             "author": {
               "user_id": "author-e2e",
+              "sec_uid": "MS4wLjABAAAA-e2e",
               "unique_id": "author",
               "nickname": "测试作者",
               "region": "US"
+            }
+          }],
+          "has_more": false
+        }
+      })
+      .to_string(),
+    ),
+    ("/api/v1/tikhub/user/get_user_info", quota.clone()),
+    ("/api/v1/tikhub/user/calculate_price?", quote.clone()),
+    (
+      "/api/v1/tiktok/app/v3/fetch_user_country_by_username?",
+      serde_json::json!({
+        "code": 200,
+        "data": {
+          "user_id": "author-e2e",
+          "sec_uid": "MS4wLjABAAAA-e2e",
+          "unique_id": "author",
+          "country": "US"
+        }
+      })
+      .to_string(),
+    ),
+    ("/api/v1/tikhub/user/get_user_info", quota),
+    ("/api/v1/tikhub/user/calculate_price?", quote),
+    (
+      "/api/v1/tiktok/app/v3/fetch_user_post_videos?",
+      serde_json::json!({
+        "code": 200,
+        "data": {
+          "aweme_list": [{
+            "aweme_id": "latest-e2e",
+            "create_time": 1784476800,
+            "author": {
+              "user_id": "author-e2e",
+              "sec_uid": "MS4wLjABAAAA-e2e",
+              "unique_id": "author"
             }
           }],
           "has_more": false
@@ -676,10 +754,21 @@ fn serve_tikhub_collection_flow() -> (String, thread::JoinHandle<()>) {
           .contains(&format!("authorization: bearer {TIKHUB_E2E_TOKEN}")),
         "TikHub request should use the configured token"
       );
-      if index == 1 {
+      if [1, 4, 7].contains(&index) {
         assert!(request.contains("request_per_day=1"));
+      }
+      if index == 1 {
         assert!(
           request.contains("endpoint=%2Fapi%2Fv1%2Ftiktok%2Fapp%2Fv3%2Ffetch_video_search_result")
+        );
+      }
+      if index == 4 {
+        assert!(request
+          .contains("endpoint=%2Fapi%2Fv1%2Ftiktok%2Fapp%2Fv3%2Ffetch_user_country_by_username"));
+      }
+      if index == 7 {
+        assert!(
+          request.contains("endpoint=%2Fapi%2Fv1%2Ftiktok%2Fapp%2Fv3%2Ffetch_user_post_videos")
         );
       }
       if index == 2 {
@@ -687,6 +776,12 @@ fn serve_tikhub_collection_flow() -> (String, thread::JoinHandle<()>) {
         assert!(request.contains("region=US"));
         assert!(request.contains("publish_time=7"));
         assert!(request.to_ascii_lowercase().contains("idempotency-key:"));
+      }
+      if index == 5 {
+        assert!(request.contains("username=author"));
+      }
+      if index == 8 {
+        assert!(request.contains("sec_user_id=MS4wLjABAAAA-e2e"));
       }
       write_json_response(&mut stream, 200, "OK", &body);
     }

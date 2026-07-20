@@ -13,11 +13,9 @@ use crate::tasks::CollectionPlanView;
 use crate::workspace::{open_workspace_database, DATABASE_FILE_NAME};
 
 mod attempts;
-#[allow(dead_code)]
 pub(crate) mod collection_intent_schema;
 pub(crate) mod collection_plan_schema;
 mod generation;
-#[allow(dead_code)]
 pub(crate) mod intent_plan;
 pub(crate) mod provider_client;
 
@@ -81,7 +79,9 @@ pub struct AiRunView {
 pub struct GeneratedCollectionPlanView {
   pub ai_run: AiRunView,
   pub runtime_snapshot: RuntimeSnapshotView,
-  pub collection_plan: CollectionPlanView,
+  pub parsed_intent: Option<CollectionIntentV1>,
+  pub issues: Vec<String>,
+  pub collection_plan: Option<CollectionPlanView>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -244,7 +244,7 @@ fn persist_failed_ai_run(connection: &Connection, input: FailedAiRunInput<'_>) -
         id, task_id, runtime_snapshot_id, run_type, input_summary, schema_valid,
         validation_status, error_code, error_message, latency_ms, retry_count,
         cost_estimate_json, created_at
-      ) VALUES (?1, ?2, ?3, 'collection_plan_generation', ?4, 0, 'failed', ?5, ?6, ?7, 0, '{}', ?8)",
+      ) VALUES (?1, ?2, ?3, 'collection_intent_generation', ?4, 0, 'failed', ?5, ?6, ?7, 0, '{}', ?8)",
       params![
         input.ai_run_id,
         input.task_id,
@@ -308,14 +308,25 @@ fn update_task_intent_success(
   parse_status: &str,
   ai_run_id: &str,
 ) -> AppResult<()> {
+  let parse_phase = if parse_status == "valid" {
+    "success"
+  } else {
+    parse_status
+  };
   connection
     .execute(
       "UPDATE task_intent
-       SET parse_status = ?1, parse_phase = 'success', ai_run_id = ?2,
+       SET parse_status = ?1, parse_phase = ?2, ai_run_id = ?3,
            error_code = NULL, error_message = NULL, retryable = NULL,
-           error_safe_details_json = '{}', updated_at = ?3
-       WHERE id = ?4",
-      params![parse_status, ai_run_id, Utc::now().to_rfc3339(), attempt_id],
+           error_safe_details_json = '{}', updated_at = ?4
+       WHERE id = ?5",
+      params![
+        parse_status,
+        parse_phase,
+        ai_run_id,
+        Utc::now().to_rfc3339(),
+        attempt_id
+      ],
     )
     .map(|_| ())
     .map_err(database_error)
