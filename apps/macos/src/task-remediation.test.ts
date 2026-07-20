@@ -4,6 +4,7 @@ import { remediationForTaskProblem } from './task-remediation'
 describe('任务错误修改方式', () => {
   it.each([
     ['VALIDATION_ERROR', '编辑任务'],
+    ['MODEL_CONFIG_ERROR', '打开 AI 设置'],
     ['MODEL_AUTH_ERROR', '打开 AI 设置'],
     ['MODEL_RATE_LIMIT', '等待'],
     ['TIKHUB_AUTH_ERROR', '打开 TikHub 设置'],

@@ -26,7 +26,7 @@ export function remediationForTaskProblem(
       secondaryAction: 'view_diagnostics',
     }
   }
-  if (['MODEL_AUTH_ERROR', 'MODEL_PROTOCOL_ERROR', 'MODEL_NOT_FOUND'].includes(code ?? '')) {
+  if (['MODEL_CONFIG_ERROR', 'MODEL_AUTH_ERROR', 'MODEL_PROTOCOL_ERROR', 'MODEL_NOT_FOUND'].includes(code ?? '')) {
     return {
       message: '打开 AI 设置，检查 Base URL、API Key、模型 ID，并完成真实连通性测试后重新解析。',
       primaryAction: 'open_ai_settings',
