@@ -80,7 +80,12 @@ function AccountFieldPicker({
       filteredFields.some((field) => field.group === group.key)
     ))?.key
     : undefined
-  const effectiveGroup = searchedGroup || activeGroup || capability?.field_groups[0]?.key || ''
+  const activeGroupMatchesSearch = !normalizedQuery || filteredFields.some(
+    (field) => field.group === activeGroup,
+  )
+  const effectiveGroup = (activeGroup && activeGroupMatchesSearch ? activeGroup : searchedGroup)
+    || capability?.field_groups[0]?.key
+    || ''
   const enrichmentCount = availableFields.filter(
     (field) => selected.has(field.key)
       && field.required_operation_keys.length > 0

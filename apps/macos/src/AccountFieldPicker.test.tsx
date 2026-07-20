@@ -190,4 +190,26 @@ describe('AccountFieldPicker', () => {
       .find((panel) => panel.textContent?.includes('gender'))
     expect(demographics?.dataset.active).toBe('true')
   })
+
+  it('跨分类搜索后允许切换到其他命中分类', async () => {
+    const { container } = await mountPicker()
+    await act(async () => buttonByText(container, '配置字段')?.click())
+    const search = container.querySelector<HTMLInputElement>('input[type="search"]')
+    await act(async () => {
+      const nativeSetter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        'value',
+      )?.set
+      nativeSetter?.call(search, '明确')
+      search?.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => buttonByText(
+      container.querySelector('.account-field-picker__groups') ?? container,
+      '人口属性',
+    )?.click())
+
+    const demographics = [...container.querySelectorAll<HTMLElement>('.account-field-picker__panel')]
+      .find((panel) => panel.textContent?.includes('gender'))
+    expect(demographics?.dataset.active).toBe('true')
+  })
 })
