@@ -63,6 +63,54 @@ fn collection_request_retries_http_429_and_honors_retry_after() {
 }
 
 #[test]
+fn collection_request_retries_business_429_and_stops_after_three_attempts() {
+  let success = r#"{"code":200,"data":{"aweme_list":[],"user_list":[{"user_info":{"uid":"business-retry-user"}}],"has_more":false}}"#;
+  let request = build_collection_request(
+    "tiktok",
+    "user_search",
+    &serde_json::json!({ "keyword": "汽车", "page_size": 1 }),
+    None,
+  )
+  .expect("user search request should build");
+  let (recovering_url, recovering_server) = collection_server(vec![
+    ("200 OK", "Retry-After: 0\r\n", r#"{"code":429}"#),
+    ("200 OK", "", success),
+  ]);
+  let recovering_override =
+    super::test_support::override_tikhub_base_url_for_current_test(recovering_url.clone());
+  let page = send_collection_request(Some(recovering_url), "retry-token", &request)
+    .expect("business 429 should retry and recover");
+  assert_eq!(page.records.len(), 1);
+  assert_eq!(
+    recovering_server
+      .join()
+      .expect("recovering server should finish"),
+    2
+  );
+  drop(recovering_override);
+
+  let limited = (
+    "429 Too Many Requests",
+    "Retry-After: 0\r\n",
+    r#"{"code":429}"#,
+  );
+  let (limited_url, limited_server) = collection_server(vec![limited; 3]);
+  let _limited_override =
+    super::test_support::override_tikhub_base_url_for_current_test(limited_url.clone());
+  let error = send_collection_request(Some(limited_url), "retry-token", &request)
+    .expect_err("persistent 429 should stop after bounded retries");
+  assert_eq!(error.code, AppErrorCode::TikhubRateLimit);
+  assert_eq!(
+    error.safe_details.get("retry_attempts").map(String::as_str),
+    Some("3")
+  );
+  assert_eq!(
+    limited_server.join().expect("limited server should finish"),
+    3
+  );
+}
+
+#[test]
 fn maps_every_mvp_platform_and_data_type_to_official_endpoint() {
   let cases = [
     (
