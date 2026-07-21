@@ -93,11 +93,13 @@ function mountBuilder({
   activePlan,
   onGenerateFormPlan = vi.fn(async () => draftPlan),
   onGenerateNaturalPlan,
+  onRetryNaturalPlan = vi.fn(async () => draftPlan),
   naturalParseState,
 }: {
   activePlan?: RuntimeCollectionPlan
   onGenerateFormPlan?: (values: unknown) => Promise<RuntimeCollectionPlan>
   onGenerateNaturalPlan: (intentText: string) => Promise<RuntimeCollectionPlan>
+  onRetryNaturalPlan?: (taskId: string, intentText: string) => Promise<unknown>
   naturalParseState?: NaturalParseState
 }) {
   const container = document.createElement('div')
@@ -113,6 +115,7 @@ function mountBuilder({
     onConfirmPlan: vi.fn(async () => undefined),
     onGenerateFormPlan,
     onGenerateNaturalPlan,
+    onRetryNaturalPlan,
     naturalParseState,
   })))
 
@@ -153,8 +156,10 @@ describe('自然语言输入区反馈', () => {
 
   it('从持久化失败尝试恢复原始输入并可直接重新解析', async () => {
     const onGenerateNaturalPlan = vi.fn(async () => draftPlan)
+    const onRetryNaturalPlan = vi.fn(async () => draftPlan)
     const mounted = mountBuilder({
       onGenerateNaturalPlan,
+      onRetryNaturalPlan,
       naturalParseState: {
         phase: 'failed',
         taskId: 'task-natural-timeout',
@@ -183,8 +188,11 @@ describe('自然语言输入区反馈', () => {
     await act(async () => {
       findButton(mounted.container, '重新解析')?.click()
     })
-    expect(onGenerateNaturalPlan)
-      .toHaveBeenCalledWith('用中文查找英国 TikTok 宠物用品账号')
+    expect(onRetryNaturalPlan).toHaveBeenCalledWith(
+      'task-natural-timeout',
+      '用中文查找英国 TikTok 宠物用品账号',
+    )
+    expect(onGenerateNaturalPlan).not.toHaveBeenCalled()
   })
 })
 

@@ -146,6 +146,7 @@ function Workbench() {
                   onConfirmPlan={backend.confirmActivePlan}
                   onGenerateFormPlan={backend.generateFormPlan}
                   onGenerateNaturalPlan={backend.generateNaturalPlan}
+                  onRetryNaturalPlan={backend.retryNaturalParse}
                   onOpenAiSettings={() => navigate(parseFeedbackNavigationTarget('ai_settings'))}
                   onViewParseDiagnostics={() => navigate(parseFeedbackNavigationTarget('diagnostics'))}
                 />

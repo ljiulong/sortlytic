@@ -87,6 +87,7 @@ export function CollectionBuilder({
   onConfirmPlan,
   onGenerateFormPlan,
   onGenerateNaturalPlan,
+  onRetryNaturalPlan,
   naturalParseState,
   onOpenAiSettings,
   onViewParseDiagnostics,
@@ -97,6 +98,7 @@ export function CollectionBuilder({
   onConfirmPlan: () => Promise<unknown>
   onGenerateFormPlan: (values: CollectionFormValues) => Promise<RuntimeCollectionPlan>
   onGenerateNaturalPlan: (intentText: string) => Promise<RuntimeCollectionPlan>
+  onRetryNaturalPlan: (taskId: string, intentText: string) => Promise<unknown>
   naturalParseState?: NaturalParseState
   onOpenAiSettings?: () => void
   onViewParseDiagnostics?: () => void
@@ -229,7 +231,7 @@ export function CollectionBuilder({
     setNaturalText((current) => normalizeNaturalIntent(current) ? current : persistedText)
   }, [naturalParseState])
 
-  const submitPlanOnce = async (submission: () => Promise<RuntimeCollectionPlan>) => {
+  const submitPlanOnce = async (submission: () => Promise<unknown>) => {
     if (planSubmissionInFlightRef.current) return
     planSubmissionInFlightRef.current = true
     try {
@@ -256,7 +258,10 @@ export function CollectionBuilder({
     const intentText = normalizeNaturalIntent(naturalText)
       || normalizeNaturalIntent(naturalParseState?.intentText ?? '')
     if (!intentText) return
-    await submitPlanOnce(() => onGenerateNaturalPlan(intentText))
+    const taskId = naturalParseState?.taskId
+    await submitPlanOnce(() => taskId
+      ? onRetryNaturalPlan(taskId, intentText)
+      : onGenerateNaturalPlan(intentText))
   }
 
   return (
