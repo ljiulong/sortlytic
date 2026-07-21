@@ -151,6 +151,54 @@ fn rejects_invalid_or_unsupported_top_level_evidence_filters() {
 }
 
 #[test]
+fn validates_query_locale_against_source_kind_and_target_region() {
+  let mut search_request = request("tiktok", "user_search");
+  search_request.params = serde_json::json!({
+    "keyword": "pet supplies",
+    "region": "GB"
+  });
+  let search_plan = generate_account_collection_plan(search_request)
+    .expect("英国搜索计划应生成")
+    .plan_json;
+  let mut valid = search_plan.clone();
+  valid["query_locale"] = serde_json::json!("en-GB");
+  assert!(validate_collection_plan_v4(&valid).valid);
+
+  for invalid_locale in ["english-uk", "zh-CN", "fr-GB"] {
+    let mut candidate = search_plan.clone();
+    candidate["query_locale"] = serde_json::json!(invalid_locale);
+    let validation = validate_collection_plan_v4(&candidate);
+    assert!(!validation.valid, "英国搜索不得接受 {invalid_locale}");
+    assert!(validation
+      .errors
+      .iter()
+      .any(|error| error.contains("query_locale") || error.contains("en-GB")));
+  }
+
+  let mut missing_region = generate_account_collection_plan(request("tiktok", "user_search"))
+    .unwrap()
+    .plan_json;
+  missing_region["query_locale"] = serde_json::json!("en-GB");
+  let validation = validate_collection_plan_v4(&missing_region);
+  assert!(!validation.valid);
+  assert!(validation
+    .errors
+    .iter()
+    .any(|error| error.contains("明确地区")));
+
+  let mut direct = generate_account_collection_plan(request("tiktok", "direct_account"))
+    .unwrap()
+    .plan_json;
+  direct["query_locale"] = serde_json::json!("en-GB");
+  let validation = validate_collection_plan_v4(&direct);
+  assert!(!validation.valid);
+  assert!(validation
+    .errors
+    .iter()
+    .any(|error| error.contains("直接账号")));
+}
+
+#[test]
 fn douyin_search_reuses_direct_fields_and_deduplicates_extended_profile() {
   let mut request = request("douyin", "user_search");
   request.params = serde_json::json!({ "keyword": "汽车" });

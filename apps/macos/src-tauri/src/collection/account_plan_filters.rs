@@ -2,8 +2,12 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
-use super::{AccountCollectionCapabilityView, AccountSourceCapabilityView, FilterExecution};
+use super::{
+  AccountCollectionCapabilityView, AccountSourceCapabilityView, AccountSourceInputKind,
+  FilterExecution,
+};
 use crate::accounts::normalize_country_region;
+use crate::ai::collection_intent_schema::{primary_query_locale, valid_query_locale};
 use crate::domain::{AppError, AppErrorStage, AppResult};
 
 pub(super) fn validate_plan_filters(
@@ -21,6 +25,7 @@ pub(super) fn validate_plan_filters(
         .find(|source| source.key == account_source)
     })
   });
+  validate_plan_query_locale(plan_json, source.map(|source| source.input_kind), errors);
   match parse_region_filter(plan_json.get("region")) {
     Ok(Some(region)) => {
       if source.is_some_and(|source| source.region_filter == FilterExecution::Unsupported) {
@@ -92,6 +97,47 @@ pub(super) fn validate_plan_filters(
     if selected_fields.is_none_or(|fields| !fields.iter().any(|field| field == "gender")) {
       errors.push("启用 gender_filter 时必须选择 gender 字段".to_string());
     }
+  }
+}
+
+fn validate_plan_query_locale(
+  plan_json: &Value,
+  source_input_kind: Option<AccountSourceInputKind>,
+  errors: &mut Vec<String>,
+) {
+  let Some(query_locale) = plan_json
+    .get("query_locale")
+    .filter(|value| !value.is_null())
+  else {
+    return;
+  };
+  if source_input_kind.is_some_and(|kind| kind != AccountSourceInputKind::Keyword) {
+    errors.push("直接账号、作品或关系列表来源不得设置 query_locale 或翻译标识".to_string());
+    return;
+  }
+  let Some(query_locale) = query_locale
+    .as_str()
+    .filter(|value| valid_query_locale(value))
+  else {
+    errors.push("query_locale 必须使用 language-REGION 格式，例如 en-GB".to_string());
+    return;
+  };
+  let Some(region) = plan_json
+    .get("region")
+    .filter(|value| !value.is_null())
+    .and_then(Value::as_str)
+  else {
+    errors.push("设置 query_locale 前必须提供明确地区".to_string());
+    return;
+  };
+  if let Some(expected) = primary_query_locale(region) {
+    if query_locale != expected {
+      errors.push(format!("目标地区 {region} 的主检索语言必须为 {expected}"));
+    }
+  } else if !query_locale.ends_with(region) {
+    errors.push(format!(
+      "query_locale {query_locale} 必须与目标地区 {region} 一致"
+    ));
   }
 }
 

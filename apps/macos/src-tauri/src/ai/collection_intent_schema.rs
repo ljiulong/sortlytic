@@ -291,7 +291,7 @@ fn validate_intent_values(intent: &CollectionIntentV1) -> Result<(), Vec<String>
   }
 }
 
-fn valid_query_locale(value: &str) -> bool {
+pub(crate) fn valid_query_locale(value: &str) -> bool {
   let mut segments = value.split('-');
   let Some(language) = segments.next() else {
     return false;
@@ -311,7 +311,7 @@ fn valid_query_locale(value: &str) -> bool {
     && normalize_country_region(Some(region)).is_some()
 }
 
-fn primary_query_locale(region: &str) -> Option<&'static str> {
+pub(crate) fn primary_query_locale(region: &str) -> Option<&'static str> {
   Some(match region {
     "GB" => "en-GB",
     "US" => "en-US",
