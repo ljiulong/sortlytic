@@ -10,11 +10,12 @@ use super::{resolve_workspace_root, AppState};
 #[tauri::command]
 pub(super) fn create_collection_task(
   input: CreateCollectionTaskInput,
+  intent_text: Option<String>,
   root_path: Option<String>,
   state: tauri::State<'_, AppState>,
 ) -> AppResult<CollectionTaskView> {
   let root_path = resolve_workspace_root(root_path, &state)?;
-  tasks::create_collection_task(root_path, input)
+  tasks::create_collection_task_with_initial_intent(root_path, input, intent_text.as_deref())
 }
 
 #[tauri::command]

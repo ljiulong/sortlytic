@@ -1,5 +1,110 @@
 use super::*;
-use crate::workspace::create_workspace;
+use crate::workspace::{create_workspace, open_workspace_database, DATABASE_FILE_NAME};
+
+#[test]
+fn natural_task_creation_atomically_persists_the_complete_initial_intent() {
+  let root_path = unique_temp_workspace("natural-initial-intent");
+  create_workspace("自然语言原子草稿", &root_path).expect("workspace should be created");
+  let intent_text = "用中文查找英国 TikTok 宠物用品账号，保留完整原始输入并在进程中断后恢复，最多 10 个，预算 0.1 美元。";
+
+  let task = create_collection_task_with_initial_intent(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "用中文查找英国 TikTok 宠物用品账号".to_string(),
+      source_type: "natural_language".to_string(),
+      platforms: Vec::new(),
+      data_types: Vec::new(),
+    },
+    Some(intent_text),
+  )
+  .expect("task and initial intent should commit together");
+  let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
+  let attempt = connection
+    .query_row(
+      "SELECT intent_text, parse_status, parse_phase FROM task_intent WHERE task_id = ?1",
+      [&task.id],
+      |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, String>(1)?,
+          row.get::<_, String>(2)?,
+        ))
+      },
+    )
+    .expect("initial attempt should exist before model invocation");
+
+  assert_eq!(attempt.0, intent_text);
+  assert_eq!(attempt.1, "running");
+  assert_eq!(attempt.2, "preparing");
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn initial_intent_failure_rolls_back_task_and_audit_log() {
+  let root_path = unique_temp_workspace("natural-initial-intent-rollback");
+  create_workspace("自然语言原子回滚", &root_path).expect("workspace should be created");
+  let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
+  connection
+    .execute_batch(
+      "CREATE TRIGGER fail_initial_intent BEFORE INSERT ON task_intent
+       BEGIN SELECT RAISE(ABORT, 'forced initial intent failure'); END;",
+    )
+    .unwrap();
+  drop(connection);
+
+  create_collection_task_with_initial_intent(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "必须完整回滚".to_string(),
+      source_type: "natural_language".to_string(),
+      platforms: Vec::new(),
+      data_types: Vec::new(),
+    },
+    Some("这段完整输入不能只留下任务壳"),
+  )
+  .expect_err("failed initial attempt must roll back every related row");
+
+  let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
+  assert_eq!(
+    count_rows_for(
+      &connection,
+      "collection_task",
+      "source_type",
+      "natural_language"
+    ),
+    0
+  );
+  assert_eq!(
+    count_rows_for(&connection, "task_intent", "parse_status", "running"),
+    0
+  );
+  assert_eq!(
+    count_rows_for(&connection, "audit_log", "action", "create_collection_task"),
+    0
+  );
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn form_task_rejects_an_initial_natural_language_intent_before_writing() {
+  let root_path = unique_temp_workspace("form-initial-intent-rejected");
+  create_workspace("表单任务原文边界", &root_path).expect("workspace should be created");
+
+  let error = create_collection_task_with_initial_intent(
+    &root_path,
+    create_task_input(),
+    Some("表单任务不得创建自然语言解析 attempt"),
+  )
+  .expect_err("form task must reject natural intent text");
+
+  assert!(error.message.contains("自然语言"));
+  let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
+  assert_eq!(
+    count_rows_for(&connection, "collection_task", "source_type", "form"),
+    0
+  );
+  std::fs::remove_dir_all(root_path).ok();
+}
 
 #[test]
 fn natural_language_draft_can_start_without_a_guessed_scope() {

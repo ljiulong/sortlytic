@@ -151,12 +151,29 @@ pub fn create_collection_task(
   root_path: impl AsRef<Path>,
   input: CreateCollectionTaskInput,
 ) -> AppResult<CollectionTaskView> {
-  let connection = open_workspace_connection(root_path)?;
+  create_collection_task_with_initial_intent(root_path, input, None)
+}
+
+pub fn create_collection_task_with_initial_intent(
+  root_path: impl AsRef<Path>,
+  input: CreateCollectionTaskInput,
+  intent_text: Option<&str>,
+) -> AppResult<CollectionTaskView> {
   let input = normalize_create_task_input(input)?;
+  let intent_text = match (input.source_type.as_str(), intent_text) {
+    ("form", Some(_)) => {
+      return Err(task_error("表单任务不能携带自然语言解析原文"));
+    }
+    ("natural_language", Some(value)) => Some(normalize_required("自然语言需求", value)?),
+    (_, None) => None,
+    _ => None,
+  };
+  let mut connection = open_workspace_connection(root_path)?;
+  let transaction = connection.transaction().map_err(database_error)?;
   let id = Uuid::new_v4().to_string();
   let now = Utc::now().to_rfc3339();
 
-  connection
+  transaction
     .execute(
       "INSERT INTO collection_task (
         id, name, source_type, status, platforms_json, data_types_json,
@@ -174,13 +191,27 @@ pub fn create_collection_task(
     )
     .map_err(database_error)?;
 
+  if let Some(intent_text) = intent_text {
+    transaction
+      .execute(
+        "INSERT INTO task_intent (
+          id, task_id, intent_text, parse_status, parse_phase,
+          error_safe_details_json, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, 'running', 'preparing', '{}', ?4, ?4)",
+        params![Uuid::new_v4().to_string(), id, intent_text, now],
+      )
+      .map_err(database_error)?;
+  }
+
   write_task_audit_log(
-    &connection,
+    &transaction,
     "create_collection_task",
     Some(&id),
     serde_json::json!({}),
   )?;
-  get_task_by_id(&connection, &id)
+  let task = get_task_by_id(&transaction, &id)?;
+  transaction.commit().map_err(database_error)?;
+  Ok(task)
 }
 
 pub fn update_collection_task(
