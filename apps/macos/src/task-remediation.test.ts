@@ -3,18 +3,18 @@ import { remediationForTaskProblem } from './task-remediation'
 
 describe('任务错误修改方式', () => {
   it.each([
-    ['VALIDATION_ERROR', '编辑任务'],
-    ['MODEL_CONFIG_ERROR', '打开 AI 设置'],
-    ['MODEL_AUTH_ERROR', '打开 AI 设置'],
-    ['MODEL_RATE_LIMIT', '等待'],
-    ['TIKHUB_AUTH_ERROR', '打开 TikHub 设置'],
-    ['TIKHUB_RATE_LIMIT', 'Retry-After'],
-    ['DATABASE_ERROR', '重新读取'],
-    ['PERMISSION_ERROR', '工作区健康检查'],
-    ['WORKSPACE_ERROR', '工作区健康检查'],
-    ['COST_LIMIT_ERROR', '编辑预算'],
-  ])('%s 提供明确操作', (code, expected) => {
-    expect(remediationForTaskProblem(code).message).toContain(expected)
+    ['VALIDATION_ERROR', '编辑任务', false],
+    ['MODEL_CONFIG_ERROR', '打开 AI 设置', false],
+    ['MODEL_AUTH_ERROR', '打开 AI 设置', false],
+    ['MODEL_RATE_LIMIT', '等待', true],
+    ['TIKHUB_AUTH_ERROR', '打开 TikHub 设置', false],
+    ['TIKHUB_RATE_LIMIT', 'Retry-After', true],
+    ['DATABASE_ERROR', '重新读取', false],
+    ['PERMISSION_ERROR', '工作区健康检查', false],
+    ['WORKSPACE_ERROR', '工作区健康检查', false],
+    ['COST_LIMIT_ERROR', '编辑预算', false],
+  ])('%s 提供明确操作', (code, expected, retryable) => {
+    expect(remediationForTaskProblem(code, null, retryable).message).toContain(expected)
   })
 
   it('端点白名单错误给出当前小红书失败任务可直接执行的修改方式', () => {
@@ -61,6 +61,27 @@ describe('任务错误修改方式', () => {
       {},
     ).primaryAction).toBe('open_ai_settings')
   })
+
+  it('后端明确标记可重试的 TikHub 请求错误提供重新尝试', () => {
+    const remediation = remediationForTaskProblem(
+      'TIKHUB_REQUEST_ERROR',
+      'TikHub 临时网络错误',
+      true,
+    )
+
+    expect(remediation.primaryAction).toBe('retry')
+    expect(remediation.message).toContain('重新尝试')
+  })
+
+  it.each(['MODEL_RATE_LIMIT', 'TIKHUB_RATE_LIMIT'])(
+    '%s 被后端标记不可重试时不提供必然失败的重试动作',
+    (code) => {
+      const remediation = remediationForTaskProblem(code, '已有请求证据', false)
+
+      expect(remediation.primaryAction).toBe('view_diagnostics')
+      expect(remediation.secondaryAction).toBe('edit_task')
+    },
+  )
 
   it('未知错误仍保留记录并允许查看诊断和编辑，不只显示稍后重试', () => {
     expect(remediationForTaskProblem('UNCLASSIFIED_ERROR')).toEqual({

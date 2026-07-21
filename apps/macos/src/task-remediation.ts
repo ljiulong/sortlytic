@@ -57,7 +57,7 @@ export function remediationForTaskProblem(
       secondaryAction: 'open_ai_settings',
     }
   }
-  if (code === 'MODEL_RATE_LIMIT') {
+  if (code === 'MODEL_RATE_LIMIT' && retryable) {
     return {
       message: '按服务端建议等待后重新解析；系统不会自动重复可能已计费的模型请求。',
       primaryAction: 'retry',
@@ -71,7 +71,7 @@ export function remediationForTaskProblem(
       secondaryAction: 'view_diagnostics',
     }
   }
-  if (code === 'TIKHUB_RATE_LIMIT') {
+  if (code === 'TIKHUB_RATE_LIMIT' && retryable) {
     return {
       message: '根据 Retry-After 等待后重试；保留当前运行证据，禁止立即重复请求。',
       primaryAction: 'retry',
@@ -96,6 +96,20 @@ export function remediationForTaskProblem(
     return {
       message: '编辑预算或缩小最大记录数，保存新计划版本后重新确认。',
       primaryAction: 'edit_task',
+      secondaryAction: 'view_diagnostics',
+    }
+  }
+  if (['MODEL_RATE_LIMIT', 'TIKHUB_RATE_LIMIT'].includes(code ?? '')) {
+    return {
+      message: '当前失败已有请求证据或已被标记为不可重试；保留记录，查看诊断并编辑任务后再运行。',
+      primaryAction: 'view_diagnostics',
+      secondaryAction: 'edit_task',
+    }
+  }
+  if (retryable) {
+    return {
+      message: '保留当前任务和失败证据，确认服务恢复后重新尝试；同一操作只会保持一次在途。',
+      primaryAction: 'retry',
       secondaryAction: 'view_diagnostics',
     }
   }
