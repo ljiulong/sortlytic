@@ -108,12 +108,17 @@ pub fn generate_collection_plan_from_text(
   let (parsed_intent, plan_draft, issues, schema_valid, validation_status) =
     match parse_collection_intent(&raw_intent) {
       Ok(mut intent) => {
+        let preservation_issue = direct_source_preservation_issue(intent_text, &mut intent);
         let built = build_collection_plan_from_intent(intent.clone());
         intent.missing_fields.clone_from(&built.missing_fields);
+        let mut issues = built.issues;
+        if let Some(issue) = preservation_issue {
+          issues.push(issue);
+        }
         (
           Some(intent),
           built.collection_plan,
-          built.issues,
+          issues,
           true,
           built.validation_status,
         )
@@ -222,4 +227,36 @@ pub fn generate_collection_plan_from_text(
     issues,
     collection_plan,
   })
+}
+
+fn direct_source_preservation_issue(
+  intent_text: &str,
+  intent: &mut CollectionIntentV1,
+) -> Option<String> {
+  let direct_source = intent.account_source.as_deref().is_some_and(|source| {
+    matches!(
+      source,
+      "direct_account"
+        | "item_author"
+        | "comment_authors"
+        | "followers"
+        | "followings"
+        | "similar_accounts"
+    )
+  });
+  let source_input = intent.source_input.as_deref()?.trim();
+  if !direct_source || source_input.is_empty() || intent_text.contains(source_input) {
+    return None;
+  }
+  if !intent
+    .missing_fields
+    .iter()
+    .any(|field| field == "source_input")
+  {
+    intent.missing_fields.push("source_input".to_string());
+  }
+  Some(
+    "用户名、账号 ID、作品 ID、URL 或分享链接必须从原始需求中逐字提取并原样保留；当前模型输出无法在原始输入中确认"
+      .to_string(),
+  )
 }

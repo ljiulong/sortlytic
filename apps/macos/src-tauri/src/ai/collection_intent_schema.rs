@@ -197,6 +197,40 @@ fn validate_intent_values(intent: &CollectionIntentV1) -> Result<(), Vec<String>
       "collection_intent_v1.query_locale 必须使用 language-REGION 格式，例如 en-GB".to_string(),
     );
   }
+  let keyword_search = intent
+    .account_source
+    .as_deref()
+    .is_some_and(|source| matches!(source, "user_search" | "content_search_authors"));
+  if keyword_search {
+    if let (Some(region), Some(query_locale)) = (
+      intent.region_code.as_deref(),
+      intent.query_locale.as_deref(),
+    ) {
+      if let Some(expected_locale) = primary_query_locale(region) {
+        if query_locale != expected_locale {
+          errors.push(format!(
+            "目标地区 {region} 的主检索语言必须为 {expected_locale}"
+          ));
+        }
+        if expected_locale.starts_with("en-")
+          && intent
+            .source_input
+            .as_deref()
+            .is_some_and(contains_han_character)
+          && !intent
+            .missing_fields
+            .iter()
+            .any(|field| field == "source_input")
+        {
+          errors.push(format!(
+            "目标地区 {region} 必须使用英文实际检索词；专有名词不确定时请把 source_input 加入 missing_fields"
+          ));
+        }
+      }
+    }
+  } else if intent.account_source.is_some() && intent.query_locale.is_some() {
+    errors.push("直接账号、作品或关系列表来源不得设置 query_locale 或翻译标识".to_string());
+  }
   let account_fields = account_field_keys();
   for field in unique_invalid_values(&intent.selected_fields, &account_fields) {
     errors.push(format!(
@@ -275,6 +309,77 @@ fn valid_query_locale(value: &str) -> bool {
       .chars()
       .all(|character| character.is_ascii_uppercase())
     && normalize_country_region(Some(region)).is_some()
+}
+
+fn primary_query_locale(region: &str) -> Option<&'static str> {
+  Some(match region {
+    "GB" => "en-GB",
+    "US" => "en-US",
+    "CA" => "en-CA",
+    "AU" => "en-AU",
+    "NZ" => "en-NZ",
+    "IE" => "en-IE",
+    "SG" => "en-SG",
+    "ZA" => "en-ZA",
+    "NG" => "en-NG",
+    "KE" => "en-KE",
+    "CN" => "zh-CN",
+    "HK" => "zh-HK",
+    "MO" => "zh-MO",
+    "TW" => "zh-TW",
+    "JP" => "ja-JP",
+    "KR" => "ko-KR",
+    "FR" => "fr-FR",
+    "DE" => "de-DE",
+    "AT" => "de-AT",
+    "CH" => "de-CH",
+    "ES" => "es-ES",
+    "MX" => "es-MX",
+    "AR" => "es-AR",
+    "CL" => "es-CL",
+    "CO" => "es-CO",
+    "PE" => "es-PE",
+    "IT" => "it-IT",
+    "PT" => "pt-PT",
+    "BR" => "pt-BR",
+    "NL" => "nl-NL",
+    "BE" => "nl-BE",
+    "SE" => "sv-SE",
+    "NO" => "no-NO",
+    "DK" => "da-DK",
+    "FI" => "fi-FI",
+    "PL" => "pl-PL",
+    "CZ" => "cs-CZ",
+    "GR" => "el-GR",
+    "RO" => "ro-RO",
+    "HU" => "hu-HU",
+    "UA" => "uk-UA",
+    "RU" => "ru-RU",
+    "TR" => "tr-TR",
+    "IL" => "he-IL",
+    "SA" => "ar-SA",
+    "AE" => "ar-AE",
+    "EG" => "ar-EG",
+    "MA" => "ar-MA",
+    "IN" => "hi-IN",
+    "PK" => "ur-PK",
+    "BD" => "bn-BD",
+    "TH" => "th-TH",
+    "VN" => "vi-VN",
+    "ID" => "id-ID",
+    "MY" => "ms-MY",
+    "PH" => "fil-PH",
+    _ => return None,
+  })
+}
+
+fn contains_han_character(value: &str) -> bool {
+  value.chars().any(|character| {
+    matches!(
+      character as u32,
+      0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF
+    )
+  })
 }
 
 fn unique_invalid_values(values: &[String], allowed: &[String]) -> Vec<String> {
@@ -381,6 +486,26 @@ mod tests {
     assert!(message.contains("query_locale"));
     assert!(message.contains("account_source"));
     assert!(message.contains("selected_fields"));
+  }
+
+  #[test]
+  fn rejects_non_primary_or_untranslated_british_search_queries() {
+    for invalid_locale in ["zh-GB", "zz-GB"] {
+      let mut intent = valid_intent();
+      intent["query_locale"] = json!(invalid_locale);
+
+      let errors = parse_collection_intent(&intent).expect_err("英国检索必须使用 en-GB");
+      assert!(errors.join("\n").contains("en-GB"));
+    }
+
+    let mut untranslated = valid_intent();
+    untranslated["source_input"] = json!("宠物用品");
+    let errors =
+      parse_collection_intent(&untranslated).expect_err("未标记待确认的英国实际检索词不能仍为中文");
+    assert!(errors.join("\n").contains("英文实际检索词"));
+
+    untranslated["missing_fields"] = json!(["source_input"]);
+    parse_collection_intent(&untranslated).expect("待确认的专有名词原文允许保留");
   }
 
   #[test]
