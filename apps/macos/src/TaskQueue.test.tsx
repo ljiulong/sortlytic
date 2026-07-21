@@ -49,6 +49,7 @@ function mountQueue(
   onDeleteTask: (taskId: string) => Promise<unknown> = vi.fn(),
   onRetryNaturalTask: (taskId: string, intentText: string) => Promise<unknown> = vi.fn(),
   onRetryTask: (taskId: string) => Promise<unknown> = vi.fn(),
+  onEditTask: (taskId: string) => void = vi.fn(),
 ) {
   const container = document.createElement('div')
   const root = createRoot(container)
@@ -58,7 +59,7 @@ function mountQueue(
   act(() => root.render(createElement(TaskQueue, {
     tasks,
     isBusy: false,
-    onEditTask: vi.fn(),
+    onEditTask,
     onCancelTask: vi.fn(),
     onConfirmTask,
     onDeleteTask,
@@ -197,6 +198,40 @@ describe('TaskQueue', () => {
     expect(markup).toContain('>待修正</span>')
     expect(markup).not.toContain('>待人工确认</span>')
     expect(markup).toContain('解析完成，需要补充信息')
+  })
+
+  it('查看解析记录打开当前持久任务编辑器', () => {
+    const onEditTask = vi.fn()
+    const mounted = mountQueue(
+      vi.fn(),
+      [{
+        ...waitingTask,
+        id: 'task-parse-history',
+        naturalParseAttempt: {
+          id: 'attempt-history',
+          task_id: 'task-parse-history',
+          intent_text: '查找英国 TikTok 宠物用品账号',
+          parse_status: 'failed',
+          parse_phase: 'requesting_ai',
+          error_code: 'MODEL_AUTH_ERROR',
+          error_message: 'AI 服务鉴权失败',
+          retryable: false,
+          error_safe_details_json: {},
+          created_at: '2026-07-20T08:00:00Z',
+          updated_at: '2026-07-20T08:00:17Z',
+        },
+      }],
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      onEditTask,
+    )
+
+    act(() => [...mounted.container.querySelectorAll('button')]
+      .find((button) => button.textContent?.includes('查看解析记录'))?.click())
+
+    expect(onEditTask).toHaveBeenCalledWith('task-parse-history')
   })
 
   it('自然语言任务卡串行重试并在失败时显示卡内错误', async () => {

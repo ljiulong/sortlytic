@@ -99,7 +99,10 @@ function TaskQueue({
     action: TaskRemediationAction,
   ) => {
     if (action === 'edit_task') onEditTask(task.id)
-    else if (action === 'view_diagnostics') setPreviewTaskId(task.id)
+    else if (action === 'view_diagnostics') {
+      if (kind === 'natural_parse') onEditTask(task.id)
+      else setPreviewTaskId(task.id)
+    }
     else if (action === 'open_ai_settings' || action === 'open_tikhub_settings') onOpenSettings?.()
     else if (action === 'reload' || action === 'workspace_health') onRefresh?.()
     else if (action === 'retry') {

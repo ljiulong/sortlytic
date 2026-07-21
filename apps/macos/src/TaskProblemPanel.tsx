@@ -116,7 +116,11 @@ export default function TaskProblemPanel({
                 onClick={() => onAction(action)}
               >
                 <Icon size={14} aria-hidden="true" />
-                {isBusy && action === 'retry' ? '正在重新尝试' : actionLabels[action]}
+                {isBusy && action === 'retry'
+                  ? '正在重新尝试'
+                  : kind === 'natural_parse' && action === 'view_diagnostics'
+                    ? '查看解析记录'
+                    : actionLabels[action]}
               </button>
             )
           })}
