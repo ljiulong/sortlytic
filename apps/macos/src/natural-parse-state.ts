@@ -70,9 +70,9 @@ export function resolveNaturalParseState(
     (left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at),
   )
   if (localState.phase === 'idle') {
-    return latestAttempts[0]
-      ? naturalParseStateFromAttempt(latestAttempts[0])
-      : localState
+    const latestAttempt = latestAttempts[0]
+    if (!latestAttempt || latestAttempt.parse_status === 'valid') return localState
+    return naturalParseStateFromAttempt(latestAttempt)
   }
   if (!localState.taskId) return localState
   const persisted = latestAttempts.find((attempt) => attempt.task_id === localState.taskId)

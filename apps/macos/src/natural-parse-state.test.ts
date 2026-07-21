@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  createIdleNaturalParseState,
   createPreparingNaturalParseState,
   naturalParseStateFromAttempt,
+  resolveNaturalParseState,
 } from './natural-parse-state'
 import type { NaturalParseAttemptView } from './backend-api'
 
@@ -100,5 +102,36 @@ describe('NaturalParseState', () => {
     expect(state.phase).toBe('success')
     expect(state.finishedAt).toBe(attempt.updated_at)
     expect(state.problem).toBeUndefined()
+  })
+
+  it('应用启动时没有计划预览则不把历史有效记录恢复为孤立成功反馈', () => {
+    const state = resolveNaturalParseState(createIdleNaturalParseState(), [{
+      ...attempt,
+      parse_status: 'valid',
+      parse_phase: 'success',
+    }])
+
+    expect(state).toEqual(createIdleNaturalParseState())
+  })
+
+  it('应用启动时仍恢复最近失败记录的可操作反馈', () => {
+    const state = resolveNaturalParseState(createIdleNaturalParseState(), [{
+      ...attempt,
+      parse_status: 'failed',
+      parse_phase: 'requesting_ai',
+      error_code: 'MODEL_REQUEST_ERROR',
+      error_message: 'AI 服务请求超时',
+      retryable: true,
+    }])
+
+    expect(state).toMatchObject({
+      phase: 'failed',
+      taskId: 'task-1',
+      problem: {
+        code: 'MODEL_REQUEST_ERROR',
+        message: 'AI 服务请求超时',
+        retryable: true,
+      },
+    })
   })
 })
