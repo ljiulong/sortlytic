@@ -106,6 +106,7 @@ export function CollectionBuilder({
   const [activeMode, setActiveMode] = useState('form')
   const [accountCapability, setAccountCapability] = useState<AccountCollectionCapabilityView>()
   const planSubmissionInFlightRef = useRef(false)
+  const restoredNaturalAttemptRef = useRef<string | undefined>(undefined)
   const formSchema = useMemo(() => createCollectionFormSchema(t), [t])
   const {
     control,
@@ -216,6 +217,18 @@ export function CollectionBuilder({
     }
   }, [selectedRange, setValue, sourceFilters.timeRanges])
 
+  useEffect(() => {
+    const state = naturalParseState
+    if (!state) return
+    const persistedText = state.intentText.trim()
+    if (!persistedText) return
+    const attemptKey = state.attemptId
+      ?? `${state.taskId ?? 'unknown'}:${state.finishedAt ?? ''}`
+    if (restoredNaturalAttemptRef.current === attemptKey) return
+    restoredNaturalAttemptRef.current = attemptKey
+    setNaturalText((current) => normalizeNaturalIntent(current) ? current : persistedText)
+  }, [naturalParseState])
+
   const submitPlanOnce = async (submission: () => Promise<RuntimeCollectionPlan>) => {
     if (planSubmissionInFlightRef.current) return
     planSubmissionInFlightRef.current = true
@@ -241,6 +254,7 @@ export function CollectionBuilder({
 
   const submitNaturalText = async () => {
     const intentText = normalizeNaturalIntent(naturalText)
+      || normalizeNaturalIntent(naturalParseState?.intentText ?? '')
     if (!intentText) return
     await submitPlanOnce(() => onGenerateNaturalPlan(intentText))
   }

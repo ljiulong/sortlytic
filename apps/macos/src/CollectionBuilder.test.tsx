@@ -150,6 +150,42 @@ describe('自然语言输入区反馈', () => {
     expect(alert?.textContent).toContain('已保留')
     expect(mounted.container.textContent).not.toContain('发生未知错误')
   })
+
+  it('从持久化失败尝试恢复原始输入并可直接重新解析', async () => {
+    const onGenerateNaturalPlan = vi.fn(async () => draftPlan)
+    const mounted = mountBuilder({
+      onGenerateNaturalPlan,
+      naturalParseState: {
+        phase: 'failed',
+        taskId: 'task-natural-timeout',
+        attemptId: 'attempt-natural-timeout',
+        intentText: '用中文查找英国 TikTok 宠物用品账号',
+        finishedAt: '2026-07-20T08:00:17Z',
+        problem: {
+          code: 'MODEL_TIMEOUT',
+          stage: 'requesting_ai',
+          message: 'AI 服务请求超时',
+          retryable: true,
+          safeDetails: {},
+        },
+        draftPreserved: true,
+      },
+    })
+
+    await act(async () => undefined)
+    act(() => findButton(mounted.container, '自然语言')?.dispatchEvent(
+      new MouseEvent('mousedown', { bubbles: true, button: 0 }),
+    ))
+
+    expect(mounted.container.querySelector<HTMLTextAreaElement>('#intent')?.value)
+      .toBe('用中文查找英国 TikTok 宠物用品账号')
+
+    await act(async () => {
+      findButton(mounted.container, '重新解析')?.click()
+    })
+    expect(onGenerateNaturalPlan)
+      .toHaveBeenCalledWith('用中文查找英国 TikTok 宠物用品账号')
+  })
 })
 
 function findButton(container: HTMLElement, text: string) {
