@@ -131,6 +131,36 @@ describe('完整任务编辑器', () => {
     }))
   })
 
+  it('无时间筛选的有效任务可保存且不会被迫增加时间条件', async () => {
+    apiMocks.getLatestCollectionPlan.mockResolvedValue(plan({
+      plan_json: {
+        ...plan().plan_json,
+        time_range: null,
+      },
+    }))
+    apiMocks.getAiRun.mockResolvedValue({
+      output_json: {
+        ...parsedIntent(),
+        time_range_days: null,
+      },
+    })
+    const mounted = mountEditor({
+      naturalParseAttempt: attempt({ parse_status: 'valid' }),
+    })
+    await flushEditor()
+
+    await act(async () => buttonByText(mounted.container, '保存新计划版本').click())
+    await flushEditor()
+
+    expect(apiMocks.generateAccountCollectionPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.not.objectContaining({ time_range: expect.anything() }),
+      }),
+    )
+    expect(apiMocks.reviseCollectionTask).toHaveBeenCalled()
+    expect(mounted.container.textContent).not.toContain('请选择时间范围')
+  })
+
   it('不可靠的旧地区和时间条件贴近控件显示原因并可移除', async () => {
     apiMocks.getAccountCollectionCapabilities.mockResolvedValue(capability({
       region_filter: 'unsupported',

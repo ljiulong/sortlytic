@@ -597,7 +597,6 @@ function validateDraft(draft: TaskEditDraft, regionUnsupported: boolean, timeUns
   if (regionUnsupported && draft.regionCode) return '请先移除当前来源不支持的地区条件，或更换平台和来源'
   if (timeUnsupported && draft.timeRangeDays) return '请先移除当前来源不支持的时间条件，或更换平台和来源'
   if (!regionUnsupported && !draft.regionCode) return '请选择国家地区'
-  if (!timeUnsupported && !draft.timeRangeDays) return '请选择时间范围'
   if (!draft.recordLimit || draft.recordLimit < 1) return '最大记录数必须大于 0'
   if (!draft.budgetLimitMicros || draft.budgetLimitMicros < 100_000) return '预算至少为 0.1 美元'
   if (draft.ageRange && (draft.ageRange.min < 0
