@@ -469,6 +469,28 @@ fn latest_persisted_plan_can_be_loaded_for_queue_actions() {
 }
 
 #[test]
+fn missing_latest_plan_exposes_a_structured_empty_state_reason() {
+  let root_path = unique_temp_workspace("missing-latest-task-plan");
+  create_workspace("空计划任务测试", &root_path).expect("workspace should be created");
+  let task = create_collection_task(&root_path, create_task_input()).expect("task created");
+
+  let error = get_latest_collection_plan(&root_path, &task.id)
+    .expect_err("task without a plan should return a structured empty-state error");
+
+  assert_eq!(error.code, AppErrorCode::ValidationError);
+  assert_eq!(error.stage, AppErrorStage::Validation);
+  assert_eq!(
+    error.safe_details.get("reason").map(String::as_str),
+    Some("no_plan")
+  );
+  assert_eq!(
+    error.safe_details.get("entity").map(String::as_str),
+    Some("collection_plan")
+  );
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn version_three_multi_target_plan_saves_confirms_and_persists_step_limits() {
   let root_path = unique_temp_workspace("tasks-v3");
   create_workspace("v3 任务测试", &root_path).expect("workspace should be created");

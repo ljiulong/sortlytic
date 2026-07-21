@@ -373,7 +373,11 @@ pub(super) fn latest_plan_for_task(
     )
     .optional()
     .map_err(database_error)?
-    .ok_or_else(|| task_error("任务还没有采集计划"))
+    .ok_or_else(|| {
+      task_error("任务还没有采集计划")
+        .with_safe_detail("reason", "no_plan")
+        .with_safe_detail("entity", "collection_plan")
+    })
 }
 
 fn get_collection_plan(connection: &Connection, plan_id: &str) -> AppResult<CollectionPlanView> {
