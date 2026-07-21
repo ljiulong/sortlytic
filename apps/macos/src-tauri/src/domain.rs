@@ -19,6 +19,7 @@ pub enum AppErrorCode {
   ModelConfigError,
   ModelAuthError,
   ModelRateLimit,
+  ModelRequestError,
   ModelProtocolError,
   ModelSchemaError,
   ExportIntegrityError,

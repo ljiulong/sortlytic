@@ -403,10 +403,11 @@ fn read_limited_body(reader: impl Read) -> AppResult<String> {
   let mut body = Vec::new();
   reader.read_to_end(&mut body).map_err(|_| {
     model_error(
-      AppErrorCode::ModelProtocolError,
+      AppErrorCode::ModelRequestError,
       "读取 AI 服务响应失败",
       true,
     )
+    .with_safe_detail("transport_kind", "body")
   })?;
   if body.len() as u64 > MAX_MODEL_RESPONSE_BYTES {
     return Err(model_error(
@@ -445,7 +446,7 @@ fn status_error(status: StatusCode, retry_after: Option<&str>) -> AppError {
       true,
     ),
     500..=599 => (
-      AppErrorCode::ModelProtocolError,
+      AppErrorCode::ModelRequestError,
       "AI 服务暂时不可用，请稍后重试",
       true,
     ),
@@ -486,8 +487,12 @@ fn transport_error(error: reqwest::Error) -> AppError {
   } else {
     ("AI 服务请求失败", true, "request")
   };
-  model_error(AppErrorCode::ModelProtocolError, message, retryable)
-    .with_safe_detail("transport_kind", kind)
+  let code = if kind == "redirect" {
+    AppErrorCode::ModelProtocolError
+  } else {
+    AppErrorCode::ModelRequestError
+  };
+  model_error(code, message, retryable).with_safe_detail("transport_kind", kind)
 }
 
 fn model_error(code: AppErrorCode, message: &str, retryable: bool) -> AppError {
@@ -665,6 +670,44 @@ mod tests {
     assert_eq!(
       error.safe_details.get("retry_after").map(String::as_str),
       Some("17")
+    );
+  }
+
+  #[test]
+  fn transient_http_and_transport_failures_use_a_retryable_request_code() {
+    let unavailable = status_error(StatusCode::SERVICE_UNAVAILABLE, None);
+    assert_eq!(
+      serde_json::to_value(&unavailable).unwrap()["code"],
+      json!("MODEL_REQUEST_ERROR")
+    );
+    assert!(unavailable.retryable);
+    assert_eq!(
+      unavailable
+        .safe_details
+        .get("http_status")
+        .map(String::as_str),
+      Some("503")
+    );
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("ephemeral port should bind");
+    let address = listener.local_addr().expect("address should resolve");
+    drop(listener);
+    let request_error = Client::new()
+      .get(format!("http://{address}"))
+      .send()
+      .expect_err("closed local port should refuse the connection");
+    let connection = transport_error(request_error);
+    assert_eq!(
+      serde_json::to_value(&connection).unwrap()["code"],
+      json!("MODEL_REQUEST_ERROR")
+    );
+    assert!(connection.retryable);
+    assert_eq!(
+      connection
+        .safe_details
+        .get("transport_kind")
+        .map(String::as_str),
+      Some("connect")
     );
   }
 
