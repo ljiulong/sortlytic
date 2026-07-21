@@ -29,6 +29,7 @@ import {
   loadBackendWorkbench,
   mapBackendData,
   planFromBackend,
+  retryPersistedTask,
   type BackendWorkbenchData,
   type RuntimeCollectionPlan,
   useWorkbenchBackend,
@@ -1361,6 +1362,22 @@ describe('计划确认状态转换', () => {
     }
 
     expect(updatePlan(currentPlan).status).toBe('已排队')
+  })
+})
+
+describe('失败任务重新执行', () => {
+  it('调用后端 retry_task 而不是重新确认失败任务', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    invokeMock.mockResolvedValue({ id: 'run-retry-2', task_id: 'task-failed', status: 'queued' })
+
+    await retryPersistedTask('task-failed')
+
+    expect(invokeMock).toHaveBeenCalledWith('retry_task', {
+      taskId: 'task-failed',
+      stage: null,
+      rootPath: null,
+    })
+    expect(invokeMock.mock.calls.some(([command]) => command === 'confirm_collection_plan')).toBe(false)
   })
 })
 

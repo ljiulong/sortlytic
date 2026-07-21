@@ -21,6 +21,7 @@ import {
   listLatestTaskIntents,
   listTaskRecordCounts,
   listTasks,
+  retryTask as retryCollectionTask,
   saveCollectionPlan,
   type CollectionPlanView,
   type ExportJobView,
@@ -199,6 +200,11 @@ export async function confirmPersistedTask(taskId: string) {
   return enqueueTask(taskId)
 }
 
+export async function retryPersistedTask(taskId: string) {
+  assertTauriRuntime()
+  return retryCollectionTask(taskId)
+}
+
 export async function exportTaskArtifact({ taskId, format }: TaskExportInput) {
   assertTauriRuntime()
   const report = await buildReportModel(taskId, format === 'pdf' ? 'analysis' : 'summary')
@@ -364,6 +370,15 @@ export function useWorkbenchBackend() {
     onError: (error) => setActionMessage(backendErrorMessage(error)),
   })
 
+  const retryTaskMutation = useMutation({
+    mutationFn: retryPersistedTask,
+    onSuccess: () => {
+      setActionMessage('失败任务已重新加入本地队列')
+      void queryClient.invalidateQueries({ queryKey })
+    },
+    onError: (error) => setActionMessage(backendErrorMessage(error)),
+  })
+
   const data = dataQuery.data ?? createEmptyWorkbenchData(dataQuery.error ? 'error' : 'loading')
   const resolvedNaturalParseState = resolveNaturalParseState(
     naturalParseState,
@@ -426,6 +441,7 @@ export function useWorkbenchBackend() {
       cancelTaskMutation.isPending ||
       deleteTaskMutation.isPending ||
       confirmTaskMutation.isPending ||
+      retryTaskMutation.isPending ||
       isNaturalParseInProgress(resolvedNaturalParseState.phase) ||
       appUpdater.isUpdateBusy,
     generateFormPlan: generateFormPlanMutation.mutateAsync,
@@ -436,6 +452,7 @@ export function useWorkbenchBackend() {
     cancelTask: cancelTaskMutation.mutateAsync,
     deleteTask: deleteTaskMutation.mutateAsync,
     confirmTask: confirmTaskMutation.mutateAsync,
+    retryTask: retryTaskMutation.mutateAsync,
     exportTask: exportMutation.mutateAsync,
     ...appUpdater,
     refresh: () => queryClient.invalidateQueries({ queryKey }),

@@ -513,6 +513,14 @@ export function cancelTask(taskId: string) {
   })
 }
 
+export function retryTask(taskId: string, stage?: string) {
+  return invoke<TaskRunView>('retry_task', {
+    taskId,
+    stage: stage ?? null,
+    rootPath: null,
+  })
+}
+
 export function deleteTask(taskId: string) {
   return invoke<void>('delete_task', {
     taskId,
