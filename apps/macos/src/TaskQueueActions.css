@@ -206,6 +206,23 @@
   color: var(--danger);
 }
 
+.task-card__health-result {
+  margin: 0 18px 12px;
+  padding: 9px 11px;
+  color: var(--danger);
+  background: var(--danger-surface);
+  border: 1px solid color-mix(in oklch, var(--danger) 26%, transparent);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.task-card__health-result[data-passed='true'] {
+  color: var(--success);
+  background: var(--success-surface);
+  border-color: color-mix(in oklch, var(--success) 26%, transparent);
+}
+
 @media (max-width: 760px) {
   .task-queue__bulk-confirmation {
     grid-template-columns: 1fr;

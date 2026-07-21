@@ -4,7 +4,7 @@ import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ExportJobView } from './backend-api'
+import type { ExportJobView, WorkspaceHealthCheckView } from './backend-api'
 import TaskQueue from './TaskQueue'
 import {
   capabilitiesForStatus,
@@ -50,6 +50,8 @@ function mountQueue(
   onRetryNaturalTask: (taskId: string, intentText: string) => Promise<unknown> = vi.fn(),
   onRetryTask: (taskId: string) => Promise<unknown> = vi.fn(),
   onEditTask: (taskId: string) => void = vi.fn(),
+  onRefresh: () => void = vi.fn(),
+  onWorkspaceHealthCheck: () => Promise<WorkspaceHealthCheckView> = vi.fn(),
 ) {
   const container = document.createElement('div')
   const root = createRoot(container)
@@ -66,6 +68,8 @@ function mountQueue(
     onExportTask,
     onRetryNaturalTask,
     onRetryTask,
+    onRefresh,
+    onWorkspaceHealthCheck,
   })))
   return mounted
 }
@@ -794,6 +798,109 @@ describe('TaskQueue', () => {
     })
     expect(retryButton?.disabled).toBe(false)
     expect(retryButton?.textContent).toContain('重新尝试')
+  })
+
+  it('权限错误运行真实工作区健康检查而不是普通刷新', async () => {
+    let resolveHealth!: (health: WorkspaceHealthCheckView) => void
+    const pendingHealth = new Promise<WorkspaceHealthCheckView>((resolve) => {
+      resolveHealth = resolve
+    })
+    const onRefresh = vi.fn()
+    const onWorkspaceHealthCheck = vi.fn(() => pendingHealth)
+    const failedTask: WorkbenchRuntimeData['tasks'][number] = {
+      ...waitingTask,
+      id: 'task-workspace-health',
+      status: '失败',
+      latestRun: {
+        id: 'run-workspace-health',
+        attemptNumber: 1,
+        status: 'failed',
+        currentStage: '工作区写入',
+        currentStageCode: 'PERSISTING_RESULTS',
+        errorCode: 'PERMISSION_ERROR',
+        errorMessage: '工作区目录不可写',
+        retryable: false,
+        startedAt: '2026-07-21T00:00:00Z',
+        endedAt: '2026-07-21T00:00:10Z',
+      },
+    }
+    const mounted = mountQueue(
+      vi.fn(),
+      [failedTask],
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      onRefresh,
+      onWorkspaceHealthCheck,
+    )
+    const healthButton = [...mounted.container.querySelectorAll('button')]
+      .find((button) => button.textContent?.includes('工作区健康检查'))
+
+    act(() => {
+      healthButton?.click()
+      healthButton?.click()
+    })
+
+    expect(onWorkspaceHealthCheck).toHaveBeenCalledOnce()
+    expect(onRefresh).not.toHaveBeenCalled()
+    expect(healthButton?.disabled).toBe(true)
+
+    await act(async () => {
+      resolveHealth({
+        workspace_id: 'workspace-1',
+        database_quick_check: 'ok',
+        foreign_keys_enabled: true,
+        journal_mode: 'wal',
+        missing_directories: [],
+        database_writable: true,
+      })
+      await pendingHealth
+    })
+
+    expect(mounted.container.querySelector('[role="status"]')?.textContent)
+      .toContain('工作区健康检查通过')
+    expect(healthButton?.disabled).toBe(false)
+  })
+
+  it('工作区健康检查失败时在当前任务卡显示真实错误', async () => {
+    const failedTask: WorkbenchRuntimeData['tasks'][number] = {
+      ...waitingTask,
+      id: 'task-workspace-health-failed',
+      status: '失败',
+      latestRun: {
+        id: 'run-workspace-health-failed',
+        attemptNumber: 1,
+        status: 'failed',
+        currentStage: '工作区写入',
+        currentStageCode: 'PERSISTING_RESULTS',
+        errorCode: 'WORKSPACE_ERROR',
+        errorMessage: '工作区状态异常',
+        retryable: false,
+        startedAt: '2026-07-21T00:00:00Z',
+        endedAt: '2026-07-21T00:00:10Z',
+      },
+    }
+    const mounted = mountQueue(
+      vi.fn(),
+      [failedTask],
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      vi.fn(async () => {
+        throw new Error('工作区数据库无法写入')
+      }),
+    )
+
+    await act(async () => [...mounted.container.querySelectorAll('button')]
+      .find((button) => button.textContent?.includes('工作区健康检查'))?.click())
+
+    expect([...mounted.container.querySelectorAll('[role="alert"]')]
+      .some((alert) => alert.textContent?.includes('工作区数据库无法写入'))).toBe(true)
   })
 
   it('没有真实任务时显示完整空状态', () => {

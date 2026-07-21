@@ -2,7 +2,11 @@ import { useRef, useState } from 'react'
 import { Ban, Download, ListChecks, ListTodo, Pencil, Play, Table2, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import AppSelect from './AppSelect'
-import { backendErrorMessage, type ExportJobView } from './backend-api'
+import {
+  backendErrorMessage,
+  type ExportJobView,
+  type WorkspaceHealthCheckView,
+} from './backend-api'
 import { StatusPill } from './CollectionBuilder'
 import {
   capabilitiesForStatus,
@@ -18,6 +22,7 @@ import TaskRunDetails from './TaskRunDetails'
 import type { TaskRemediationAction } from './task-remediation'
 import type { TaskExportInput, WorkbenchRuntimeData } from './use-workbench-backend'
 import type { TaskStatus } from './workbench-data'
+import { describeWorkspaceHealth } from './workspace-health'
 import './TaskQueue.css'
 import './TaskQueueActions.css'
 
@@ -36,6 +41,7 @@ type BulkDeleteFailure = {
   reason: string
   totalCount: number
 }
+type TaskActionNotice = { message: string; passed: boolean }
 
 type TaskQueueProps = {
   tasks: TaskRow[]
@@ -49,6 +55,7 @@ type TaskQueueProps = {
   onRetryTask?: (taskId: string) => Promise<unknown>
   onOpenSettings?: () => void
   onRefresh?: () => void
+  onWorkspaceHealthCheck?: () => Promise<WorkspaceHealthCheckView>
 }
 
 function TaskQueue({
@@ -63,6 +70,7 @@ function TaskQueue({
   onRetryTask,
   onOpenSettings,
   onRefresh,
+  onWorkspaceHealthCheck,
 }: TaskQueueProps) {
   const { t, i18n } = useTranslation('tasks')
   const [activeMode, setActiveMode] = useState<ConfirmationMode>()
@@ -71,6 +79,7 @@ function TaskQueue({
   const [exportFormats, setExportFormats] = useState<Record<string, TaskExportInput['format']>>({})
   const [exportFeedback, setExportFeedback] = useState<Record<string, TaskExportFeedback>>({})
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({})
+  const [actionNotices, setActionNotices] = useState<Record<string, TaskActionNotice>>({})
   const [pendingProblemTaskIds, setPendingProblemTaskIds] = useState<string[]>([])
   const problemActionsInFlightRef = useRef(new Set<string>())
   const [bulkMode, setBulkMode] = useState(false)
@@ -104,7 +113,30 @@ function TaskQueue({
       else setPreviewTaskId(task.id)
     }
     else if (action === 'open_ai_settings' || action === 'open_tikhub_settings') onOpenSettings?.()
-    else if (action === 'reload' || action === 'workspace_health') onRefresh?.()
+    else if (action === 'reload') onRefresh?.()
+    else if (action === 'workspace_health') {
+      const actionKey = `${task.id}:${kind}:workspace_health`
+      if (problemActionsInFlightRef.current.has(actionKey)) return
+      problemActionsInFlightRef.current.add(actionKey)
+      setPendingProblemTaskIds((taskIds) => taskIds.includes(task.id)
+        ? taskIds
+        : [...taskIds, task.id])
+      setActionErrors((errors) => ({ ...errors, [task.id]: '' }))
+      setActionNotices((notices) => ({ ...notices, [task.id]: { message: '', passed: false } }))
+      try {
+        const health = await onWorkspaceHealthCheck?.()
+        if (!health) throw new Error('工作区健康检查未连接')
+        setActionNotices((notices) => ({
+          ...notices,
+          [task.id]: describeWorkspaceHealth(health),
+        }))
+      } catch (error) {
+        setActionErrors((errors) => ({ ...errors, [task.id]: backendErrorMessage(error) }))
+      } finally {
+        problemActionsInFlightRef.current.delete(actionKey)
+        setPendingProblemTaskIds((taskIds) => taskIds.filter((taskId) => taskId !== task.id))
+      }
+    }
     else if (action === 'retry') {
       const actionKey = `${task.id}:${kind}:retry`
       if (problemActionsInFlightRef.current.has(actionKey)) return
@@ -390,6 +422,7 @@ function TaskQueue({
             const confirmation = activeMode?.taskId === task.id ? activeMode : undefined
             const isConfirming = Boolean(confirmation)
             const actionError = actionErrors[task.id]
+            const actionNotice = actionNotices[task.id]
             const taskExportFeedback = exportFeedback[task.id]
             const exportedFilePath = taskExportFeedback?.filePath
             const exportError = taskExportFeedback?.errorType === 'missing-path'
@@ -535,6 +568,16 @@ function TaskQueue({
                 {actionError && !isConfirming ? (
                   <p className="task-card__confirmation-error" role="alert">
                     操作失败：{actionError}
+                  </p>
+                ) : null}
+
+                {actionNotice?.message && !actionError && !isConfirming ? (
+                  <p
+                    className="task-card__health-result"
+                    data-passed={actionNotice.passed}
+                    role={actionNotice.passed ? 'status' : 'alert'}
+                  >
+                    {actionNotice.message}
                   </p>
                 ) : null}
 
