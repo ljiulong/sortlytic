@@ -245,7 +245,10 @@ fn direct_source_preservation_issue(
     )
   });
   let source_input = intent.source_input.as_deref()?.trim();
-  if !direct_source || source_input.is_empty() || intent_text.contains(source_input) {
+  if !direct_source
+    || source_input.is_empty()
+    || contains_exact_direct_source(intent_text, source_input)
+  {
     return None;
   }
   if !intent
@@ -259,4 +262,22 @@ fn direct_source_preservation_issue(
     "用户名、账号 ID、作品 ID、URL 或分享链接必须从原始需求中逐字提取并原样保留；当前模型输出无法在原始输入中确认"
       .to_string(),
   )
+}
+
+fn contains_exact_direct_source(intent_text: &str, source_input: &str) -> bool {
+  intent_text.match_indices(source_input).any(|(start, _)| {
+    let end = start + source_input.len();
+    let before = intent_text[..start].chars().next_back();
+    let after = intent_text[end..].chars().next();
+    before.is_none_or(|character| !is_direct_source_continuation(character))
+      && after.is_none_or(|character| !is_direct_source_continuation(character))
+  })
+}
+
+fn is_direct_source_continuation(character: char) -> bool {
+  character.is_ascii_alphanumeric()
+    || matches!(
+      character,
+      '_' | '-' | '.' | '/' | ':' | '@' | '?' | '&' | '=' | '%' | '#' | '+' | '~'
+    )
 }

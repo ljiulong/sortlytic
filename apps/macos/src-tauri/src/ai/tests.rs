@@ -313,6 +313,59 @@ fn model_cannot_rewrite_a_direct_account_identifier_from_the_original_request() 
 }
 
 #[test]
+fn model_cannot_shorten_a_direct_identifier_to_a_matching_substring() {
+  let root_path = unique_temp_workspace("ai-direct-identifier-substring");
+  create_workspace("AI 直接标识截短测试", &root_path).expect("workspace should be created");
+  let mut intent = valid_collection_intent();
+  intent["account_source"] = serde_json::json!("direct_account");
+  intent["source_input"] = serde_json::json!("Pet");
+  intent["query_locale"] = Value::Null;
+  intent["time_range_days"] = Value::Null;
+  intent["record_limit"] = serde_json::json!(1);
+  intent["region_code"] = serde_json::json!("GB");
+  let response = serde_json::json!({
+    "choices": [{ "message": { "content": intent.to_string() } }]
+  })
+  .to_string();
+  let (base_url, server) = serve_ai_once(200, response, |_| {});
+  configure_active_ai(&root_path, base_url);
+  let task = create_collection_task(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "拒绝截短账号标识".to_string(),
+      source_type: "natural_language".to_string(),
+      platforms: vec![],
+      data_types: vec![],
+    },
+  )
+  .expect("task should be created");
+
+  let result = generate_collection_plan_from_text(
+    &root_path,
+    GenerateCollectionPlanFromTextInput {
+      task_id: task.id,
+      intent_text:
+        "采集英国 TikTok 账号 https://www.tiktok.com/@PetBrandUK，最多 1 个，预算 0.1 美元。"
+          .to_string(),
+      provider_id: None,
+      model_id: None,
+    },
+  )
+  .expect("shortened identifier should be retained for review");
+  server.join().expect("test server should finish");
+
+  assert_eq!(result.ai_run.validation_status, "needs_review");
+  assert!(result.collection_plan.is_none());
+  assert!(result.issues.iter().any(|issue| issue.contains("原样保留")));
+  assert!(result
+    .parsed_intent
+    .as_ref()
+    .is_some_and(|intent| intent.missing_fields.contains(&"source_input".to_string())));
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn model_intent_missing_required_field_needs_review_without_a_plan() {
   let root_path = unique_temp_workspace("ai-incomplete-plan-schema");
   create_workspace("AI 不完整计划测试", &root_path).expect("workspace should be created");
