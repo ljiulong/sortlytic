@@ -131,6 +131,59 @@ describe('完整任务编辑器', () => {
     }))
   })
 
+  it('英国搜索来源拒绝非标准和地区不匹配的目标检索语言', async () => {
+    for (const queryLocale of ['english-uk', 'zh-CN']) {
+      apiMocks.getAiRun.mockResolvedValue({
+        output_json: { ...parsedIntent(), query_locale: queryLocale },
+      })
+      const mounted = mountEditor({ naturalParseAttempt: attempt({ parse_status: 'valid' }) })
+      await flushEditor()
+
+      await act(async () => buttonByText(mounted.container, '保存新计划版本').click())
+
+      expect(mounted.container.textContent).toContain(
+        queryLocale === 'english-uk' ? 'language-REGION' : 'en-GB',
+      )
+      expect(apiMocks.generateAccountCollectionPlan).not.toHaveBeenCalled()
+      act(() => mounted.root.unmount())
+      mounted.container.remove()
+      mountedEditors.delete(mounted)
+      apiMocks.generateAccountCollectionPlan.mockClear()
+    }
+  })
+
+  it('直接账号、作品或 URL 来源拒绝遗留目标检索语言', async () => {
+    apiMocks.getAccountCollectionCapabilities.mockResolvedValue(capability({
+      key: 'direct_account',
+      input_kind: 'account',
+      pagination_mode: 'single',
+    }))
+    apiMocks.getLatestCollectionPlan.mockResolvedValue(plan({
+      plan_json: {
+        ...plan().plan_json,
+        account_source: 'direct_account',
+        query_locale: 'en-GB',
+        steps: [{ params: { account_id: 'https://www.tiktok.com/@PetBrandUK' } }],
+      },
+    }))
+    apiMocks.getAiRun.mockResolvedValue({
+      output_json: {
+        ...parsedIntent(),
+        account_source: 'direct_account',
+        source_input: 'https://www.tiktok.com/@PetBrandUK',
+        query_locale: 'en-GB',
+        record_limit: 1,
+      },
+    })
+    const mounted = mountEditor({ naturalParseAttempt: attempt({ parse_status: 'valid' }) })
+    await flushEditor()
+
+    await act(async () => buttonByText(mounted.container, '保存新计划版本').click())
+
+    expect(mounted.container.textContent).toContain('直接账号、作品或 URL 来源不得设置目标检索语言')
+    expect(apiMocks.generateAccountCollectionPlan).not.toHaveBeenCalled()
+  })
+
   it('无时间筛选的有效任务可保存且不会被迫增加时间条件', async () => {
     apiMocks.getLatestCollectionPlan.mockResolvedValue(plan({
       plan_json: {

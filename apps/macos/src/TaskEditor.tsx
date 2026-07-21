@@ -18,6 +18,7 @@ import {
 import { accountSourceFilterCapabilities, sourceInputCopy } from './account-source-rules'
 import { countryRegionSelectOptions } from './collection-select-options'
 import { createTaskEditDraft, type TaskEditDraft } from './task-edit-draft'
+import { validateQueryLocale } from './query-locale-validation'
 import TaskRevisionPreview from './TaskRevisionPreview'
 
 type TaskEditorProps = {
@@ -116,6 +117,9 @@ function TaskEditor({
   const unsupportedSelectedFields = draft?.selectedFields.filter(
     (field) => !supportedFieldKeys.has(field),
   ) ?? []
+  const queryLocaleError = draft && selectedSource
+    ? validateQueryLocale(draft.queryLocale, draft.regionCode, selectedSource.input_kind === 'keyword')
+    : ''
   const updateDraft = (patch: Partial<TaskEditDraft>) => {
     setDraft((current) => current ? { ...current, ...patch } : current)
     setError('')
@@ -129,6 +133,7 @@ function TaskEditor({
       regionUnsupported,
       timeUnsupported,
       unsupportedSelectedFields,
+      queryLocaleError,
     )
     if (validationError) {
       setError(validationError)
@@ -365,11 +370,16 @@ function TaskEditor({
             >
               <input
                 id="task-editor-query-locale"
+                aria-describedby={queryLocaleError ? 'task-editor-query-locale-error' : undefined}
+                aria-invalid={Boolean(queryLocaleError)}
                 value={draft.queryLocale}
                 disabled={Boolean(selectedSource && selectedSource.input_kind !== 'keyword')}
                 placeholder="例如 en-GB"
                 onChange={(event) => updateDraft({ queryLocale: event.target.value })}
               />
+              {queryLocaleError ? (
+                <small id="task-editor-query-locale-error" role="alert">{queryLocaleError}</small>
+              ) : null}
             </EditorField>
           </div>
 
@@ -622,11 +632,13 @@ function validateDraft(
   regionUnsupported: boolean,
   timeUnsupported: boolean,
   unsupportedSelectedFields: string[],
+  queryLocaleError: string,
 ) {
   if (draft.name.trim().length < 2) return '任务名称至少需要 2 个字符'
   if (!draft.platform) return '请选择平台'
   if (!draft.accountSource) return '请选择账号来源'
   if (!draft.sourceInput.trim()) return '请填写当前账号来源需要的检索词、账号或作品信息'
+  if (queryLocaleError) return queryLocaleError
   if (regionUnsupported && draft.regionCode) return '请先移除当前来源不支持的地区条件，或更换平台和来源'
   if (timeUnsupported && draft.timeRangeDays) return '请先移除当前来源不支持的时间条件，或更换平台和来源'
   if (unsupportedSelectedFields.length > 0) {
