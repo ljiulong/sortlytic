@@ -74,8 +74,11 @@ export default function TaskProblemPanel({
       aria-label={needsReview
         ? '自然语言解析待补充详情'
         : kind === 'natural_parse' ? '自然语言解析失败详情' : '任务运行失败详情'}
+      aria-live={needsReview ? 'polite' : 'assertive'}
+      aria-atomic="true"
       className="task-problem"
       data-kind={kind}
+      role={needsReview ? 'status' : 'alert'}
     >
       <header>
         <div>
