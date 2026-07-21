@@ -120,10 +120,14 @@ export function mapBackendData(
     tasks: tasks.map((task) => {
       const row = mapTaskRow(task)
       const run = latestRunByTask.get(task.id)
+      const naturalParseAttempt = currentNaturalParseAttempt(
+        task,
+        parseAttemptByTask.get(task.id),
+      )
       return {
         ...row,
         records: recordCountByTask.get(task.id) ?? 0,
-        naturalParseAttempt: parseAttemptByTask.get(task.id),
+        naturalParseAttempt,
         latestRun: run
           ? {
               id: run.id,
@@ -146,6 +150,23 @@ export function mapBackendData(
     latestTaskId,
     runtimeMode: 'backend',
   }
+}
+
+function currentNaturalParseAttempt(
+  task: CollectionTaskView,
+  attempt: NaturalParseAttemptView | undefined,
+) {
+  if (!attempt || !['failed', 'interrupted', 'needs_review'].includes(attempt.parse_status)) {
+    return attempt
+  }
+  const taskUpdatedAt = Date.parse(task.updated_at)
+  const attemptUpdatedAt = Date.parse(attempt.updated_at)
+  if (Number.isFinite(taskUpdatedAt)
+    && Number.isFinite(attemptUpdatedAt)
+    && taskUpdatedAt > attemptUpdatedAt) {
+    return undefined
+  }
+  return attempt
 }
 
 function buildConnections(registry: ApiProfileRegistryView | null) {

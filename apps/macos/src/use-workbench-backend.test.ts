@@ -1398,6 +1398,41 @@ describe('mapBackendData', () => {
     expect(result.tasks[0]?.naturalParseAttempt).toEqual(attempt)
   })
 
+  it('更晚的有效任务修订不再被旧解析失败覆盖为当前错误', () => {
+    const oldFailure = {
+      id: 'attempt-old-failure',
+      task_id: task.id,
+      intent_text: '用中文查找英国 TikTok 宠物用品账号',
+      parse_status: 'failed' as const,
+      parse_phase: 'requesting_ai',
+      error_code: 'MODEL_TIMEOUT',
+      error_message: 'AI 服务请求超时',
+      retryable: true,
+      error_safe_details_json: {},
+      created_at: '2026-07-20T08:00:00Z',
+      updated_at: '2026-07-20T08:01:00Z',
+    }
+    const revisedTask = {
+      ...task,
+      status: 'waiting_confirmation',
+      updated_at: '2026-07-20T08:02:00Z',
+    }
+
+    const result = mapBackendData(
+      workspace,
+      [revisedTask],
+      tikhubRegistryFixture(),
+      1_000,
+      [],
+      [],
+      [oldFailure],
+    )
+
+    expect(result.naturalParseAttempts).toEqual([oldFailure])
+    expect(result.tasks[0]?.status).toBe('等待确认')
+    expect(result.tasks[0]?.naturalParseAttempt).toBeUndefined()
+  })
+
   it('把 SQLite 标准化记录数关联到对应任务', () => {
     const result = mapBackendData(
       workspace,
