@@ -237,6 +237,7 @@ fn acquire_task_intent_attempt(
     .transaction_with_behavior(TransactionBehavior::Immediate)
     .map_err(database_error)?;
   prepare_task_for_natural_parse(&transaction, task_id)?;
+  super::attempts::interrupt_expired_task_intents(&transaction)?;
 
   if let Some(attempt_id) =
     claim_initial_task_intent_attempt(&transaction, task_id, intent_text, claimed_at)?

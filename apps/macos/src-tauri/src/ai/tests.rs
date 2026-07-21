@@ -26,6 +26,61 @@ use crate::workspace::{create_workspace, open_workspace_database, DATABASE_FILE_
 const TIKHUB_E2E_TOKEN: &str = "sortlytic-e2e-tikhub-token";
 
 #[test]
+fn expired_natural_parse_lease_is_interrupted_before_a_new_attempt() {
+  let root_path = unique_temp_workspace("ai-expired-lease");
+  create_workspace("AI 过期租约测试", &root_path).expect("workspace should be created");
+  let task = create_collection_task(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "恢复崩溃解析".to_string(),
+      source_type: "natural_language".to_string(),
+      platforms: vec![],
+      data_types: vec![],
+    },
+  )
+  .expect("task should be created");
+  let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
+  connection
+    .execute(
+      "INSERT INTO task_intent (
+        id, task_id, intent_text, language, parse_status, parse_phase,
+        error_safe_details_json, created_at, updated_at
+      ) VALUES ('attempt-expired', ?1, '旧解析', 'zh-CN', 'running',
+                'requesting_ai', '{}', '2000-01-01T00:00:00Z', '2000-01-01T00:00:00Z')",
+      [&task.id],
+    )
+    .unwrap();
+  drop(connection);
+
+  let error = generate_collection_plan_from_text(
+    &root_path,
+    GenerateCollectionPlanFromTextInput {
+      task_id: task.id.clone(),
+      intent_text: "重新解析英国 TikTok 宠物用品账号".to_string(),
+      provider_id: None,
+      model_id: None,
+    },
+  )
+  .expect_err("expired lease should be reclaimed before normal profile validation");
+
+  assert_eq!(error.code, AppErrorCode::ModelConfigError);
+  let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
+  let states = connection
+    .query_row(
+      "SELECT
+         SUM(CASE WHEN parse_status = 'interrupted' THEN 1 ELSE 0 END),
+         SUM(CASE WHEN parse_status = 'failed' THEN 1 ELSE 0 END)
+       FROM task_intent WHERE task_id = ?1",
+      [&task.id],
+      |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+    )
+    .unwrap();
+  assert_eq!(states, (1, 1));
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn direct_generation_rejects_oversized_intent_before_attempt_or_provider_request() {
   let root_path = unique_temp_workspace("ai-intent-size-limit");
   create_workspace("AI 输入上限测试", &root_path).expect("workspace should be created");

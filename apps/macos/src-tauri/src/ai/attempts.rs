@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use rusqlite::{params, Connection, Row};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -91,6 +91,12 @@ pub fn list_task_intents(
 
 pub(crate) fn mark_interrupted_task_intents(root_path: impl AsRef<Path>) -> AppResult<usize> {
   let connection = open_connection(root_path)?;
+  interrupt_expired_task_intents(&connection)
+}
+
+pub(crate) fn interrupt_expired_task_intents(connection: &Connection) -> AppResult<usize> {
+  let now = Utc::now();
+  let cutoff = now - Duration::seconds(120);
   connection
     .execute(
       "UPDATE task_intent
@@ -99,8 +105,9 @@ pub(crate) fn mark_interrupted_task_intents(root_path: impl AsRef<Path>) -> AppR
            error_message = '上次自然语言解析在应用关闭前未完成，请重新解析',
            retryable = 1,
            updated_at = ?1
-       WHERE parse_status = 'running'",
-      params![Utc::now().to_rfc3339()],
+       WHERE parse_status = 'running'
+         AND (julianday(updated_at) IS NULL OR julianday(updated_at) <= julianday(?2))",
+      params![now.to_rfc3339(), cutoff.to_rfc3339()],
     )
     .map_err(database_error)
 }
@@ -216,6 +223,42 @@ mod tests {
     assert_eq!(history[0].id, "intent-new");
     assert_eq!(history[1].id, "intent-old");
     assert_eq!(history[1].parse_status, "failed");
+
+    fs::remove_dir_all(root).ok();
+  }
+
+  #[test]
+  fn keeps_fresh_running_attempt_when_another_instance_opens_the_workspace() {
+    let root = std::env::temp_dir().join(format!("fresh-intent-{}", Uuid::new_v4()));
+    create_workspace("新鲜解析租约", &root).unwrap();
+    let task = create_collection_task(
+      &root,
+      CreateCollectionTaskInput {
+        name: "正在解析".to_string(),
+        source_type: "natural_language".to_string(),
+        platforms: vec![],
+        data_types: vec![],
+      },
+    )
+    .unwrap();
+    let connection = open_connection(&root).unwrap();
+    let now = Utc::now().to_rfc3339();
+    connection
+      .execute(
+        "INSERT INTO task_intent (
+          id, task_id, intent_text, language, parse_status, parse_phase,
+          error_safe_details_json, created_at, updated_at
+        ) VALUES ('intent-fresh', ?1, '正在解析', 'zh-CN', 'running',
+                  'requesting_ai', '{}', ?2, ?2)",
+        params![task.id, now],
+      )
+      .unwrap();
+    drop(connection);
+
+    assert_eq!(mark_interrupted_task_intents(&root).unwrap(), 0);
+    let attempt = list_latest_task_intents(&root).unwrap().remove(0);
+    assert_eq!(attempt.parse_status, "running");
+    assert_eq!(attempt.parse_phase.as_deref(), Some("requesting_ai"));
 
     fs::remove_dir_all(root).ok();
   }
