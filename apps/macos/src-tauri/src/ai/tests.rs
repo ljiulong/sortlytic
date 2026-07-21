@@ -15,8 +15,8 @@ use crate::api_profiles::{
 };
 use crate::records::list_task_record_counts;
 use crate::tasks::{
-  confirm_collection_plan, create_collection_task, enqueue_task, execute_next_task, get_task,
-  list_task_logs, CreateCollectionTaskInput,
+  confirm_collection_plan, create_collection_task, create_collection_task_with_initial_intent,
+  enqueue_task, execute_next_task, get_task, list_task_logs, CreateCollectionTaskInput,
 };
 use crate::tikhub::test_support::override_tikhub_base_url_for_current_test;
 use crate::workspace::{create_workspace, open_workspace_database, DATABASE_FILE_NAME};
@@ -27,7 +27,8 @@ const TIKHUB_E2E_TOKEN: &str = "sortlytic-e2e-tikhub-token";
 fn natural_language_generation_requires_an_active_ai_profile() {
   let root_path = unique_temp_workspace("ai-profile-required");
   create_workspace("AI 配置前置测试", &root_path).expect("workspace should be created");
-  let task = create_collection_task(
+  let intent_text = "采集最近 7 天美国 TikTok 汽车内容";
+  let task = create_collection_task_with_initial_intent(
     &root_path,
     CreateCollectionTaskInput {
       name: "不能静默回退本地规则".to_string(),
@@ -35,6 +36,7 @@ fn natural_language_generation_requires_an_active_ai_profile() {
       platforms: vec!["tiktok".to_string()],
       data_types: vec!["keyword_search".to_string()],
     },
+    Some(intent_text),
   )
   .expect("task should be created");
 
@@ -42,7 +44,7 @@ fn natural_language_generation_requires_an_active_ai_profile() {
     &root_path,
     GenerateCollectionPlanFromTextInput {
       task_id: task.id.clone(),
-      intent_text: "采集最近 7 天美国 TikTok 汽车内容".to_string(),
+      intent_text: intent_text.to_string(),
       provider_id: None,
       model_id: None,
     },
@@ -56,7 +58,7 @@ fn natural_language_generation_requires_an_active_ai_profile() {
     .query_row(
       "SELECT intent_text, parse_status, parse_phase, error_code, error_message, retryable
        FROM task_intent WHERE task_id = ?1 ORDER BY created_at DESC LIMIT 1",
-      [task.id],
+      [&task.id],
       |row| {
         Ok((
           row.get::<_, String>(0)?,
@@ -75,7 +77,136 @@ fn natural_language_generation_requires_an_active_ai_profile() {
   assert_eq!(attempt.3.as_deref(), Some("MODEL_CONFIG_ERROR"));
   assert!(attempt.4.is_some_and(|message| message.contains("AI 配置")));
   assert_eq!(attempt.5, Some(0));
+  let attempt_count = connection
+    .query_row(
+      "SELECT COUNT(*) FROM task_intent WHERE task_id = ?1",
+      [&task.id],
+      |row| row.get::<_, i64>(0),
+    )
+    .unwrap();
+  assert_eq!(attempt_count, 1, "首次失败必须复用原子创建的解析记录");
 
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn retry_creates_a_new_attempt_after_the_atomic_initial_attempt_fails() {
+  let root_path = unique_temp_workspace("ai-initial-attempt-retry");
+  create_workspace("AI 初始记录重试", &root_path).expect("workspace should be created");
+  let intent_text = "采集英国 TikTok 宠物用品账号";
+  let task = create_collection_task_with_initial_intent(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "初始记录重试".to_string(),
+      source_type: "natural_language".to_string(),
+      platforms: vec![],
+      data_types: vec![],
+    },
+    Some(intent_text),
+  )
+  .expect("task and initial attempt should be created");
+
+  for _ in 0..2 {
+    generate_collection_plan_from_text(
+      &root_path,
+      GenerateCollectionPlanFromTextInput {
+        task_id: task.id.clone(),
+        intent_text: intent_text.to_string(),
+        provider_id: None,
+        model_id: None,
+      },
+    )
+    .expect_err("missing AI profile should persist each failed attempt");
+  }
+
+  let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
+  let attempts = connection
+    .query_row(
+      "SELECT COUNT(*), SUM(CASE WHEN parse_status = 'failed' THEN 1 ELSE 0 END)
+       FROM task_intent WHERE task_id = ?1",
+      [task.id],
+      |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+    )
+    .unwrap();
+  assert_eq!(attempts, (2, 2));
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn atomic_initial_attempt_can_only_be_claimed_once() {
+  let root_path = unique_temp_workspace("ai-initial-attempt-single-claim");
+  create_workspace("AI 初始记录单次认领", &root_path).expect("workspace should be created");
+  let intent_text = "采集英国 TikTok 宠物用品账号";
+  let task = create_collection_task_with_initial_intent(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "初始记录单次认领".to_string(),
+      source_type: "natural_language".to_string(),
+      platforms: vec![],
+      data_types: vec![],
+    },
+    Some(intent_text),
+  )
+  .expect("task and initial attempt should be created");
+  let first_connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
+  let second_connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
+
+  let first = generation::claim_initial_task_intent_attempt(
+    &first_connection,
+    &task.id,
+    intent_text,
+    "2026-07-21T00:00:00Z",
+  )
+  .unwrap();
+  let second = generation::claim_initial_task_intent_attempt(
+    &second_connection,
+    &task.id,
+    intent_text,
+    "2026-07-21T00:00:01Z",
+  )
+  .unwrap();
+
+  assert!(first.is_some());
+  assert!(second.is_none());
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn atomic_initial_attempt_is_not_claimed_for_different_input() {
+  let root_path = unique_temp_workspace("ai-initial-attempt-input-match");
+  create_workspace("AI 初始记录原文匹配", &root_path).expect("workspace should be created");
+  let initial_text = "采集英国 TikTok 宠物用品账号";
+  let task = create_collection_task_with_initial_intent(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "初始记录原文匹配".to_string(),
+      source_type: "natural_language".to_string(),
+      platforms: vec![],
+      data_types: vec![],
+    },
+    Some(initial_text),
+  )
+  .expect("task and initial attempt should be created");
+  let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
+
+  let claimed = generation::claim_initial_task_intent_attempt(
+    &connection,
+    &task.id,
+    "采集美国 TikTok 汽车账号",
+    "2026-07-21T00:00:00Z",
+  )
+  .unwrap();
+  let phase = connection
+    .query_row(
+      "SELECT parse_phase FROM task_intent WHERE task_id = ?1",
+      [&task.id],
+      |row| row.get::<_, String>(0),
+    )
+    .unwrap();
+
+  assert!(claimed.is_none());
+  assert_eq!(phase, "preparing");
   std::fs::remove_dir_all(root_path).ok();
 }
 
@@ -96,7 +227,8 @@ fn text_generation_uses_active_prompt_and_real_provider_response() {
     assert!(request.contains("最近 7 天美国 TikTok 汽车内容"));
   });
   let profile_id = configure_active_ai(&root_path, base_url);
-  let task = create_collection_task(
+  let intent_text = "采集最近 7 天美国 TikTok 汽车内容，预算 2 美元";
+  let task = create_collection_task_with_initial_intent(
     &root_path,
     CreateCollectionTaskInput {
       name: "自然语言任务".to_string(),
@@ -104,6 +236,7 @@ fn text_generation_uses_active_prompt_and_real_provider_response() {
       platforms: vec!["xiaohongshu".to_string()],
       data_types: vec!["comments".to_string()],
     },
+    Some(intent_text),
   )
   .expect("task should be created");
 
@@ -111,7 +244,7 @@ fn text_generation_uses_active_prompt_and_real_provider_response() {
     &root_path,
     GenerateCollectionPlanFromTextInput {
       task_id: task.id.clone(),
-      intent_text: "采集最近 7 天美国 TikTok 汽车内容，预算 2 美元".to_string(),
+      intent_text: intent_text.to_string(),
       provider_id: None,
       model_id: None,
     },
@@ -158,6 +291,16 @@ fn text_generation_uses_active_prompt_and_real_provider_response() {
   assert_eq!(updated_task.platforms_json, serde_json::json!(["tiktok"]));
   assert_eq!(updated_task.data_types_json, serde_json::json!(["account"]));
   assert_eq!(runs.len(), 1);
+  let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
+  let attempt = connection
+    .query_row(
+      "SELECT COUNT(*), MAX(ai_run_id) FROM task_intent WHERE task_id = ?1",
+      [task.id],
+      |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?)),
+    )
+    .unwrap();
+  assert_eq!(attempt.0, 1, "首次成功必须复用原子创建的解析记录");
+  assert_eq!(attempt.1.as_deref(), Some(result.ai_run.id.as_str()));
 
   std::fs::remove_dir_all(root_path).ok();
 }

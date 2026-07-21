@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use chrono::Utc;
-use rusqlite::params;
+use rusqlite::{params, Connection, OptionalExtension};
 use uuid::Uuid;
 
 use super::collection_intent_schema::parse_collection_intent;
@@ -25,8 +25,15 @@ pub fn generate_collection_plan_from_text(
   let connection = open_workspace_connection(&root_path)?;
   ensure_task_exists(&connection, &input.task_id)?;
   let now = Utc::now().to_rfc3339();
-  let attempt_id = Uuid::new_v4().to_string();
-  create_task_intent_attempt(&connection, &attempt_id, &input.task_id, intent_text, &now)?;
+  let attempt_id =
+    match claim_initial_task_intent_attempt(&connection, &input.task_id, intent_text, &now)? {
+      Some(attempt_id) => attempt_id,
+      None => {
+        let attempt_id = Uuid::new_v4().to_string();
+        create_task_intent_attempt(&connection, &attempt_id, &input.task_id, intent_text, &now)?;
+        attempt_id
+      }
+    };
   preserve_attempt_error(
     seed_builtin_prompts(&root_path),
     &connection,
@@ -227,6 +234,34 @@ pub fn generate_collection_plan_from_text(
     issues,
     collection_plan,
   })
+}
+
+pub(super) fn claim_initial_task_intent_attempt(
+  connection: &Connection,
+  task_id: &str,
+  intent_text: &str,
+  claimed_at: &str,
+) -> AppResult<Option<String>> {
+  connection
+    .query_row(
+      "UPDATE task_intent
+       SET parse_phase = 'requesting_ai', updated_at = ?1
+       WHERE id = (
+         SELECT id FROM task_intent
+         WHERE task_id = ?2 AND intent_text = ?3
+           AND parse_status = 'running' AND parse_phase = 'preparing'
+           AND ai_run_id IS NULL
+         ORDER BY created_at ASC, id ASC
+         LIMIT 1
+       )
+         AND parse_status = 'running' AND parse_phase = 'preparing'
+         AND ai_run_id IS NULL
+       RETURNING id",
+      params![claimed_at, task_id, intent_text],
+      |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(database_error)
 }
 
 fn direct_source_preservation_issue(
