@@ -10,7 +10,8 @@ use super::provider_client::collection_intent_request;
 use super::*;
 use crate::prompts::seed_builtin_prompts;
 use crate::tasks::{
-  save_collection_plan, update_collection_task, SaveCollectionPlanInput, UpdateCollectionTaskInput,
+  normalize_natural_intent_text, save_collection_plan, update_collection_task,
+  SaveCollectionPlanInput, UpdateCollectionTaskInput,
 };
 
 pub fn generate_collection_plan_from_text(
@@ -18,10 +19,8 @@ pub fn generate_collection_plan_from_text(
   input: GenerateCollectionPlanFromTextInput,
 ) -> AppResult<GeneratedCollectionPlanView> {
   let root_path = root_path.as_ref().to_path_buf();
-  let intent_text = input.intent_text.trim();
-  if intent_text.is_empty() {
-    return Err(ai_error("自然语言采集需求不能为空"));
-  }
+  let intent_text = normalize_natural_intent_text(&input.intent_text)?;
+  let intent_text = intent_text.as_str();
   let mut connection = open_workspace_connection(&root_path)?;
   let now = Utc::now().to_rfc3339();
   let attempt_id = acquire_task_intent_attempt(&mut connection, &input.task_id, intent_text, &now)?;

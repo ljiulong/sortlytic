@@ -26,6 +26,47 @@ use crate::workspace::{create_workspace, open_workspace_database, DATABASE_FILE_
 const TIKHUB_E2E_TOKEN: &str = "sortlytic-e2e-tikhub-token";
 
 #[test]
+fn direct_generation_rejects_oversized_intent_before_attempt_or_provider_request() {
+  let root_path = unique_temp_workspace("ai-intent-size-limit");
+  create_workspace("AI 输入上限测试", &root_path).expect("workspace should be created");
+  configure_active_ai(&root_path, "http://127.0.0.1:1".to_string());
+  let task = create_collection_task(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "直接命令输入上限".to_string(),
+      source_type: "natural_language".to_string(),
+      platforms: vec![],
+      data_types: vec![],
+    },
+  )
+  .expect("natural-language task should be created");
+
+  let error = generate_collection_plan_from_text(
+    &root_path,
+    GenerateCollectionPlanFromTextInput {
+      task_id: task.id.clone(),
+      intent_text: "a".repeat(10_001),
+      provider_id: None,
+      model_id: None,
+    },
+  )
+  .expect_err("oversized direct generation must fail before provider access");
+
+  assert_eq!(error.code, AppErrorCode::ValidationError);
+  assert!(error.message.contains("10000"));
+  let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
+  let attempts = connection
+    .query_row(
+      "SELECT COUNT(*) FROM task_intent WHERE task_id = ?1",
+      [&task.id],
+      |row| row.get::<_, i64>(0),
+    )
+    .unwrap();
+  assert_eq!(attempts, 0);
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn natural_generation_rejects_ineligible_tasks_before_the_provider_request() {
   let root_path = unique_temp_workspace("ai-task-eligibility");
   create_workspace("AI 任务资格测试", &root_path).expect("workspace should be created");
