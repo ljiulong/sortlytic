@@ -345,3 +345,30 @@ fn rejects_tampered_output_rules_cost_breakdown_and_source_capacity() {
     "discovery requests above the record capacity must be rejected"
   );
 }
+
+#[test]
+fn rejects_enrichment_request_limit_above_endpoint_capacity() {
+  let mut plan_request = request("xiaohongshu", "user_search");
+  plan_request.params = serde_json::json!({
+    "keyword": "宠物园区",
+    "time_range": "7"
+  });
+  let mut plan = generate_account_collection_plan(plan_request)
+    .expect("time evidence should require account post enrichment")
+    .plan_json;
+  let excessive_limit = 10_000;
+  plan["steps"][1]["request_limit"] = serde_json::json!(excessive_limit);
+  plan["cost_estimate"]["enrichment_request_count"] = serde_json::json!(excessive_limit);
+  plan["cost_estimate"]["request_count_estimate"] = serde_json::json!(excessive_limit + 1);
+
+  let validation = validate_collection_plan_v4(&plan);
+
+  assert!(
+    !validation.valid,
+    "endpoint request capacity must be enforced"
+  );
+  assert!(validation
+    .errors
+    .iter()
+    .any(|error| { error.contains("xiaohongshu.account_posts") && error.contains("上限 200") }));
+}

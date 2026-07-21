@@ -440,6 +440,20 @@ pub fn validate_collection_plan_v4(plan_json: &Value) -> CollectionPlanValidatio
         if step_request_limit.is_none() {
           errors.push(format!("{prefix}.request_limit 必须是大于 0 的整数"));
         }
+        if let (Some(step_platform), Some(data_type), Some(limit)) = (
+          step.get("platform").and_then(Value::as_str),
+          step.get("data_type").and_then(Value::as_str),
+          step_request_limit,
+        ) {
+          if let Some(endpoint) = super::capabilities::find_endpoint(step_platform, data_type) {
+            if limit > endpoint.max_request_count {
+              errors.push(format!(
+                "{prefix}.request_limit 不能超过 {} 的上限 {}",
+                endpoint.endpoint_key, endpoint.max_request_count
+              ));
+            }
+          }
+        }
         if operation.starts_with("discover.") {
           if step_key != Some("discover") {
             errors.push(format!("{prefix}.step_key 必须为 discover"));
