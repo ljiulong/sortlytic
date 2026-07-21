@@ -147,6 +147,9 @@ pub struct CostEstimateView {
   pub cost_estimate_json: Value,
 }
 
+pub(crate) const MAX_NATURAL_INTENT_CHARACTERS: usize = 10_000;
+pub(crate) const MAX_NATURAL_INTENT_BYTES: usize = 32_000;
+
 pub fn create_collection_task(
   root_path: impl AsRef<Path>,
   input: CreateCollectionTaskInput,
@@ -164,7 +167,7 @@ pub fn create_collection_task_with_initial_intent(
     ("form", Some(_)) => {
       return Err(task_error("表单任务不能携带自然语言解析原文"));
     }
-    ("natural_language", Some(value)) => Some(normalize_required("自然语言需求", value)?),
+    ("natural_language", Some(value)) => Some(normalize_natural_intent_text(value)?),
     (_, None) => None,
     _ => None,
   };
@@ -454,6 +457,23 @@ fn normalize_required(field: &str, value: &str) -> AppResult<String> {
   }
 
   Ok(value.to_string())
+}
+
+pub(crate) fn normalize_natural_intent_text(value: &str) -> AppResult<String> {
+  let value = normalize_required("自然语言需求", value)?;
+  let character_count = value.chars().count();
+  if character_count > MAX_NATURAL_INTENT_CHARACTERS {
+    return Err(task_error(format!(
+      "自然语言需求最多允许 {MAX_NATURAL_INTENT_CHARACTERS} 个字符，当前为 {character_count} 个字符"
+    )));
+  }
+  let byte_count = value.len();
+  if byte_count > MAX_NATURAL_INTENT_BYTES {
+    return Err(task_error(format!(
+      "自然语言需求最多允许 {MAX_NATURAL_INTENT_BYTES} 个 UTF-8 字节，当前为 {byte_count} 个字节"
+    )));
+  }
+  Ok(value)
 }
 
 fn get_task_by_id(connection: &Connection, task_id: &str) -> AppResult<CollectionTaskView> {

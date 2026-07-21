@@ -40,6 +40,73 @@ fn natural_task_creation_atomically_persists_the_complete_initial_intent() {
 }
 
 #[test]
+fn natural_task_creation_rejects_intent_over_the_character_limit_before_writing() {
+  let root_path = unique_temp_workspace("natural-intent-character-limit");
+  create_workspace("自然语言字符上限", &root_path).expect("workspace should be created");
+  let oversized = "a".repeat(10_001);
+
+  let error = create_collection_task_with_initial_intent(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "拒绝超长自然语言输入".to_string(),
+      source_type: "natural_language".to_string(),
+      platforms: Vec::new(),
+      data_types: Vec::new(),
+    },
+    Some(&oversized),
+  )
+  .expect_err("oversized natural input must fail before task creation");
+
+  assert_eq!(error.code, AppErrorCode::ValidationError);
+  assert!(error.message.contains("10000"));
+  let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
+  assert_eq!(
+    count_rows_for(
+      &connection,
+      "collection_task",
+      "source_type",
+      "natural_language"
+    ),
+    0,
+  );
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn natural_task_creation_rejects_intent_over_the_utf8_byte_limit_before_writing() {
+  let root_path = unique_temp_workspace("natural-intent-byte-limit");
+  create_workspace("自然语言字节上限", &root_path).expect("workspace should be created");
+  let four_byte_character = "\u{10000}";
+  let oversized = four_byte_character.repeat((32_000 / four_byte_character.len()) + 1);
+
+  let error = create_collection_task_with_initial_intent(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "拒绝超大多字节输入".to_string(),
+      source_type: "natural_language".to_string(),
+      platforms: Vec::new(),
+      data_types: Vec::new(),
+    },
+    Some(&oversized),
+  )
+  .expect_err("oversized UTF-8 input must fail before task creation");
+
+  assert_eq!(error.code, AppErrorCode::ValidationError);
+  assert!(error.message.contains("32000"));
+  let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
+  assert_eq!(
+    count_rows_for(
+      &connection,
+      "collection_task",
+      "source_type",
+      "natural_language"
+    ),
+    0,
+  );
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn initial_intent_failure_rolls_back_task_and_audit_log() {
   let root_path = unique_temp_workspace("natural-initial-intent-rollback");
   create_workspace("自然语言原子回滚", &root_path).expect("workspace should be created");
