@@ -115,6 +115,40 @@ describe('NaturalParseFeedback', () => {
     expect(schemaMarkup).toContain('切换到表单修正')
   })
 
+  it('待补充状态展示已识别平台、地区、语言、实际检索词和缺失字段', () => {
+    const markup = render({
+      phase: 'needs_review',
+      taskId: 'task-needs-review',
+      intentText: '用中文查找英国 TikTok 宠物用品账号',
+      finishedAt: '2026-07-20T08:00:17Z',
+      problem: {
+        code: 'VALIDATION_ERROR',
+        stage: 'validating_intent',
+        message: '解析完成，需要补充预算',
+        retryable: false,
+        safeDetails: {
+          issues: ['缺少预算上限'],
+          missing_fields: ['budget_limit_micros'],
+          intent: {
+            platform: 'tiktok',
+            region_code: 'GB',
+            query_locale: 'en-GB',
+            source_input: 'pet supplies',
+          },
+        },
+      },
+      draftPreserved: true,
+    })
+
+    expect(markup).toContain('已识别需求')
+    expect(markup).toContain('<dt>平台</dt><dd>TikTok</dd>')
+    expect(markup).toContain('<dt>国家地区</dt><dd>GB</dd>')
+    expect(markup).toContain('<dt>目标检索语言</dt><dd>en-GB</dd>')
+    expect(markup).toContain('<dt>实际检索词</dt><dd>pet supplies</dd>')
+    expect(markup).toContain('待补充字段')
+    expect(markup).toContain('预算上限')
+  })
+
   it('临时模型请求错误和旧版临时协议记录都提供重新解析', () => {
     const base = {
       phase: 'failed' as const,

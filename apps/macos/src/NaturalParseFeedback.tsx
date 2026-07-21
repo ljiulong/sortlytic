@@ -45,6 +45,12 @@ export default function NaturalParseFeedback({
   const success = state.phase === 'success'
   const remediation = state.problem ? remediationForProblem(state.problem) : undefined
   const retryAfter = state.problem?.safeDetails.retry_after
+  const recognizedIntent = needsReview
+    ? recognizedIntentFromDetails(state.problem?.safeDetails)
+    : undefined
+  const missingFields = needsReview
+    ? stringList(state.problem?.safeDetails.missing_fields)
+    : []
 
   return (
     <section
@@ -93,6 +99,37 @@ export default function NaturalParseFeedback({
             <div><dt>可重试</dt><dd>{state.problem.retryable ? '是' : '否'}</dd></div>
             <div><dt>草稿与原始输入</dt><dd>{state.draftPreserved ? '已保留' : '状态未知'}</dd></div>
           </dl>
+          {(recognizedIntent || missingFields.length > 0) && (
+            <div className="natural-parse-feedback__recognized">
+              <p><strong>已识别需求</strong></p>
+              {recognizedIntent && (
+                <dl className="natural-parse-feedback__facts">
+                  {recognizedIntent.platform && (
+                    <div><dt>平台</dt><dd>{platformLabel(recognizedIntent.platform)}</dd></div>
+                  )}
+                  {recognizedIntent.regionCode && (
+                    <div><dt>国家地区</dt><dd>{recognizedIntent.regionCode}</dd></div>
+                  )}
+                  {recognizedIntent.queryLocale && (
+                    <div><dt>目标检索语言</dt><dd>{recognizedIntent.queryLocale}</dd></div>
+                  )}
+                  {recognizedIntent.sourceInput && (
+                    <div><dt>实际检索词</dt><dd>{recognizedIntent.sourceInput}</dd></div>
+                  )}
+                </dl>
+              )}
+              {missingFields.length > 0 && (
+                <div>
+                  <strong>待补充字段</strong>
+                  <ul>
+                    {missingFields.map((field) => (
+                      <li key={field}>{missingFieldLabel(field)}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
           {retryAfter !== undefined && retryAfter !== null && (
             <p>建议等待：{String(retryAfter)}</p>
           )}
@@ -223,4 +260,43 @@ function formatAttemptTime(value: string | undefined) {
         hour: '2-digit',
         minute: '2-digit',
       }).format(date)
+}
+
+function recognizedIntentFromDetails(details: Record<string, unknown> | undefined) {
+  const value = details?.intent
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const intent = value as Record<string, unknown>
+  return {
+    platform: optionalString(intent.platform),
+    regionCode: optionalString(intent.region_code),
+    queryLocale: optionalString(intent.query_locale),
+    sourceInput: optionalString(intent.source_input),
+  }
+}
+
+function optionalString(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function stringList(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
+    : []
+}
+
+function platformLabel(platform: string) {
+  return ({ tiktok: 'TikTok', douyin: '抖音', xiaohongshu: '小红书' } as Record<string, string>)[platform]
+    ?? platform
+}
+
+function missingFieldLabel(field: string) {
+  return ({
+    platform: '平台',
+    account_source: '账号来源',
+    source_input: '实际检索词或来源输入',
+    query_locale: '目标检索语言',
+    region_code: '国家地区',
+    record_limit: '最大记录数',
+    budget_limit_micros: '预算上限',
+  } as Record<string, string>)[field] ?? field
 }
