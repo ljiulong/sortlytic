@@ -183,7 +183,11 @@ pub(crate) fn build_collection_plan_from_intent(
 }
 
 fn recompute_missing_fields(intent: &CollectionIntentV1) -> Vec<String> {
-  let mut missing = BTreeSet::new();
+  let mut missing = intent
+    .missing_fields
+    .iter()
+    .cloned()
+    .collect::<BTreeSet<_>>();
   if intent.platform.is_none() {
     missing.insert("platform".to_string());
   }
@@ -270,7 +274,7 @@ mod tests {
       gender_filter: None,
       record_limit: Some(10),
       budget_limit_micros: Some(100_000),
-      missing_fields: vec!["platform".to_string()],
+      missing_fields: vec![],
       confidence: 0.95,
     }
   }
@@ -328,6 +332,20 @@ mod tests {
       assert!(result.missing_fields.contains(&field.to_string()));
       assert!(result.intent.missing_fields.contains(&field.to_string()));
     }
+  }
+
+  #[test]
+  fn preserves_model_review_fields_even_when_the_value_is_non_empty() {
+    let mut intent = british_tiktok_intent();
+    intent.source_input = Some("Acme 宠物用品".to_string());
+    intent.missing_fields = vec!["source_input".to_string()];
+
+    let result = build_collection_plan_from_intent(intent);
+
+    assert_eq!(result.validation_status, "needs_review");
+    assert!(result.collection_plan.is_none());
+    assert_eq!(result.missing_fields, vec!["source_input".to_string()]);
+    assert_eq!(result.intent.missing_fields, result.missing_fields);
   }
 
   #[test]
