@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import * as Tabs from '@radix-ui/react-tabs'
 import { ArrowLeft, History, RefreshCcw, Save } from 'lucide-react'
 import AppSelect from './AppSelect'
 import {
@@ -249,27 +250,37 @@ function TaskEditor({
         </span>
       </header>
 
-      {draft.sourceType === 'natural_language' ? (
-        <div className="task-editor__mode-bar" role="tablist" aria-label="编辑方式">
-          <button
-            aria-selected={draft.editorMode === 'natural_language'}
-            className="ghost-button"
-            role="tab"
-            type="button"
-            onClick={() => updateDraft({ editorMode: 'natural_language' })}
-          >自然语言</button>
-          <button
-            aria-selected={draft.editorMode === 'form'}
-            className="ghost-button"
-            role="tab"
-            type="button"
-            onClick={() => updateDraft({ editorMode: 'form' })}
-          >结构化表单</button>
-        </div>
-      ) : null}
+      <Tabs.Root
+        value={draft.editorMode}
+        onValueChange={(editorMode) => updateDraft({
+          editorMode: editorMode as TaskEditDraft['editorMode'],
+        })}
+      >
+        {draft.sourceType === 'natural_language' ? (
+          <Tabs.List className="task-editor__mode-bar" aria-label="编辑方式">
+            <Tabs.Trigger
+              className="ghost-button"
+              onFocus={() => updateDraft({ editorMode: 'natural_language' })}
+              tabIndex={draft.editorMode === 'natural_language' ? 0 : -1}
+              value="natural_language"
+            >自然语言</Tabs.Trigger>
+            <Tabs.Trigger
+              className="ghost-button"
+              onFocus={() => updateDraft({ editorMode: 'form' })}
+              tabIndex={draft.editorMode === 'form' ? 0 : -1}
+              value="form"
+            >
+              结构化表单
+            </Tabs.Trigger>
+          </Tabs.List>
+        ) : null}
 
-      {draft.editorMode === 'natural_language' ? (
-        <div className="task-editor__natural-panel">
+        <Tabs.Content
+          className="task-editor__natural-panel"
+          forceMount
+          hidden={draft.editorMode !== 'natural_language'}
+          value="natural_language"
+        >
           <label htmlFor="task-editor-natural-input">原始自然语言需求</label>
           <textarea
             id="task-editor-natural-input"
@@ -307,9 +318,13 @@ function TaskEditor({
               切换到表单修正
             </button>
           </div>
-        </div>
-      ) : (
-        <div className="task-editor__form">
+        </Tabs.Content>
+        <Tabs.Content
+          className="task-editor__form"
+          forceMount
+          hidden={draft.editorMode !== 'form'}
+          value="form"
+        >
           <EditorField label="任务名称" htmlFor="task-editor-name">
             <input
               id="task-editor-name"
@@ -567,8 +582,8 @@ function TaskEditor({
               </ul>
             </div>
           ) : null}
-        </div>
-      )}
+        </Tabs.Content>
+      </Tabs.Root>
 
       <TaskRevisionPreview draft={draft} attempt={naturalParseAttempt} />
 

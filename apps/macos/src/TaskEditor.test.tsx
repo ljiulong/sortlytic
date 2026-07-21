@@ -65,6 +65,34 @@ afterEach(() => {
 })
 
 describe('完整任务编辑器', () => {
+  it('自然语言与结构化表单使用完整键盘 Tab 模式', async () => {
+    const mounted = mountEditor({ naturalParseAttempt: attempt({ parse_status: 'valid' }) })
+    await flushEditor()
+    const tabs = [...mounted.container.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+    const selected = tabs.find((tab) => tab.getAttribute('aria-selected') === 'true')
+    const other = tabs.find((tab) => tab !== selected)
+
+    expect(tabs).toHaveLength(2)
+    expect(selected?.tabIndex).toBe(0)
+    expect(other?.tabIndex).toBe(-1)
+    for (const tab of tabs) {
+      const panelId = tab.getAttribute('aria-controls')
+      expect(panelId).toBeTruthy()
+      expect(mounted.container.querySelector(`#${panelId}`)?.getAttribute('role')).toBe('tabpanel')
+    }
+
+    await act(async () => {
+      selected?.focus()
+      selected?.dispatchEvent(new KeyboardEvent('keydown', {
+        bubbles: true,
+        key: selected === tabs[0] ? 'ArrowRight' : 'ArrowLeft',
+      }))
+      await Promise.resolve()
+    })
+    expect(other?.getAttribute('aria-selected')).toBe('true')
+    expect(document.activeElement).toBe(other)
+  })
+
   it('加载计划、自然语言意图和审计上下文中的全部可编辑字段', async () => {
     const mounted = mountEditor({ naturalParseAttempt: attempt({ parse_status: 'valid' }) })
     await flushEditor()
