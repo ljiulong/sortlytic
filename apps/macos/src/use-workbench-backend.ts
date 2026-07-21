@@ -164,6 +164,7 @@ function createEmptyWorkbenchData(mode: 'loading' | 'error' | 'unavailable'): Ba
     records: [],
     promptRuns: [],
     naturalParseAttempts: [],
+    currentNaturalParseAttempts: [],
     latestTaskId: undefined,
     runtimeMode: mode,
   }
@@ -366,7 +367,7 @@ export function useWorkbenchBackend() {
   const data = dataQuery.data ?? createEmptyWorkbenchData(dataQuery.error ? 'error' : 'loading')
   const resolvedNaturalParseState = resolveNaturalParseState(
     naturalParseState,
-    data.naturalParseAttempts,
+    data.currentNaturalParseAttempts ?? data.naturalParseAttempts,
   )
   const resolvedActionMessage = dataQuery.error
     ? backendErrorMessage(dataQuery.error)

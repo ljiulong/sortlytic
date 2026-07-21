@@ -1395,6 +1395,7 @@ describe('mapBackendData', () => {
     )
 
     expect(result.naturalParseAttempts).toEqual([attempt])
+    expect(result.currentNaturalParseAttempts).toEqual([attempt])
     expect(result.tasks[0]?.naturalParseAttempt).toEqual(attempt)
   })
 
@@ -1429,6 +1430,7 @@ describe('mapBackendData', () => {
     )
 
     expect(result.naturalParseAttempts).toEqual([oldFailure])
+    expect(result.currentNaturalParseAttempts).toEqual([])
     expect(result.tasks[0]?.status).toBe('等待确认')
     expect(result.tasks[0]?.naturalParseAttempt).toBeUndefined()
   })

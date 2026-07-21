@@ -70,6 +70,7 @@ export type WorkbenchRuntimeData = {
 export type BackendWorkbenchData = WorkbenchRuntimeData & {
   latestTaskId?: string
   naturalParseAttempts: NaturalParseAttemptView[]
+  currentNaturalParseAttempts: NaturalParseAttemptView[]
   runtimeMode: 'backend' | 'unavailable' | 'loading' | 'error'
 }
 
@@ -89,8 +90,13 @@ export function mapBackendData(
 
   const latestRunByTask = new Map(latestRuns.map((run) => [run.task_id, run]))
   const recordCountByTask = new Map(recordCounts.map((count) => [count.task_id, count.record_count]))
+  const taskById = new Map(tasks.map((task) => [task.id, task]))
+  const currentNaturalParseAttempts = naturalParseAttempts.filter((attempt) => {
+    const task = taskById.get(attempt.task_id)
+    return task !== undefined && currentNaturalParseAttempt(task, attempt) !== undefined
+  })
   const parseAttemptByTask = new Map(
-    naturalParseAttempts.map((attempt) => [attempt.task_id, attempt]),
+    currentNaturalParseAttempts.map((attempt) => [attempt.task_id, attempt]),
   )
   const taskRecordCounts = tasks.map((task) => Math.max(0, recordCountByTask.get(task.id) ?? 0))
   const storedRecordCount = taskRecordCounts.reduce((total, count) => total + count, 0)
@@ -147,6 +153,7 @@ export function mapBackendData(
     records: [],
     promptRuns: [],
     naturalParseAttempts,
+    currentNaturalParseAttempts,
     latestTaskId,
     runtimeMode: 'backend',
   }
