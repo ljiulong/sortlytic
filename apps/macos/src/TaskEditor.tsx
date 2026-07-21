@@ -388,6 +388,13 @@ function TaskEditor({
               {queryLocaleError ? (
                 <small id="task-editor-query-locale-error" role="alert">{queryLocaleError}</small>
               ) : null}
+              {selectedSource?.input_kind !== 'keyword' && draft.queryLocale ? (
+                <UnsupportedField
+                  message="直接账号、作品或 URL 来源不会翻译；旧目标语言不能进入新计划。"
+                  action="移除目标语言"
+                  onRemove={() => updateDraft({ queryLocale: '' })}
+                />
+              ) : null}
             </EditorField>
           </div>
 

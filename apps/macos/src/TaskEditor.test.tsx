@@ -179,7 +179,7 @@ describe('完整任务编辑器', () => {
     }
   })
 
-  it('直接账号、作品或 URL 来源拒绝遗留目标检索语言', async () => {
+  it('直接账号、作品或 URL 来源说明并允许移除遗留目标检索语言', async () => {
     apiMocks.getAccountCollectionCapabilities.mockResolvedValue(capability({
       key: 'direct_account',
       input_kind: 'account',
@@ -209,6 +209,15 @@ describe('完整任务编辑器', () => {
 
     expect(mounted.container.textContent).toContain('直接账号、作品或 URL 来源不得设置目标检索语言')
     expect(apiMocks.generateAccountCollectionPlan).not.toHaveBeenCalled()
+
+    await act(async () => buttonByText(mounted.container, '移除目标语言').click())
+    await act(async () => buttonByText(mounted.container, '保存新计划版本').click())
+    await flushEditor()
+
+    expect(apiMocks.generateAccountCollectionPlan).toHaveBeenCalled()
+    expect(apiMocks.reviseCollectionTask).toHaveBeenCalledWith(expect.objectContaining({
+      plan_json: expect.not.objectContaining({ query_locale: expect.anything() }),
+    }))
   })
 
   it('无时间筛选的有效任务可保存且不会被迫增加时间条件', async () => {
