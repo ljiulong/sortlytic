@@ -115,6 +115,40 @@ describe('NaturalParseFeedback', () => {
     expect(schemaMarkup).toContain('切换到表单修正')
   })
 
+  it('临时模型请求错误和旧版临时协议记录都提供重新解析', () => {
+    const base = {
+      phase: 'failed' as const,
+      intentText: '查找英国 TikTok 宠物账号',
+      draftPreserved: true,
+    }
+    const requestMarkup = render({
+      ...base,
+      problem: {
+        code: 'MODEL_REQUEST_ERROR',
+        stage: 'requesting_ai',
+        message: 'AI 服务请求超时',
+        retryable: true,
+        safeDetails: { transport_kind: 'timeout' },
+      },
+    })
+    const legacyMarkup = render({
+      ...base,
+      problem: {
+        code: 'MODEL_PROTOCOL_ERROR',
+        stage: 'requesting_ai',
+        message: 'AI 服务暂时不可用，请稍后重试',
+        retryable: true,
+        safeDetails: { http_status: '503' },
+      },
+    })
+
+    for (const markup of [requestMarkup, legacyMarkup]) {
+      expect(markup).toContain('重新解析')
+      expect(markup).not.toContain('打开 AI 设置')
+      expect(markup).toContain('保留当前输入')
+    }
+  })
+
   it('成功状态明确提示在计划预览确认目标与步骤', () => {
     const markup = render({
       phase: 'success',

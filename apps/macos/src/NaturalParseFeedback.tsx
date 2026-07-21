@@ -143,6 +143,14 @@ function problemStageLabel(stage: string) {
 }
 
 function remediationForProblem(problem: BackendProblem) {
+  if (isTransientModelRequestProblem(problem)) {
+    return {
+      message: '保留当前输入；按建议等待后重新解析，不会自动重复发送可能已计费的模型请求。',
+      showRetry: true,
+      showSettings: false,
+      showForm: false,
+    }
+  }
   const configurationError = [
     'MODEL_CONFIG_ERROR',
     'MODEL_AUTH_ERROR',
@@ -186,6 +194,16 @@ function remediationForProblem(problem: BackendProblem) {
     showSettings: false,
     showForm: true,
   }
+}
+
+function isTransientModelRequestProblem(problem: BackendProblem) {
+  if (!problem.retryable) return false
+  if (problem.code === 'MODEL_REQUEST_ERROR') return true
+  if (problem.code !== 'MODEL_PROTOCOL_ERROR') return false
+  const transportKind = String(problem.safeDetails.transport_kind ?? '')
+  if (['timeout', 'connect', 'body', 'request'].includes(transportKind)) return true
+  const httpStatus = Number(problem.safeDetails.http_status)
+  return Number.isInteger(httpStatus) && httpStatus >= 500 && httpStatus <= 599
 }
 
 function elapsedSeconds(state: NaturalParseState) {
