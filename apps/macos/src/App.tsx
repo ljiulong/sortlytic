@@ -186,6 +186,7 @@ function Workbench() {
                     onRefresh={backend.refresh}
                     onRetryNaturalTask={backend.retryNaturalParse}
                     onRetryTask={backend.retryTask}
+                    onWorkspaceHealthCheck={backend.runWorkspaceHealthCheck}
                   />
                 )}
               </div>
