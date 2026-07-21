@@ -723,6 +723,19 @@ fn model_cannot_rewrite_a_direct_account_identifier_from_the_original_request() 
     .parsed_intent
     .as_ref()
     .is_some_and(|intent| intent.missing_fields.contains(&"source_input".to_string())));
+  let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
+  let safe_details_json = connection
+    .query_row(
+      "SELECT error_safe_details_json FROM task_intent
+       WHERE task_id = ?1 ORDER BY created_at DESC LIMIT 1",
+      [&result.ai_run.task_id],
+      |row| row.get::<_, String>(0),
+    )
+    .unwrap();
+  let safe_details: Value = serde_json::from_str(&safe_details_json).unwrap();
+  assert_eq!(safe_details["intent"]["platform"], "tiktok");
+  assert_eq!(safe_details["intent"]["region_code"], "GB");
+  assert_eq!(safe_details["intent"]["source_input"], "OtherBrandUK");
 
   std::fs::remove_dir_all(root_path).ok();
 }

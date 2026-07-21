@@ -315,6 +315,7 @@ fn update_task_intent_success(
   ai_run_id: &str,
   issues: &[String],
   missing_fields: &[String],
+  intent: Option<&CollectionIntentV1>,
 ) -> AppResult<()> {
   let now = Utc::now().to_rfc3339();
   if parse_status == "valid" {
@@ -354,6 +355,7 @@ fn update_task_intent_success(
   let safe_details = serde_json::json!({
     "issues": safe_issues,
     "missing_fields": safe_missing_fields,
+    "intent": intent,
   });
   connection
     .execute(
