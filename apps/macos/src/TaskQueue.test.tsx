@@ -48,6 +48,7 @@ function mountQueue(
   onExportTask: (input: TaskExportInput) => Promise<ExportJobView> = vi.fn(),
   onDeleteTask: (taskId: string) => Promise<unknown> = vi.fn(),
   onRetryNaturalTask: (taskId: string, intentText: string) => Promise<unknown> = vi.fn(),
+  onRetryTask: (taskId: string) => Promise<unknown> = vi.fn(),
 ) {
   const container = document.createElement('div')
   const root = createRoot(container)
@@ -63,6 +64,7 @@ function mountQueue(
     onDeleteTask,
     onExportTask,
     onRetryNaturalTask,
+    onRetryTask,
   })))
   return mounted
 }
@@ -678,6 +680,56 @@ describe('TaskQueue', () => {
     expect(markup).toContain('dateTime="2026-07-17T08:00:00Z"')
     expect(markup).toContain('查看运行日志')
     expect(markup).toContain('aria-controls=')
+  })
+
+  it('运行失败的重新尝试调用 retry_task 入口并保持单次在途', async () => {
+    let resolveRetry!: () => void
+    const pendingRetry = new Promise<void>((resolve) => {
+      resolveRetry = resolve
+    })
+    const onConfirmTask = vi.fn(async () => undefined)
+    const onRetryTask = vi.fn(() => pendingRetry)
+    const failedTask: WorkbenchRuntimeData['tasks'][number] = {
+      ...waitingTask,
+      id: 'task-run-retry',
+      status: '失败',
+      latestRun: {
+        id: 'run-failed',
+        attemptNumber: 1,
+        status: 'failed',
+        currentStage: '执行失败',
+        currentStageCode: 'EXECUTION_FAILED',
+        errorCode: 'TIKHUB_RATE_LIMIT',
+        errorMessage: 'TikHub 暂时触发限流',
+        retryable: true,
+        startedAt: '2026-07-21T00:00:00Z',
+        endedAt: '2026-07-21T00:00:10Z',
+      },
+    }
+    const mounted = mountQueue(
+      onConfirmTask,
+      [failedTask],
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+      onRetryTask,
+    )
+    const retryButton = [...mounted.container.querySelectorAll('button')]
+      .find((button) => button.textContent?.includes('重新尝试'))
+
+    act(() => {
+      retryButton?.click()
+      retryButton?.click()
+    })
+
+    expect(onRetryTask).toHaveBeenCalledOnce()
+    expect(onRetryTask).toHaveBeenCalledWith('task-run-retry')
+    expect(onConfirmTask).not.toHaveBeenCalled()
+
+    await act(async () => {
+      resolveRetry()
+      await pendingRetry
+    })
   })
 
   it('没有真实任务时显示完整空状态', () => {

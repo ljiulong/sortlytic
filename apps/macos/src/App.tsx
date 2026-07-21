@@ -181,6 +181,7 @@ function Workbench() {
                     onOpenSettings={() => navigate('settings')}
                     onRefresh={backend.refresh}
                     onRetryNaturalTask={backend.retryNaturalParse}
+                    onRetryTask={backend.retryTask}
                   />
                 )}
               </div>

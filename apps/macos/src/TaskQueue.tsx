@@ -46,6 +46,7 @@ type TaskQueueProps = {
   onDeleteTask: (taskId: string) => Promise<unknown>
   onExportTask: (input: TaskExportInput) => Promise<ExportJobView>
   onRetryNaturalTask?: (taskId: string, intentText: string) => Promise<unknown>
+  onRetryTask?: (taskId: string) => Promise<unknown>
   onOpenSettings?: () => void
   onRefresh?: () => void
 }
@@ -59,6 +60,7 @@ function TaskQueue({
   onDeleteTask,
   onExportTask,
   onRetryNaturalTask,
+  onRetryTask,
   onOpenSettings,
   onRefresh,
 }: TaskQueueProps) {
@@ -112,7 +114,7 @@ function TaskQueue({
         if (kind === 'natural_parse' && task.naturalParseAttempt) {
           await onRetryNaturalTask?.(task.id, task.naturalParseAttempt.intent_text)
         } else {
-          await onConfirmTask(task.id)
+          await onRetryTask?.(task.id)
         }
       } catch (error) {
         setActionErrors((errors) => ({
