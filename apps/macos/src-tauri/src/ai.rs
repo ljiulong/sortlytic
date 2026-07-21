@@ -17,6 +17,7 @@ pub(crate) mod collection_intent_schema;
 mod generation;
 pub(crate) mod intent_plan;
 pub(crate) mod provider_client;
+mod provider_errors;
 mod provider_policy;
 
 pub(crate) use attempts::mark_interrupted_task_intents;
