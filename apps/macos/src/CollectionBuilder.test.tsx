@@ -269,6 +269,7 @@ function renderBuilder(activePlan?: RuntimeCollectionPlan) {
       onConfirmPlan: vi.fn(async () => undefined),
       onGenerateFormPlan: vi.fn(async () => draftPlan),
       onGenerateNaturalPlan: vi.fn(async () => draftPlan),
+      onRetryNaturalPlan: vi.fn(async () => draftPlan),
     }),
   )
 }
