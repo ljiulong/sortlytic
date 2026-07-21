@@ -352,10 +352,22 @@ fn update_task_intent_success(
   } else {
     format!("解析完成，需要修正：{}", message_parts.join("；"))
   };
+  let safe_intent = intent
+    .and_then(|value| serde_json::to_value(value).ok())
+    .map(|mut value| {
+      if let Some(source_input) = value
+        .get("source_input")
+        .and_then(Value::as_str)
+        .map(redact_sensitive_text)
+      {
+        value["source_input"] = Value::String(source_input);
+      }
+      value
+    });
   let safe_details = serde_json::json!({
     "issues": safe_issues,
     "missing_fields": safe_missing_fields,
-    "intent": intent,
+    "intent": safe_intent,
   });
   connection
     .execute(

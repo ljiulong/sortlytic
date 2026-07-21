@@ -679,7 +679,8 @@ fn model_cannot_rewrite_a_direct_account_identifier_from_the_original_request() 
   create_workspace("AI 直接标识保留测试", &root_path).expect("workspace should be created");
   let mut intent = valid_collection_intent();
   intent["account_source"] = serde_json::json!("direct_account");
-  intent["source_input"] = serde_json::json!("OtherBrandUK");
+  intent["source_input"] =
+    serde_json::json!("https://example.com/@OtherBrandUK?token=provider-secret&keyword=pets");
   intent["query_locale"] = Value::Null;
   intent["time_range_days"] = Value::Null;
   intent["record_limit"] = serde_json::json!(1);
@@ -735,7 +736,10 @@ fn model_cannot_rewrite_a_direct_account_identifier_from_the_original_request() 
   let safe_details: Value = serde_json::from_str(&safe_details_json).unwrap();
   assert_eq!(safe_details["intent"]["platform"], "tiktok");
   assert_eq!(safe_details["intent"]["region_code"], "GB");
-  assert_eq!(safe_details["intent"]["source_input"], "OtherBrandUK");
+  assert!(safe_details["intent"]["source_input"]
+    .as_str()
+    .is_some_and(|value| value.contains("[REDACTED]") && value.contains("keyword=pets")));
+  assert!(!safe_details_json.contains("provider-secret"));
 
   std::fs::remove_dir_all(root_path).ok();
 }
