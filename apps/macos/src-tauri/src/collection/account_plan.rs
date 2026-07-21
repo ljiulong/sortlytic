@@ -8,8 +8,9 @@ use super::account_input::normalize_account_source_input;
 use super::{
   get_account_collection_capabilities, validate_collection_params, AccountCollectionCapabilityView,
   AccountFieldAvailability, AccountSourceInputKind, AgeRangeInput, CollectionPlanDraftView,
-  CollectionPlanValidationResult, PaginationMode,
+  CollectionPlanValidationResult, FilterExecution, PaginationMode,
 };
+use crate::accounts::normalize_country_region;
 use crate::domain::{AppError, AppErrorStage, AppResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -43,7 +44,26 @@ pub fn generate_account_collection_plan(
     .iter()
     .find(|source| source.key == request.account_source.trim())
     .ok_or_else(|| validation_error("当前平台不支持所选账号来源"))?;
-  let selected_fields = normalize_account_fields(&capability, &request.selected_fields)?;
+  let region = parse_region_filter(request.params.get("region")).map_err(validation_error)?;
+  let time_range =
+    parse_time_range_filter(request.params.get("time_range")).map_err(validation_error)?;
+  validate_source_filter_support(source, region.as_deref(), time_range.as_deref())?;
+  let mut requested_fields = request.selected_fields.clone();
+  if region.is_some()
+    && !requested_fields
+      .iter()
+      .any(|field| field == "country_region")
+  {
+    requested_fields.push("country_region".to_string());
+  }
+  if time_range.is_some()
+    && !requested_fields
+      .iter()
+      .any(|field| field == "last_posted_at")
+  {
+    requested_fields.push("last_posted_at".to_string());
+  }
+  let selected_fields = normalize_account_fields(&capability, &requested_fields)?;
   validate_requested_filters(
     request.age_range.as_ref(),
     request.gender_filter.as_deref(),
@@ -51,12 +71,23 @@ pub fn generate_account_collection_plan(
   )?;
   let enrichment_operations =
     required_enrichment_operations(&capability, &selected_fields, request.account_source.trim());
+  let mut normalized_request_params = request.params.clone();
+  let normalized_request_params_object = normalized_request_params
+    .as_object_mut()
+    .ok_or_else(|| validation_error("params 必须是对象"))?;
+  if let Some(region) = region.as_ref() {
+    normalized_request_params_object.insert("region".to_string(), Value::String(region.clone()));
+  }
+  if let Some(time_range) = time_range.as_ref() {
+    normalized_request_params_object
+      .insert("time_range".to_string(), Value::String(time_range.clone()));
+  }
   let source_params = normalize_account_source_params(
     &capability.platform,
     &source.key,
     &source.endpoint_key,
     source.input_kind,
-    &request.params,
+    &normalized_request_params,
   )?;
   let requested_source_limit = request
     .request_limit
@@ -148,8 +179,8 @@ pub fn generate_account_collection_plan(
     "account_source": source.key,
     "selected_fields": selected_fields,
     "enrichment_policy": "auto_costed",
-    "region": request.params.get("region").cloned().unwrap_or(Value::Null),
-    "time_range": request.params.get("time_range").cloned().unwrap_or(Value::Null),
+    "region": region,
+    "time_range": time_range,
     "age_range": request.age_range.as_ref().map(age_range_json),
     "gender_filter": gender_filter,
     "steps": steps,
@@ -286,7 +317,13 @@ pub fn validate_collection_plan_v4(plan_json: &Value) -> CollectionPlanValidatio
   }
 
   validate_plan_limits(plan_json, &mut errors);
-  validate_plan_filters(plan_json, selected_fields.as_deref(), &mut errors);
+  validate_plan_filters(
+    plan_json,
+    selected_fields.as_deref(),
+    capability.as_ref(),
+    account_source,
+    &mut errors,
+  );
   let record_limit = plan_json
     .get("record_limit")
     .and_then(Value::as_i64)
@@ -754,8 +791,58 @@ fn validate_plan_limits(plan_json: &Value, errors: &mut Vec<String>) {
 fn validate_plan_filters(
   plan_json: &Value,
   selected_fields: Option<&[String]>,
+  capability: Option<&AccountCollectionCapabilityView>,
+  account_source: Option<&str>,
   errors: &mut Vec<String>,
 ) {
+  let source = capability.and_then(|capability| {
+    account_source.and_then(|account_source| {
+      capability
+        .account_sources
+        .iter()
+        .find(|source| source.key == account_source)
+    })
+  });
+  match parse_region_filter(plan_json.get("region")) {
+    Ok(Some(region)) => {
+      if source.is_some_and(|source| source.region_filter == FilterExecution::Unsupported) {
+        errors.push("当前平台或账号来源无法可靠筛选地区，请移除地区条件或更换来源".to_string());
+      }
+      if selected_fields.is_none_or(|fields| !fields.iter().any(|field| field == "country_region"))
+      {
+        errors.push("启用 region 时必须选择 country_region 证据字段".to_string());
+      }
+      if source.is_some_and(|source| source.region_filter == FilterExecution::Provider)
+        && discovery_param(plan_json, "region") != Some(region.as_str())
+      {
+        errors.push("发现步骤 params.region 必须与顶层 region 一致".to_string());
+      }
+    }
+    Ok(None) => {}
+    Err(error) => errors.push(error.to_string()),
+  }
+  match parse_time_range_filter(plan_json.get("time_range")) {
+    Ok(Some(time_range)) => {
+      if let Some(source) = source {
+        if source.time_range_filter == FilterExecution::Unsupported {
+          errors.push("当前平台或账号来源无法可靠筛选时间，请移除时间条件或更换来源".to_string());
+        } else if !source.time_ranges.contains(&time_range) {
+          errors.push(format!("当前账号来源不支持 {time_range} 天时间范围"));
+        }
+        if source.time_range_filter == FilterExecution::Provider
+          && discovery_param(plan_json, "time_range") != Some(time_range.as_str())
+        {
+          errors.push("发现步骤 params.time_range 必须与顶层 time_range 一致".to_string());
+        }
+      }
+      if selected_fields.is_none_or(|fields| !fields.iter().any(|field| field == "last_posted_at"))
+      {
+        errors.push("启用 time_range 时必须选择 last_posted_at 证据字段".to_string());
+      }
+    }
+    Ok(None) => {}
+    Err(error) => errors.push(error.to_string()),
+  }
   if let Some(age_range) = plan_json.get("age_range").filter(|value| !value.is_null()) {
     let bounds = age_range
       .get("min")
@@ -788,6 +875,74 @@ fn validate_plan_filters(
       errors.push("启用 gender_filter 时必须选择 gender 字段".to_string());
     }
   }
+}
+
+fn parse_region_filter(value: Option<&Value>) -> Result<Option<String>, &'static str> {
+  let Some(value) = value.filter(|value| !value.is_null()) else {
+    return Ok(None);
+  };
+  let Some(region) = value.as_str() else {
+    return Err("region 必须是大写 ISO 两位代码或 null");
+  };
+  let region = region.trim();
+  if normalize_country_region(Some(region)).as_deref() != Some(region) {
+    return Err("region 必须是大写 ISO 两位代码或 null");
+  }
+  Ok(Some(region.to_string()))
+}
+
+fn parse_time_range_filter(value: Option<&Value>) -> Result<Option<String>, &'static str> {
+  let Some(value) = value.filter(|value| !value.is_null()) else {
+    return Ok(None);
+  };
+  let days = value
+    .as_i64()
+    .or_else(|| value.as_str().and_then(|value| value.trim().parse().ok()));
+  match days {
+    Some(days @ (1 | 7 | 30 | 180)) => Ok(Some(days.to_string())),
+    _ => Err("time_range 只能是 1、7、30 或 180 天或 null"),
+  }
+}
+
+fn validate_source_filter_support(
+  source: &super::AccountSourceCapabilityView,
+  region: Option<&str>,
+  time_range: Option<&str>,
+) -> AppResult<()> {
+  if region.is_some() && source.region_filter == FilterExecution::Unsupported {
+    return Err(validation_error(
+      "当前平台或账号来源无法可靠筛选地区，请移除地区条件或更换来源",
+    ));
+  }
+  if let Some(time_range) = time_range {
+    if source.time_range_filter == FilterExecution::Unsupported {
+      return Err(validation_error(
+        "当前平台或账号来源无法可靠筛选时间，请移除时间条件或更换来源",
+      ));
+    }
+    if !source.time_ranges.iter().any(|value| value == time_range) {
+      return Err(validation_error(format!(
+        "当前账号来源不支持 {time_range} 天时间范围"
+      )));
+    }
+  }
+  Ok(())
+}
+
+fn discovery_param<'a>(plan_json: &'a Value, key: &str) -> Option<&'a str> {
+  plan_json
+    .get("steps")
+    .and_then(Value::as_array)
+    .and_then(|steps| {
+      steps
+        .iter()
+        .find(|step| step.get("role").and_then(Value::as_str) == Some("discovery"))
+    })
+    .and_then(|step| step.get("params"))
+    .and_then(|params| params.get(key))
+    .and_then(Value::as_str)
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
 }
 
 fn age_range_json(age_range: &AgeRangeInput) -> Value {

@@ -449,20 +449,20 @@ fn version_four_confirmation_rejects_endpoint_params_outside_the_runtime_allowli
   let task = create_collection_task(
     &root_path,
     CreateCollectionTaskInput {
-      name: "小红书用户搜索".to_string(),
+      name: "TikTok 用户搜索".to_string(),
       source_type: "form".to_string(),
-      platforms: vec!["xiaohongshu".to_string()],
+      platforms: vec!["tiktok".to_string()],
       data_types: vec!["account".to_string()],
     },
   )
   .expect("v4 account task should create");
   let mut draft = crate::collection::generate_account_collection_plan(
     crate::collection::AccountFormCollectionPlanRequest {
-      platform: "xiaohongshu".to_string(),
+      platform: "tiktok".to_string(),
       account_source: "user_search".to_string(),
       selected_fields: Vec::new(),
       enrichment_policy: "auto_costed".to_string(),
-      params: serde_json::json!({ "keyword": "宠物园区", "region": "CN", "time_range": "7" }),
+      params: serde_json::json!({ "keyword": "pet supplies", "region": "GB", "time_range": "7" }),
       age_range: None,
       gender_filter: None,
       request_limit: Some(1),
@@ -471,7 +471,7 @@ fn version_four_confirmation_rejects_endpoint_params_outside_the_runtime_allowli
     },
   )
   .expect("v4 account draft should generate");
-  draft.plan_json["steps"][0]["params"]["region"] = serde_json::json!("CN");
+  draft.plan_json["steps"][0]["params"]["region"] = serde_json::json!("GB");
   draft.plan_json["steps"][0]["params"]["time_range"] = serde_json::json!("7");
 
   let plan = save_collection_plan(

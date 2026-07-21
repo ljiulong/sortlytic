@@ -71,38 +71,83 @@ fn direct_account_reuses_the_discovery_profile_response() {
 }
 
 #[test]
-fn xiaohongshu_user_search_keeps_local_filters_out_of_endpoint_params() {
+fn rejects_xiaohongshu_region_filter_without_reliable_evidence() {
   let mut plan_request = request("xiaohongshu", "user_search");
   plan_request.params = serde_json::json!({
     "keyword": "宠物园区",
-    "region": "CN",
+    "region": "CN"
+  });
+  let error = generate_account_collection_plan(plan_request)
+    .expect_err("unsupported region filter must fail before plan creation");
+
+  assert!(error.message.contains("无法可靠筛选地区"));
+}
+
+#[test]
+fn adds_local_time_evidence_without_sending_an_unsupported_remote_param() {
+  let mut plan_request = request("xiaohongshu", "user_search");
+  plan_request.params = serde_json::json!({
+    "keyword": "宠物园区",
     "time_range": "7"
   });
   let plan = generate_account_collection_plan(plan_request)
-    .expect("plan should generate")
+    .expect("local time evidence should generate")
     .plan_json;
 
-  assert_eq!(plan["region"], "CN");
   assert_eq!(plan["time_range"], "7");
+  assert!(plan["selected_fields"]
+    .as_array()
+    .is_some_and(|fields| fields.contains(&serde_json::json!("last_posted_at"))));
   assert_eq!(
     plan["steps"][0]["params"],
     serde_json::json!({ "keyword": "宠物园区" })
   );
+  assert!(plan["steps"].as_array().is_some_and(|steps| steps
+    .iter()
+    .any(|step| step["operation_key"] == "enrich.account_posts")));
+}
 
-  let mut tampered = plan;
-  tampered["steps"][0]["params"]["region"] = serde_json::json!("CN");
-  tampered["steps"][0]["params"]["time_range"] = serde_json::json!("7");
-  let validation = validate_collection_plan_v4(&tampered);
+#[test]
+fn rejects_invalid_or_unsupported_top_level_evidence_filters() {
+  let mut plan_request = request("tiktok", "user_search");
+  plan_request.params = serde_json::json!({
+    "keyword": "pet supplies",
+    "region": "GB",
+    "time_range": "30"
+  });
+  let plan = generate_account_collection_plan(plan_request)
+    .expect("valid evidence filters should generate")
+    .plan_json;
 
+  for (field, invalid, expected_error) in [
+    ("region", serde_json::json!("UK"), "大写 ISO 两位代码"),
+    (
+      "time_range",
+      serde_json::json!("近 30 天"),
+      "1、7、30 或 180",
+    ),
+    ("time_range", serde_json::json!(999), "1、7、30 或 180"),
+  ] {
+    let mut candidate = plan.clone();
+    candidate[field] = invalid;
+    let validation = validate_collection_plan_v4(&candidate);
+    assert!(!validation.valid, "invalid {field} must be rejected");
+    assert!(validation
+      .errors
+      .iter()
+      .any(|error| error.contains(expected_error)));
+  }
+
+  let mut unsupported = generate_account_collection_plan(request("xiaohongshu", "user_search"))
+    .unwrap()
+    .plan_json;
+  unsupported["region"] = serde_json::json!("CN");
+  let validation = validate_collection_plan_v4(&unsupported);
   assert!(!validation.valid);
   assert!(validation
     .errors
     .iter()
-    .any(|error| error.contains("参数 region 不在 endpoint 白名单内")));
-  assert!(validation
-    .errors
-    .iter()
-    .any(|error| error.contains("参数 time_range 不在 endpoint 白名单内")));
+    .any(|error| error.contains("无法可靠筛选地区")));
 }
 
 #[test]
