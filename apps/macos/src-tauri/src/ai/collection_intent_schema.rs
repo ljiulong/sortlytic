@@ -216,7 +216,7 @@ fn validate_intent_values(intent: &CollectionIntentV1) -> Result<(), Vec<String>
           && intent
             .source_input
             .as_deref()
-            .is_some_and(contains_han_character)
+            .is_some_and(|value| !query_matches_locale_script(expected_locale, value))
           && !intent
             .missing_fields
             .iter()
@@ -226,6 +226,14 @@ fn validate_intent_values(intent: &CollectionIntentV1) -> Result<(), Vec<String>
             "目标地区 {region} 必须使用英文实际检索词；专有名词不确定时请把 source_input 加入 missing_fields"
           ));
         }
+      } else if !intent
+        .missing_fields
+        .iter()
+        .any(|field| field == "query_locale")
+      {
+        errors.push(format!(
+          "目标地区 {region} 尚未配置确定性主检索语言；请把 query_locale 加入 missing_fields 并确认实际检索语言"
+        ));
       }
     }
   } else if intent.account_source.is_some() && intent.query_locale.is_some() {
@@ -373,13 +381,19 @@ pub(crate) fn primary_query_locale(region: &str) -> Option<&'static str> {
   })
 }
 
-fn contains_han_character(value: &str) -> bool {
-  value.chars().any(|character| {
-    matches!(
-      character as u32,
-      0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF
-    )
-  })
+pub(crate) fn query_matches_locale_script(query_locale: &str, value: &str) -> bool {
+  if !query_locale.starts_with("en-") {
+    return true;
+  }
+  let mut has_ascii_letter = false;
+  for character in value.chars() {
+    if character.is_ascii_alphabetic() {
+      has_ascii_letter = true;
+    } else if character.is_alphabetic() {
+      return false;
+    }
+  }
+  has_ascii_letter
 }
 
 fn unique_invalid_values(values: &[String], allowed: &[String]) -> Vec<String> {
@@ -506,6 +520,29 @@ mod tests {
 
     untranslated["missing_fields"] = json!(["source_input"]);
     parse_collection_intent(&untranslated).expect("待确认的专有名词原文允许保留");
+  }
+
+  #[test]
+  fn rejects_non_english_scripts_and_regions_without_a_primary_query_locale() {
+    for source_input in [
+      "товары для домашних животных",
+      "مستلزمات الحيوانات الأليفة",
+      "ペット用品",
+    ] {
+      let mut intent = valid_intent();
+      intent["source_input"] = json!(source_input);
+
+      let errors =
+        parse_collection_intent(&intent).expect_err("en-GB 不能接受其他字母脚本冒充英文检索词");
+      assert!(errors.join("\n").contains("英文实际检索词"));
+    }
+
+    let mut unmapped_region = valid_intent();
+    unmapped_region["region_code"] = json!("AF");
+    unmapped_region["query_locale"] = json!("ps-AF");
+    let errors = parse_collection_intent(&unmapped_region)
+      .expect_err("没有确定性主语言映射的地区必须进入待确认");
+    assert!(errors.join("\n").contains("主检索语言"));
   }
 
   #[test]

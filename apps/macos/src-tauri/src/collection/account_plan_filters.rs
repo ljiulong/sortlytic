@@ -7,7 +7,9 @@ use super::{
   FilterExecution,
 };
 use crate::accounts::normalize_country_region;
-use crate::ai::collection_intent_schema::{primary_query_locale, valid_query_locale};
+use crate::ai::collection_intent_schema::{
+  primary_query_locale, query_matches_locale_script, valid_query_locale,
+};
 use crate::domain::{AppError, AppErrorStage, AppResult};
 
 pub(super) fn validate_plan_filters(
@@ -134,9 +136,25 @@ fn validate_plan_query_locale(
     if query_locale != expected {
       errors.push(format!("目标地区 {region} 的主检索语言必须为 {expected}"));
     }
-  } else if !query_locale.ends_with(region) {
+    let keyword = plan_json
+      .get("steps")
+      .and_then(Value::as_array)
+      .and_then(|steps| {
+        steps
+          .iter()
+          .find(|step| step.get("role").and_then(Value::as_str) == Some("discovery"))
+      })
+      .and_then(|step| step.get("params"))
+      .and_then(|params| params.get("keyword"))
+      .and_then(Value::as_str);
+    if keyword.is_some_and(|value| !query_matches_locale_script(expected, value)) {
+      errors.push(format!(
+        "目标地区 {region} 必须使用英文实际检索词；请修改发现步骤的 keyword"
+      ));
+    }
+  } else {
     errors.push(format!(
-      "query_locale {query_locale} 必须与目标地区 {region} 一致"
+      "目标地区 {region} 尚未配置确定性主检索语言，当前计划不能确认运行"
     ));
   }
 }

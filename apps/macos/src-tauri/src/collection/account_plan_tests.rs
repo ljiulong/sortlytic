@@ -164,6 +164,37 @@ fn validates_query_locale_against_source_kind_and_target_region() {
   valid["query_locale"] = serde_json::json!("en-GB");
   assert!(validate_collection_plan_v4(&valid).valid);
 
+  for keyword in [
+    "товары для домашних животных",
+    "مستلزمات الحيوانات الأليفة",
+    "ペット用品",
+  ] {
+    let mut candidate = valid.clone();
+    candidate["steps"][0]["params"]["keyword"] = serde_json::json!(keyword);
+    let validation = validate_collection_plan_v4(&candidate);
+    assert!(!validation.valid, "en-GB 计划不能接受 {keyword}");
+    assert!(validation
+      .errors
+      .iter()
+      .any(|error| error.contains("英文实际检索词")));
+  }
+
+  let mut unmapped_request = request("tiktok", "user_search");
+  unmapped_request.params = serde_json::json!({
+    "keyword": "pet supplies",
+    "region": "AF"
+  });
+  let mut unmapped = generate_account_collection_plan(unmapped_request)
+    .expect("未登记主语言的地区计划仍应先生成草稿")
+    .plan_json;
+  unmapped["query_locale"] = serde_json::json!("ps-AF");
+  let validation = validate_collection_plan_v4(&unmapped);
+  assert!(!validation.valid);
+  assert!(validation
+    .errors
+    .iter()
+    .any(|error| error.contains("主检索语言")));
+
   for invalid_locale in ["english-uk", "zh-CN", "fr-GB"] {
     let mut candidate = search_plan.clone();
     candidate["query_locale"] = serde_json::json!(invalid_locale);
