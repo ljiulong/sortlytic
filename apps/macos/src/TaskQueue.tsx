@@ -424,6 +424,7 @@ function TaskQueue({
               && ['failed', 'interrupted', 'needs_review'].includes(parseAttempt.parse_status)
             const parseFailed = parseAttempt
               && ['failed', 'interrupted'].includes(parseAttempt.parse_status)
+            const parseNeedsReview = parseAttempt?.parse_status === 'needs_review'
 
             return (
               <article
@@ -458,8 +459,10 @@ function TaskQueue({
                     </div>
                   </div>
                   <StatusPill
-                    tone={parseFailed ? 'danger' : toneForStatus(task.status)}
-                    label={parseFailed ? '解析失败' : t(taskStatusTranslationKeys[task.status])}
+                    tone={parseFailed ? 'danger' : parseNeedsReview ? 'warning' : toneForStatus(task.status)}
+                    label={parseFailed
+                      ? '解析失败'
+                      : parseNeedsReview ? '待修正' : t(taskStatusTranslationKeys[task.status])}
                   />
                 </header>
 

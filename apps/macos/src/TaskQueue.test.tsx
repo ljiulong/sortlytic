@@ -174,6 +174,31 @@ describe('TaskQueue', () => {
     expect(markup).not.toContain('发生未知错误')
   })
 
+  it('自然语言待补充任务显示待修正而不是待人工确认', () => {
+    const markup = renderQueue([{
+      ...waitingTask,
+      id: 'task-natural-needs-review',
+      status: '待人工确认',
+      naturalParseAttempt: {
+        id: 'attempt-needs-review',
+        task_id: 'task-natural-needs-review',
+        intent_text: '查找英国 TikTok 宠物用品账号',
+        parse_status: 'needs_review',
+        parse_phase: 'needs_review',
+        error_code: 'VALIDATION_ERROR',
+        error_message: '解析完成，需要补充预算',
+        retryable: false,
+        error_safe_details_json: { missing_fields: ['budget_limit_micros'] },
+        created_at: '2026-07-20T08:00:00Z',
+        updated_at: '2026-07-20T08:00:17Z',
+      },
+    }])
+
+    expect(markup).toContain('>待修正</span>')
+    expect(markup).not.toContain('>待人工确认</span>')
+    expect(markup).toContain('解析完成，需要补充信息')
+  })
+
   it('自然语言任务卡串行重试并在失败时显示卡内错误', async () => {
     let rejectRetry!: (error: Error) => void
     const pendingRetry = new Promise<unknown>((_resolve, reject) => {
