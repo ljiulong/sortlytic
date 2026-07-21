@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Ban, Download, ListChecks, ListTodo, Pencil, Play, Table2, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import AppSelect from './AppSelect'
@@ -69,6 +69,8 @@ function TaskQueue({
   const [exportFormats, setExportFormats] = useState<Record<string, TaskExportInput['format']>>({})
   const [exportFeedback, setExportFeedback] = useState<Record<string, TaskExportFeedback>>({})
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({})
+  const [pendingProblemTaskIds, setPendingProblemTaskIds] = useState<string[]>([])
+  const problemActionsInFlightRef = useRef(new Set<string>())
   const [bulkMode, setBulkMode] = useState(false)
   const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([])
   const [bulkDeleteConfirmationOpen, setBulkDeleteConfirmationOpen] = useState(false)
@@ -89,7 +91,7 @@ function TaskQueue({
     && !allDeletableTasksSelected
   const numberLocale = i18n.resolvedLanguage ?? i18n.language
   const showRawDiagnostics = numberLocale.toLowerCase().startsWith('zh')
-  const handleProblemAction = (
+  const handleProblemAction = async (
     task: TaskRow,
     kind: 'natural_parse' | 'run',
     action: TaskRemediationAction,
@@ -99,10 +101,27 @@ function TaskQueue({
     else if (action === 'open_ai_settings' || action === 'open_tikhub_settings') onOpenSettings?.()
     else if (action === 'reload' || action === 'workspace_health') onRefresh?.()
     else if (action === 'retry') {
-      if (kind === 'natural_parse' && task.naturalParseAttempt) {
-        void onRetryNaturalTask?.(task.id, task.naturalParseAttempt.intent_text)
-      } else {
-        void onConfirmTask(task.id)
+      const actionKey = `${task.id}:${kind}:retry`
+      if (problemActionsInFlightRef.current.has(actionKey)) return
+      problemActionsInFlightRef.current.add(actionKey)
+      setPendingProblemTaskIds((taskIds) => taskIds.includes(task.id)
+        ? taskIds
+        : [...taskIds, task.id])
+      setActionErrors((errors) => ({ ...errors, [task.id]: '' }))
+      try {
+        if (kind === 'natural_parse' && task.naturalParseAttempt) {
+          await onRetryNaturalTask?.(task.id, task.naturalParseAttempt.intent_text)
+        } else {
+          await onConfirmTask(task.id)
+        }
+      } catch (error) {
+        setActionErrors((errors) => ({
+          ...errors,
+          [task.id]: backendErrorMessage(error),
+        }))
+      } finally {
+        problemActionsInFlightRef.current.delete(actionKey)
+        setPendingProblemTaskIds((taskIds) => taskIds.filter((taskId) => taskId !== task.id))
       }
     }
   }
@@ -487,7 +506,8 @@ function TaskQueue({
                       retryable={parseAttempt.retryable ?? parseAttempt.parse_status === 'interrupted'}
                       attemptedAt={parseAttempt.updated_at}
                       safeDetails={parseAttempt.error_safe_details_json}
-                      onAction={(action) => handleProblemAction(task, 'natural_parse', action)}
+                      isBusy={pendingProblemTaskIds.includes(task.id)}
+                      onAction={(action) => void handleProblemAction(task, 'natural_parse', action)}
                     />
                   </div>
                 ) : null}
@@ -499,8 +519,14 @@ function TaskQueue({
                 {task.latestRun ? (
                   <TaskRunDetails
                     run={task.latestRun}
-                    onProblemAction={(action) => handleProblemAction(task, 'run', action)}
+                    onProblemAction={(action) => void handleProblemAction(task, 'run', action)}
                   />
+                ) : null}
+
+                {actionError && !isConfirming ? (
+                  <p className="task-card__confirmation-error" role="alert">
+                    操作失败：{actionError}
+                  </p>
                 ) : null}
 
                 <footer className="task-card__footer">

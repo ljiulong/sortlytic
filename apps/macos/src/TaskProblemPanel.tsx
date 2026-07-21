@@ -21,6 +21,7 @@ type TaskProblemPanelProps = {
   attemptedAt?: string | null
   safeDetails?: Record<string, unknown>
   draftPreserved?: boolean
+  isBusy?: boolean
   onAction?: (action: TaskRemediationAction) => void
 }
 
@@ -53,6 +54,7 @@ export default function TaskProblemPanel({
   attemptedAt,
   safeDetails = {},
   draftPreserved = true,
+  isBusy = false,
   onAction,
 }: TaskProblemPanelProps) {
   const needsReview = kind === 'natural_parse' && naturalState === 'needs_review'
@@ -105,12 +107,13 @@ export default function TaskProblemPanel({
             return (
               <button
                 className={action === remediation.primaryAction ? 'ghost-button' : 'text-button'}
+                disabled={isBusy}
                 key={action}
                 type="button"
                 onClick={() => onAction(action)}
               >
                 <Icon size={14} aria-hidden="true" />
-                {actionLabels[action]}
+                {isBusy && action === 'retry' ? '正在重新尝试' : actionLabels[action]}
               </button>
             )
           })}

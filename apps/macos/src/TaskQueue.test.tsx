@@ -47,6 +47,7 @@ function mountQueue(
   tasks: WorkbenchRuntimeData['tasks'] = [waitingTask],
   onExportTask: (input: TaskExportInput) => Promise<ExportJobView> = vi.fn(),
   onDeleteTask: (taskId: string) => Promise<unknown> = vi.fn(),
+  onRetryNaturalTask: (taskId: string, intentText: string) => Promise<unknown> = vi.fn(),
 ) {
   const container = document.createElement('div')
   const root = createRoot(container)
@@ -61,6 +62,7 @@ function mountQueue(
     onConfirmTask,
     onDeleteTask,
     onExportTask,
+    onRetryNaturalTask,
   })))
   return mounted
 }
@@ -168,6 +170,63 @@ describe('TaskQueue', () => {
     expect(markup).toContain('修改方式')
     expect(markup).toContain('重新尝试')
     expect(markup).not.toContain('发生未知错误')
+  })
+
+  it('自然语言任务卡串行重试并在失败时显示卡内错误', async () => {
+    let rejectRetry!: (error: Error) => void
+    const pendingRetry = new Promise<unknown>((_resolve, reject) => {
+      rejectRetry = reject
+    })
+    const onRetryNaturalTask = vi.fn(() => pendingRetry)
+    const naturalTask: WorkbenchRuntimeData['tasks'][number] = {
+      ...waitingTask,
+      id: 'task-natural-retry',
+      source: '自然语言',
+      sourceType: 'natural_language',
+      status: '待人工确认',
+      naturalParseAttempt: {
+        id: 'attempt-retry',
+        task_id: 'task-natural-retry',
+        intent_text: '查找英国 TikTok 宠物用品账号',
+        parse_status: 'failed',
+        parse_phase: 'requesting_ai',
+        error_code: 'MODEL_RATE_LIMIT',
+        error_message: 'AI 服务请求过于频繁',
+        retryable: true,
+        error_safe_details_json: { retry_after: '5' },
+        created_at: '2026-07-20T08:00:00Z',
+        updated_at: '2026-07-20T08:01:30Z',
+      },
+    }
+    const mounted = mountQueue(
+      vi.fn(),
+      [naturalTask],
+      vi.fn(),
+      vi.fn(),
+      onRetryNaturalTask,
+    )
+    const retryButton = [...mounted.container.querySelectorAll('button')]
+      .find((button) => button.textContent?.includes('重新尝试'))
+
+    act(() => {
+      retryButton?.click()
+      retryButton?.click()
+    })
+
+    expect(onRetryNaturalTask).toHaveBeenCalledTimes(1)
+    expect(onRetryNaturalTask).toHaveBeenCalledWith(
+      'task-natural-retry',
+      '查找英国 TikTok 宠物用品账号',
+    )
+    expect(retryButton?.disabled).toBe(true)
+
+    await act(async () => {
+      rejectRetry(new Error('AI 临时网络错误，请重新解析'))
+      await pendingRetry.catch(() => undefined)
+    })
+
+    expect(mounted.container.textContent).toContain('AI 临时网络错误，请重新解析')
+    expect(retryButton?.disabled).toBe(false)
   })
 
   it('等待确认任务提供编辑、取消、删除与确认运行四个独立入口', () => {
