@@ -7,6 +7,7 @@ use crate::tasks::CostEstimateView;
 mod account_capabilities;
 mod account_input;
 mod account_plan;
+mod account_plan_filters;
 #[cfg(test)]
 #[path = "collection/account_plan_tests.rs"]
 mod account_plan_tests;
