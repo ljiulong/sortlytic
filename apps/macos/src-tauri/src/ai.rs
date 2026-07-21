@@ -408,9 +408,8 @@ fn preserve_attempt_error<T>(
   attempt_id: &str,
   phase: &str,
 ) -> AppResult<T> {
-  result.map_err(|error| {
-    let _ = update_task_intent_failure(connection, attempt_id, phase, &error, None);
-    error
+  result.inspect_err(|error| {
+    let _ = update_task_intent_failure(connection, attempt_id, phase, error, None);
   })
 }
 

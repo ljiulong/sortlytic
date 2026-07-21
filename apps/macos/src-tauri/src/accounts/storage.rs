@@ -386,12 +386,16 @@ fn active_account_filters(
   let evidence_filters_enabled = plan_json.get("schema_version").and_then(Value::as_i64) == Some(4);
   Ok(AccountFilters {
     gender: (!genders.is_empty()).then_some(genders),
-    region: evidence_filters_enabled
-      .then(|| plan_region_filter(&plan_json))
-      .unwrap_or(EvidenceFilter::Disabled),
-    time_range_days: evidence_filters_enabled
-      .then(|| plan_time_range_filter(&plan_json))
-      .unwrap_or(EvidenceFilter::Disabled),
+    region: if evidence_filters_enabled {
+      plan_region_filter(&plan_json)
+    } else {
+      EvidenceFilter::Disabled
+    },
+    time_range_days: if evidence_filters_enabled {
+      plan_time_range_filter(&plan_json)
+    } else {
+      EvidenceFilter::Disabled
+    },
     evaluated_at: timestamp_utc(collected_at),
   })
 }

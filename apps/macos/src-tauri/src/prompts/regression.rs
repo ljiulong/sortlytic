@@ -157,7 +157,7 @@ fn evaluate_collection_case(
       .and_then(Value::as_str)
       .is_some_and(|value| {
         !value.trim().is_empty()
-          && value.chars().all(|character| character.is_ascii())
+          && value.is_ascii()
           && value
             .chars()
             .any(|character| character.is_ascii_alphabetic())
