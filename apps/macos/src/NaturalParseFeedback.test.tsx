@@ -53,6 +53,7 @@ describe('NaturalParseFeedback', () => {
     expect(markup).toContain('aria-live="assertive"')
     expect(markup).toContain('AI 服务请求过于频繁或额度不足')
     expect(markup).toContain('MODEL_RATE_LIMIT')
+    expect(markup).toContain('失败阶段</dt><dd>等待模型响应')
     expect(markup).toContain('修改方式')
     expect(markup).toContain('已保留')
     expect(markup).toContain('重新解析')

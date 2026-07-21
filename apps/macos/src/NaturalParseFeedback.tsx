@@ -88,7 +88,7 @@ export default function NaturalParseFeedback({
           <p className="natural-parse-feedback__message">{state.problem.message}</p>
           <dl className="natural-parse-feedback__facts">
             <div><dt>错误码</dt><dd>{state.problem.code}</dd></div>
-            <div><dt>失败阶段</dt><dd>{phaseLabels[state.phase] ?? state.problem.stage}</dd></div>
+            <div><dt>失败阶段</dt><dd>{problemStageLabel(state.problem.stage)}</dd></div>
             <div><dt>最近尝试</dt><dd>{formatAttemptTime(state.finishedAt)}</dd></div>
             <div><dt>可重试</dt><dd>{state.problem.retryable ? '是' : '否'}</dd></div>
             <div><dt>草稿与原始输入</dt><dd>{state.draftPreserved ? '已保留' : '状态未知'}</dd></div>
@@ -134,6 +134,12 @@ export default function NaturalParseFeedback({
       )}
     </section>
   )
+}
+
+function problemStageLabel(stage: string) {
+  return Object.prototype.hasOwnProperty.call(phaseLabels, stage)
+    ? phaseLabels[stage as NaturalParseState['phase']]
+    : stage
 }
 
 function remediationForProblem(problem: BackendProblem) {
