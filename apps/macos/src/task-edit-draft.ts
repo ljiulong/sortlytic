@@ -30,7 +30,7 @@ export type TaskEditDraft = {
   validationIssues: string[]
   missingFields: string[]
   copyOnSave: boolean
-  parseProblem?: { code?: string; message?: string }
+  parseProblem?: { kind?: 'needs_review'; code?: string; message?: string }
 }
 
 export function createTaskEditDraft(
@@ -45,9 +45,16 @@ export function createTaskEditDraft(
   const selectedFields = stringArray(planJson?.selected_fields)
   const planMissingFields = stringArray(planJson?.missing_fields)
   const intentMissingFields = intent?.missing_fields ?? []
-  const parseFailed = attempt
-    && ['failed', 'interrupted'].includes(attempt.parse_status)
-    && !attemptWasSuperseded(task, attempt)
+  const currentAttempt = attempt && !attemptWasSuperseded(task, attempt) ? attempt : undefined
+  const parseFailed = currentAttempt
+    && ['failed', 'interrupted'].includes(currentAttempt.parse_status)
+  const needsReview = currentAttempt?.parse_status === 'needs_review'
+  const attemptIssues = needsReview
+    ? stringArray(currentAttempt.error_safe_details_json.issues)
+    : []
+  const attemptMissingFields = needsReview
+    ? stringArray(currentAttempt.error_safe_details_json.missing_fields)
+    : []
 
   return {
     taskId: task.id,
@@ -71,13 +78,21 @@ export function createTaskEditDraft(
     genderFilter: normalizeGenders(intent?.gender_filter ?? planJson?.gender_filter),
     schemaVersion: plan?.schema_version,
     planJson,
-    validationIssues: stringArray(plan?.validation_errors_json),
-    missingFields: [...new Set([...planMissingFields, ...intentMissingFields])],
+    validationIssues: [...new Set([
+      ...stringArray(plan?.validation_errors_json),
+      ...attemptIssues,
+    ])],
+    missingFields: [...new Set([
+      ...planMissingFields,
+      ...intentMissingFields,
+      ...attemptMissingFields,
+    ])],
     copyOnSave: ['success', 'partial_success'].includes(task.status),
-    parseProblem: parseFailed
+    parseProblem: parseFailed || needsReview
       ? {
-          code: attempt.error_code ?? undefined,
-          message: attempt.error_message ?? undefined,
+          ...(needsReview ? { kind: 'needs_review' as const } : {}),
+          code: currentAttempt?.error_code ?? undefined,
+          message: currentAttempt?.error_message ?? undefined,
         }
       : undefined,
   }

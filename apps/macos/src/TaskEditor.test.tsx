@@ -103,6 +103,33 @@ describe('完整任务编辑器', () => {
     )
   })
 
+  it('待补充且没有计划或 ai_run 时仍显示持久化问题和缺失字段', async () => {
+    apiMocks.getLatestCollectionPlan.mockRejectedValue(new Error('任务还没有采集计划'))
+    const mounted = mountEditor({
+      naturalParseAttempt: attempt({
+        ai_run_id: null,
+        parse_status: 'needs_review',
+        parse_phase: 'needs_review',
+        error_code: 'VALIDATION_ERROR',
+        error_message: '解析完成，需要补充信息',
+        retryable: false,
+        error_safe_details_json: {
+          issues: ['当前平台缺少可靠地区来源'],
+          missing_fields: ['budget_limit_micros'],
+        },
+      }),
+    })
+    await flushEditor()
+
+    expect(mounted.container.textContent).toContain('解析完成，需要补充信息')
+    expect(mounted.container.textContent).toContain('当前平台缺少可靠地区来源')
+    expect(mounted.container.textContent).toContain('缺少字段：budget_limit_micros')
+
+    await act(async () => buttonByText(mounted.container, '切换到表单修正').click())
+    expect(mounted.container.textContent).toContain('旧计划需要修正')
+    expect(mounted.container.textContent).toContain('当前平台缺少可靠地区来源')
+  })
+
   it('保存时先由后端重新生成安全计划，再提交 user_edited 新版本', async () => {
     const onSaved = vi.fn()
     const mounted = mountEditor({

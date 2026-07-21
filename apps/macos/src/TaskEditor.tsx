@@ -279,9 +279,17 @@ function TaskEditor({
           />
           {draft.parseProblem ? (
             <div className="task-editor__problem" role="alert">
-              <strong>上次解析失败</strong>
+              <strong>{draft.parseProblem.kind === 'needs_review'
+                ? '解析完成，需要补充信息'
+                : '上次解析失败'}</strong>
               <p>{draft.parseProblem.message ?? '未能读取完整错误详情'}</p>
               <code>{draft.parseProblem.code ?? 'UNKNOWN_PARSE_ERROR'}</code>
+              {draft.validationIssues.length > 0 || draft.missingFields.length > 0 ? (
+                <ul>
+                  {[...draft.validationIssues, ...draft.missingFields.map((field) => `缺少字段：${field}`)]
+                    .map((issue) => <li key={issue}>{issue}</li>)}
+                </ul>
+              ) : null}
               <p>修改方式：修正上方需求后重新解析，或切换到结构化表单补齐字段。</p>
             </div>
           ) : null}
