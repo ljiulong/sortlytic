@@ -725,11 +725,15 @@ describe('TaskQueue', () => {
     expect(onRetryTask).toHaveBeenCalledOnce()
     expect(onRetryTask).toHaveBeenCalledWith('task-run-retry')
     expect(onConfirmTask).not.toHaveBeenCalled()
+    expect(retryButton?.disabled).toBe(true)
+    expect(retryButton?.textContent).toContain('正在重新尝试')
 
     await act(async () => {
       resolveRetry()
       await pendingRetry
     })
+    expect(retryButton?.disabled).toBe(false)
+    expect(retryButton?.textContent).toContain('重新尝试')
   })
 
   it('没有真实任务时显示完整空状态', () => {

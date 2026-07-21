@@ -521,6 +521,7 @@ function TaskQueue({
                 {task.latestRun ? (
                   <TaskRunDetails
                     run={task.latestRun}
+                    isBusy={pendingProblemTaskIds.includes(task.id)}
                     onProblemAction={(action) => void handleProblemAction(task, 'run', action)}
                   />
                 ) : null}

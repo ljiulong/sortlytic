@@ -8,9 +8,11 @@ type TaskRun = NonNullable<WorkbenchRuntimeData['tasks'][number]['latestRun']>
 
 export default function TaskRunDetails({
   run,
+  isBusy = false,
   onProblemAction,
 }: {
   run: TaskRun
+  isBusy?: boolean
   onProblemAction: (action: TaskRemediationAction) => void
 }) {
   const { t, i18n } = useTranslation('tasks')
@@ -69,6 +71,7 @@ export default function TaskRunDetails({
           message={errorMessage ?? errorFallback}
           retryable={run.retryable}
           attemptedAt={run.endedAt ?? run.startedAt}
+          isBusy={isBusy}
           onAction={onProblemAction}
         />
       ) : null}
