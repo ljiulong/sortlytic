@@ -468,48 +468,48 @@ fn serve_prompt_regressions(
       assert!(request.contains("input_json.text"));
       assert!(request.contains("collection_intent_v1"));
       let mut intent = if request.contains("PetBrandUK") {
-        collection_intent_fixture(
-          Some("tiktok"),
-          Some("direct_account"),
-          Some("https://www.tiktok.com/@PetBrandUK"),
-          None,
-          Some("GB"),
-          Some(1),
-          Some(100_000),
-          &[],
-        )
+        collection_intent_fixture(CollectionIntentFixture {
+          platform: Some("tiktok"),
+          account_source: Some("direct_account"),
+          source_input: Some("https://www.tiktok.com/@PetBrandUK"),
+          query_locale: None,
+          region_code: Some("GB"),
+          record_limit: Some(1),
+          budget_limit_micros: Some(100_000),
+          missing_fields: &[],
+        })
       } else if request.contains("7123456789012345678") {
-        collection_intent_fixture(
-          Some("tiktok"),
-          Some("item_author"),
-          Some("7123456789012345678"),
-          None,
-          Some("US"),
-          Some(1),
-          Some(100_000),
-          &[],
-        )
+        collection_intent_fixture(CollectionIntentFixture {
+          platform: Some("tiktok"),
+          account_source: Some("item_author"),
+          source_input: Some("7123456789012345678"),
+          query_locale: None,
+          region_code: Some("US"),
+          record_limit: Some(1),
+          budget_limit_micros: Some(100_000),
+          missing_fields: &[],
+        })
       } else if request.contains("英国 TikTok") {
-        collection_intent_fixture(
-          Some("tiktok"),
-          Some("user_search"),
-          Some("pet supplies"),
-          Some("en-GB"),
-          Some("GB"),
-          Some(10),
-          Some(100_000),
-          &[],
-        )
+        collection_intent_fixture(CollectionIntentFixture {
+          platform: Some("tiktok"),
+          account_source: Some("user_search"),
+          source_input: Some("pet supplies"),
+          query_locale: Some("en-GB"),
+          region_code: Some("GB"),
+          record_limit: Some(10),
+          budget_limit_micros: Some(100_000),
+          missing_fields: &[],
+        })
       } else {
-        collection_intent_fixture(
-          None,
-          Some("user_search"),
-          None,
-          None,
-          None,
-          None,
-          None,
-          &[
+        collection_intent_fixture(CollectionIntentFixture {
+          platform: None,
+          account_source: Some("user_search"),
+          source_input: None,
+          query_locale: None,
+          region_code: None,
+          record_limit: None,
+          budget_limit_micros: None,
+          missing_fields: &[
             "platform",
             "source_input",
             "query_locale",
@@ -517,7 +517,7 @@ fn serve_prompt_regressions(
             "record_limit",
             "budget_limit_micros",
           ],
-        )
+        })
       };
       if omit_budget_limit {
         intent
@@ -571,30 +571,32 @@ fn read_http_request(stream: &mut std::net::TcpStream) -> String {
   String::from_utf8_lossy(&request).into_owned()
 }
 
-fn collection_intent_fixture(
-  platform: Option<&str>,
-  account_source: Option<&str>,
-  source_input: Option<&str>,
-  query_locale: Option<&str>,
-  region_code: Option<&str>,
+struct CollectionIntentFixture<'a> {
+  platform: Option<&'a str>,
+  account_source: Option<&'a str>,
+  source_input: Option<&'a str>,
+  query_locale: Option<&'a str>,
+  region_code: Option<&'a str>,
   record_limit: Option<i64>,
   budget_limit_micros: Option<i64>,
-  missing_fields: &[&str],
-) -> Value {
+  missing_fields: &'a [&'a str],
+}
+
+fn collection_intent_fixture(input: CollectionIntentFixture<'_>) -> Value {
   serde_json::json!({
     "schema_version": 1,
-    "platform": platform,
-    "account_source": account_source,
-    "source_input": source_input,
-    "query_locale": query_locale,
-    "region_code": region_code,
+    "platform": input.platform,
+    "account_source": input.account_source,
+    "source_input": input.source_input,
+    "query_locale": input.query_locale,
+    "region_code": input.region_code,
     "selected_fields": [],
     "time_range_days": null,
     "age_range": null,
     "gender_filter": null,
-    "record_limit": record_limit,
-    "budget_limit_micros": budget_limit_micros,
-    "missing_fields": missing_fields,
+    "record_limit": input.record_limit,
+    "budget_limit_micros": input.budget_limit_micros,
+    "missing_fields": input.missing_fields,
     "confidence": 0.98
   })
 }
