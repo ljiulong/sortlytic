@@ -10,6 +10,7 @@ import {
   prepareAppUpdate,
   relaunchAfterAppUpdate,
   reviseCollectionTask,
+  runWorkspaceHealthCheck,
 } from './backend-api'
 
 const invokeMock = vi.hoisted(() => vi.fn())
@@ -50,6 +51,23 @@ describe('natural parse attempt API boundary', () => {
       taskId: 'task-1',
       rootPath: null,
     })
+  })
+})
+
+describe('workspace health API boundary', () => {
+  it('runs the active workspace health command instead of a data refresh', async () => {
+    invokeMock.mockResolvedValue({
+      workspace_id: 'workspace-1',
+      database_quick_check: 'ok',
+      foreign_keys_enabled: true,
+      journal_mode: 'wal',
+      missing_directories: [],
+      database_writable: true,
+    })
+
+    await runWorkspaceHealthCheck()
+
+    expect(invokeMock).toHaveBeenCalledWith('run_workspace_health_check', { rootPath: null })
   })
 })
 

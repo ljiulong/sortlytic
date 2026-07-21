@@ -31,6 +31,15 @@ export type WorkspaceSummary = {
   last_opened_at?: string
 }
 
+export type WorkspaceHealthCheckView = {
+  workspace_id: string
+  database_quick_check: string
+  foreign_keys_enabled: boolean
+  journal_mode: string
+  missing_directories: string[]
+  database_writable: boolean
+}
+
 export type TikhubPriceQuote = {
   endpoint: string
   request_per_day: number
@@ -399,6 +408,10 @@ export function ensureDefaultWorkspace() {
 
 export function getActiveWorkspace() {
   return invoke<WorkspaceSummary | null>('get_active_workspace')
+}
+
+export function runWorkspaceHealthCheck() {
+  return invoke<WorkspaceHealthCheckView>('run_workspace_health_check', { rootPath: null })
 }
 
 export function quoteTikhubConnectorPrice(endpoint: string, requestPerDay: number) {
