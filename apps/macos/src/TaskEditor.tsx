@@ -108,6 +108,14 @@ function TaskEditor({
     label: `近 ${days} 天`,
     meta: `${days}d`,
   }))
+  const supportedFieldKeys = new Set(
+    capability?.fields
+      .filter((field) => field.availability !== 'unsupported')
+      .map((field) => field.key) ?? [],
+  )
+  const unsupportedSelectedFields = draft?.selectedFields.filter(
+    (field) => !supportedFieldKeys.has(field),
+  ) ?? []
   const updateDraft = (patch: Partial<TaskEditDraft>) => {
     setDraft((current) => current ? { ...current, ...patch } : current)
     setError('')
@@ -116,7 +124,12 @@ function TaskEditor({
 
   const saveRevision = async () => {
     if (!draft || !capability || !selectedSource) return
-    const validationError = validateDraft(draft, regionUnsupported, timeUnsupported)
+    const validationError = validateDraft(
+      draft,
+      regionUnsupported,
+      timeUnsupported,
+      unsupportedSelectedFields,
+    )
     if (validationError) {
       setError(validationError)
       return
@@ -434,6 +447,21 @@ function TaskEditor({
           <section className="task-editor__field-picker" aria-labelledby="task-editor-fields">
             <h3 id="task-editor-fields">结果字段</h3>
             <div>
+              {unsupportedSelectedFields.map((fieldKey) => {
+                const field = capability?.fields.find((candidate) => candidate.key === fieldKey)
+                const label = field ? `${field.display_name}（${fieldKey}）` : fieldKey
+                const reason = field?.missing_reason ?? '该字段已从当前平台能力目录移除'
+                return (
+                  <UnsupportedField
+                    key={fieldKey}
+                    message={`旧结果字段 ${label} 当前不可用：${reason}`}
+                    action={`移除字段 ${fieldKey}`}
+                    onRemove={() => updateDraft({
+                      selectedFields: draft.selectedFields.filter((value) => value !== fieldKey),
+                    })}
+                  />
+                )
+              })}
               {capability?.fields.filter((field) => field.availability !== 'unsupported').map((field) => (
                 <label key={field.key}>
                   <input
@@ -589,13 +617,21 @@ async function loadDraft(taskId: string, attempt?: NaturalParseAttemptView) {
   return createTaskEditDraft(task, plan, attempt, intent)
 }
 
-function validateDraft(draft: TaskEditDraft, regionUnsupported: boolean, timeUnsupported: boolean) {
+function validateDraft(
+  draft: TaskEditDraft,
+  regionUnsupported: boolean,
+  timeUnsupported: boolean,
+  unsupportedSelectedFields: string[],
+) {
   if (draft.name.trim().length < 2) return '任务名称至少需要 2 个字符'
   if (!draft.platform) return '请选择平台'
   if (!draft.accountSource) return '请选择账号来源'
   if (!draft.sourceInput.trim()) return '请填写当前账号来源需要的检索词、账号或作品信息'
   if (regionUnsupported && draft.regionCode) return '请先移除当前来源不支持的地区条件，或更换平台和来源'
   if (timeUnsupported && draft.timeRangeDays) return '请先移除当前来源不支持的时间条件，或更换平台和来源'
+  if (unsupportedSelectedFields.length > 0) {
+    return `请先移除当前不支持的旧结果字段：${unsupportedSelectedFields.join('、')}`
+  }
   if (!regionUnsupported && !draft.regionCode) return '请选择国家地区'
   if (!draft.recordLimit || draft.recordLimit < 1) return '最大记录数必须大于 0'
   if (!draft.budgetLimitMicros || draft.budgetLimitMicros < 100_000) return '预算至少为 0.1 美元'

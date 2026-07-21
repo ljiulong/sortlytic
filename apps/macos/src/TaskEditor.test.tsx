@@ -176,6 +176,48 @@ describe('完整任务编辑器', () => {
     expect(buttonByText(mounted.container, '移除时间条件')).toBeTruthy()
   })
 
+  it('显示并允许移除当前已不支持或已从目录移除的旧结果字段', async () => {
+    const legacyCapability = capability()
+    legacyCapability.fields.push({
+      key: 'legacy_demographic',
+      group: 'profile',
+      display_name: '旧人口属性',
+      description: '旧版结果字段',
+      value_type: 'text',
+      availability: 'unsupported',
+      default_selected: false,
+      required_operation_keys: [],
+      missing_reason: '当前接口没有可靠公开来源',
+    })
+    apiMocks.getAccountCollectionCapabilities.mockResolvedValue(legacyCapability)
+    apiMocks.getLatestCollectionPlan.mockResolvedValue(plan({
+      plan_json: {
+        ...plan().plan_json,
+        selected_fields: ['country_region', 'legacy_demographic', 'removed_field'],
+      },
+    }))
+    const mounted = mountEditor({ naturalParseAttempt: attempt({ parse_status: 'valid' }) })
+    await flushEditor()
+
+    expect(mounted.container.textContent).toContain('旧人口属性（legacy_demographic）')
+    expect(mounted.container.textContent).toContain('当前接口没有可靠公开来源')
+    expect(mounted.container.textContent).toContain('removed_field')
+
+    await act(async () => buttonByText(mounted.container, '保存新计划版本').click())
+    expect(apiMocks.generateAccountCollectionPlan).not.toHaveBeenCalled()
+    expect(mounted.container.textContent).toContain('请先移除当前不支持的旧结果字段')
+
+    await act(async () => buttonByText(mounted.container, '移除字段 legacy_demographic').click())
+    await act(async () => buttonByText(mounted.container, '移除字段 removed_field').click())
+    await act(async () => buttonByText(mounted.container, '保存新计划版本').click())
+    await flushEditor()
+
+    expect(apiMocks.generateAccountCollectionPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ selected_fields: ['country_region'] }),
+    )
+    expect(apiMocks.reviseCollectionTask).toHaveBeenCalled()
+  })
+
   it('查看解析记录包含尚未创建 ai_run 的配置阶段失败', async () => {
     apiMocks.listTaskIntents.mockResolvedValue([attempt({
       id: 'attempt-config-failed',
