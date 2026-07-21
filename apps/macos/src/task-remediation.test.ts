@@ -36,6 +36,32 @@ describe('任务错误修改方式', () => {
     expect(remediation.message).toContain('打开 AI 设置')
   })
 
+  it.each([
+    ['MODEL_REQUEST_ERROR', { transport_kind: 'timeout' }],
+    ['MODEL_PROTOCOL_ERROR', { transport_kind: 'connect' }],
+    ['MODEL_PROTOCOL_ERROR', { http_status: '503' }],
+  ])('%s 临时失败提供重新尝试而不是错误指向 AI 设置', (code, safeDetails) => {
+    const remediation = remediationForTaskProblem(
+      code,
+      'AI 服务暂时不可用，请稍后重试',
+      true,
+      safeDetails,
+    )
+
+    expect(remediation.primaryAction).toBe('retry')
+    expect(remediation.message).toContain('重新解析')
+    expect(remediation.message).not.toContain('打开 AI 设置')
+  })
+
+  it('不可重试的真实模型协议错误仍指向 AI 设置', () => {
+    expect(remediationForTaskProblem(
+      'MODEL_PROTOCOL_ERROR',
+      'AI 供应商类型与协议不匹配',
+      false,
+      {},
+    ).primaryAction).toBe('open_ai_settings')
+  })
+
   it('未知错误仍保留记录并允许查看诊断和编辑，不只显示稍后重试', () => {
     expect(remediationForTaskProblem('UNCLASSIFIED_ERROR')).toEqual({
       message: '保留当前任务和失败记录；查看诊断详情后编辑任务或重新执行安全操作。',

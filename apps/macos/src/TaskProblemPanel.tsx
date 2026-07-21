@@ -65,7 +65,7 @@ export default function TaskProblemPanel({
         primaryAction: 'edit_task' as const,
         secondaryAction: 'view_diagnostics' as const,
       }
-    : remediationForTaskProblem(code, message)
+    : remediationForTaskProblem(code, message, retryable, safeDetails)
   const actions = [remediation.primaryAction, remediation.secondaryAction]
     .filter((action): action is TaskRemediationAction => Boolean(action))
 

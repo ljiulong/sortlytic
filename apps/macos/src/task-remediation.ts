@@ -16,6 +16,8 @@ export type TaskRemediation = {
 export function remediationForTaskProblem(
   code?: string | null,
   message?: string | null,
+  retryable = false,
+  safeDetails: Record<string, unknown> = {},
 ): TaskRemediation {
   if (code === 'VALIDATION_ERROR'
     && /(?:AI 配置|API Key|真实连通性测试)/.test(message ?? '')) {
@@ -31,6 +33,13 @@ export function remediationForTaskProblem(
         ? '点击“编辑任务”，移除当前来源不支持的地区或时间条件，或更换具有明确筛选能力的平台或来源；原失败运行和日志会保留。'
         : '点击“编辑任务”，修正计划字段、来源或筛选条件后保存为新计划版本。',
       primaryAction: 'edit_task',
+      secondaryAction: 'view_diagnostics',
+    }
+  }
+  if (isTransientModelProblem(code, retryable, safeDetails)) {
+    return {
+      message: '保留当前输入并重新解析；系统不会自动重复可能已计费的模型请求。',
+      primaryAction: 'retry',
       secondaryAction: 'view_diagnostics',
     }
   }
@@ -95,4 +104,18 @@ export function remediationForTaskProblem(
     primaryAction: 'view_diagnostics',
     secondaryAction: 'edit_task',
   }
+}
+
+function isTransientModelProblem(
+  code: string | null | undefined,
+  retryable: boolean,
+  safeDetails: Record<string, unknown>,
+) {
+  if (!retryable) return false
+  if (code === 'MODEL_REQUEST_ERROR') return true
+  if (code !== 'MODEL_PROTOCOL_ERROR') return false
+  const transportKind = String(safeDetails.transport_kind ?? '')
+  if (['timeout', 'connect', 'body', 'request'].includes(transportKind)) return true
+  const httpStatus = Number(safeDetails.http_status)
+  return Number.isInteger(httpStatus) && httpStatus >= 500 && httpStatus <= 599
 }
