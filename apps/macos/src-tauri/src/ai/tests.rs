@@ -214,7 +214,8 @@ fn invalid_model_intent_does_not_change_existing_task_scope_or_create_a_plan() {
   let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
   let attempt = connection
     .query_row(
-      "SELECT parse_status, parse_phase, ai_run_id FROM task_intent
+      "SELECT parse_status, parse_phase, ai_run_id, error_code, error_message,
+              retryable, error_safe_details_json FROM task_intent
        WHERE task_id = ?1 ORDER BY created_at DESC LIMIT 1",
       [task.id],
       |row| {
@@ -222,6 +223,10 @@ fn invalid_model_intent_does_not_change_existing_task_scope_or_create_a_plan() {
           row.get::<_, String>(0)?,
           row.get::<_, Option<String>>(1)?,
           row.get::<_, Option<String>>(2)?,
+          row.get::<_, Option<String>>(3)?,
+          row.get::<_, Option<String>>(4)?,
+          row.get::<_, Option<i64>>(5)?,
+          row.get::<_, String>(6)?,
         ))
       },
     )
@@ -229,6 +234,26 @@ fn invalid_model_intent_does_not_change_existing_task_scope_or_create_a_plan() {
   assert_eq!(attempt.0, "needs_review");
   assert_eq!(attempt.1.as_deref(), Some("needs_review"));
   assert_eq!(attempt.2.as_deref(), Some(result.ai_run.id.as_str()));
+  assert_eq!(attempt.3.as_deref(), Some("VALIDATION_ERROR"));
+  assert!(attempt
+    .4
+    .is_some_and(|message| message.contains("platform")));
+  assert_eq!(attempt.5, Some(0));
+  let safe_details: Value = serde_json::from_str(&attempt.6).unwrap();
+  assert!(safe_details["issues"]
+    .as_array()
+    .is_some_and(|issues| issues.iter().any(|issue| issue
+      .as_str()
+      .is_some_and(|value| value.contains("platform")))));
+  assert_eq!(safe_details["missing_fields"], serde_json::json!([]));
+
+  let recovered = list_latest_task_intents(&root_path).unwrap();
+  assert_eq!(recovered.len(), 1);
+  assert_eq!(recovered[0].error_code.as_deref(), Some("VALIDATION_ERROR"));
+  assert!(recovered[0]
+    .error_message
+    .as_deref()
+    .is_some_and(|message| message.contains("platform")));
 
   std::fs::remove_dir_all(root_path).ok();
 }

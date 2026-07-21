@@ -200,7 +200,18 @@ pub fn generate_collection_plan_from_text(
     )?),
     None => None,
   };
-  update_task_intent_success(&connection, &attempt_id, &validation_status, &ai_run_id)?;
+  let missing_fields = parsed_intent
+    .as_ref()
+    .map(|intent| intent.missing_fields.as_slice())
+    .unwrap_or_default();
+  update_task_intent_success(
+    &connection,
+    &attempt_id,
+    &validation_status,
+    &ai_run_id,
+    &issues,
+    missing_fields,
+  )?;
   let ai_run = get_ai_run(&root_path, &ai_run_id)?;
   let runtime_snapshot = get_runtime_snapshot(&connection, &runtime_snapshot_id)?;
 

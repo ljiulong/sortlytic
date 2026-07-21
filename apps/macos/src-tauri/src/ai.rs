@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::api_profiles::{
   load_api_profile_registry, AiApiFormat, AiProviderType, ApiProfileStatus,
 };
-use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
+use crate::domain::{redact_sensitive_text, AppError, AppErrorCode, AppErrorStage, AppResult};
 use crate::tasks::CollectionPlanView;
 use crate::workspace::{open_workspace_database, DATABASE_FILE_NAME};
 
@@ -312,24 +312,60 @@ fn update_task_intent_success(
   attempt_id: &str,
   parse_status: &str,
   ai_run_id: &str,
+  issues: &[String],
+  missing_fields: &[String],
 ) -> AppResult<()> {
-  let parse_phase = if parse_status == "valid" {
-    "success"
+  let now = Utc::now().to_rfc3339();
+  if parse_status == "valid" {
+    return connection
+      .execute(
+        "UPDATE task_intent
+         SET parse_status = 'valid', parse_phase = 'success', ai_run_id = ?1,
+             error_code = NULL, error_message = NULL, retryable = NULL,
+             error_safe_details_json = '{}', updated_at = ?2
+         WHERE id = ?3",
+        params![ai_run_id, now, attempt_id],
+      )
+      .map(|_| ())
+      .map_err(database_error);
+  }
+
+  let safe_issues = issues
+    .iter()
+    .map(|issue| redact_sensitive_text(issue))
+    .collect::<Vec<_>>();
+  let safe_missing_fields = missing_fields
+    .iter()
+    .map(|field| redact_sensitive_text(field))
+    .collect::<Vec<_>>();
+  let mut message_parts = Vec::new();
+  if !safe_issues.is_empty() {
+    message_parts.push(safe_issues.join("；"));
+  }
+  if !safe_missing_fields.is_empty() {
+    message_parts.push(format!("缺少字段：{}", safe_missing_fields.join("、")));
+  }
+  let error_message = if message_parts.is_empty() {
+    "解析完成，但意图或计划需要补充信息".to_string()
   } else {
-    parse_status
+    format!("解析完成，需要修正：{}", message_parts.join("；"))
   };
+  let safe_details = serde_json::json!({
+    "issues": safe_issues,
+    "missing_fields": safe_missing_fields,
+  });
   connection
     .execute(
       "UPDATE task_intent
-       SET parse_status = ?1, parse_phase = ?2, ai_run_id = ?3,
-           error_code = NULL, error_message = NULL, retryable = NULL,
-           error_safe_details_json = '{}', updated_at = ?4
+       SET parse_status = 'needs_review', parse_phase = 'needs_review', ai_run_id = ?1,
+           error_code = 'VALIDATION_ERROR', error_message = ?2, retryable = 0,
+           error_safe_details_json = ?3, updated_at = ?4
        WHERE id = ?5",
       params![
-        parse_status,
-        parse_phase,
         ai_run_id,
-        Utc::now().to_rfc3339(),
+        error_message,
+        safe_details.to_string(),
+        now,
         attempt_id
       ],
     )
