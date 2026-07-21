@@ -61,7 +61,7 @@ export function localizePlanMessage(t: CollectionTranslator, message: string | u
   if (key) return t(key)
   const dynamicKey = dynamicPlanMessageTranslationKeys.find(([pattern]) => pattern.test(message))?.[1]
   if (dynamicKey) return t(dynamicKey)
-  return /[^\p{ASCII}]/u.test(message) ? t('message.unknown') : message
+  return message
 }
 
 export function localizePricingMessage(t: CollectionTranslator, message: string | undefined) {
@@ -70,15 +70,16 @@ export function localizePricingMessage(t: CollectionTranslator, message: string 
   if (key) return t(key)
   const dynamicKey = dynamicPricingMessageTranslationKeys
     .find(([pattern]) => pattern.test(message))?.[1]
-  return dynamicKey ? t(dynamicKey) : t('message.pricingFailed')
+  return dynamicKey ? t(dynamicKey) : message
 }
 
 export function localizeActionMessage(t: CollectionTranslator, message: string) {
+  if (!message.trim()) return t('action.unknown')
   const exportMatch = /^(Excel|PDF) 已导出到本地工作区$/.exec(message)
   if (exportMatch) return t('action.exported', { format: exportMatch[1] })
   const key = actionMessageTranslationKeys[message]
   if (key) return t(key)
-  return /[^\p{ASCII}]/u.test(message) ? t('action.unknown') : message
+  return message
 }
 
 export function formatNumber(value: number, language: string) {
@@ -104,7 +105,7 @@ export function localizedCostEstimate(
       count: formatNumber(Number(requestQuote[1]), language),
     })
   }
-  return /[^\p{ASCII}]/u.test(costEstimate) ? t('preview.estimateUnavailable') : costEstimate
+  return costEstimate
 }
 
 export function confirmationBlocker(
