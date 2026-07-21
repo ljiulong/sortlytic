@@ -450,9 +450,9 @@ export async function loadBackendWorkbench(): Promise<BackendWorkbenchData> {
   const [status, tasks, latestRuns, recordCounts, naturalParseAttempts, registry] = await Promise.all([
     getBackendStatus(),
     listTasks(),
-    listLatestTaskRuns().catch(() => []),
-    listTaskRecordCounts().catch(() => []),
-    listLatestTaskIntents().catch(() => []),
+    listLatestTaskRuns(),
+    listTaskRecordCounts(),
+    listLatestTaskIntents(),
     getApiProfileRegistry().catch(() => null),
   ])
 

@@ -1858,6 +1858,9 @@ describe('useWorkbenchBackend 数据边界', () => {
         })
       }
       if (command === 'list_tasks') return Promise.resolve([task])
+      if (command === 'list_latest_task_runs') return Promise.resolve([])
+      if (command === 'list_task_record_counts') return Promise.resolve([])
+      if (command === 'list_latest_task_intents') return Promise.resolve([])
       if (command === 'get_api_profile_registry') {
         return Promise.reject(new Error('api-config.json 无法解析'))
       }
@@ -1874,6 +1877,31 @@ describe('useWorkbenchBackend 数据边界', () => {
     expect(invokeMock).not.toHaveBeenCalledWith('list_secret_refs', expect.anything())
     expect(invokeMock).not.toHaveBeenCalledWith('get_tikhub_connector', expect.anything())
     expect(invokeMock).not.toHaveBeenCalledWith('list_model_providers', expect.anything())
+  })
+
+  it('批量数据库子查询失败时让工作台查询失败以保留上一份成功快照', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_active_workspace') return Promise.resolve(workspace)
+      if (command === 'get_backend_status') {
+        return Promise.resolve({
+          service: 'sortlytic',
+          backend_version: '0.2.3',
+          has_active_workspace: true,
+          uptime_ms: 1_000,
+        })
+      }
+      if (command === 'list_tasks') return Promise.resolve([task])
+      if (command === 'list_latest_task_runs') return Promise.resolve([])
+      if (command === 'list_task_record_counts') {
+        return Promise.reject(new Error('数据库正在忙，请稍后重新读取'))
+      }
+      if (command === 'list_latest_task_intents') return Promise.resolve([])
+      if (command === 'get_api_profile_registry') return Promise.resolve(tikhubRegistryFixture())
+      return Promise.reject(new Error(`未预期命令: ${command}`))
+    })
+
+    await expect(loadBackendWorkbench()).rejects.toThrow('数据库正在忙，请稍后重新读取')
   })
 
   it('加载 Tauri 后端期间只返回空状态，不暴露浏览器演示数据', () => {
