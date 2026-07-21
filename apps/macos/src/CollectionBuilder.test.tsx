@@ -95,12 +95,14 @@ function mountBuilder({
   onGenerateNaturalPlan,
   onRetryNaturalPlan = vi.fn(async () => draftPlan),
   naturalParseState,
+  onEditNaturalTask,
 }: {
   activePlan?: RuntimeCollectionPlan
   onGenerateFormPlan?: (values: unknown) => Promise<RuntimeCollectionPlan>
   onGenerateNaturalPlan: (intentText: string) => Promise<RuntimeCollectionPlan>
   onRetryNaturalPlan?: (taskId: string, intentText: string) => Promise<unknown>
   naturalParseState?: NaturalParseState
+  onEditNaturalTask?: (taskId: string) => void
 }) {
   const container = document.createElement('div')
   const root = createRoot(container)
@@ -117,12 +119,46 @@ function mountBuilder({
     onGenerateNaturalPlan,
     onRetryNaturalPlan,
     naturalParseState,
+    onEditNaturalTask,
   })))
 
   return mounted
 }
 
 describe('自然语言输入区反馈', () => {
+  it('待修正的持久任务切换到现有任务编辑器而不是新建表单', () => {
+    const onEditNaturalTask = vi.fn()
+    const onGenerateFormPlan = vi.fn(async () => draftPlan)
+    const mounted = mountBuilder({
+      onGenerateFormPlan,
+      onGenerateNaturalPlan: vi.fn(async () => draftPlan),
+      onEditNaturalTask,
+      naturalParseState: {
+        phase: 'needs_review',
+        taskId: 'task-needs-review',
+        intentText: '采集英国 TikTok 宠物用品账号',
+        finishedAt: '2026-07-21T08:00:00Z',
+        problem: {
+          code: 'VALIDATION_ERROR',
+          stage: 'validating_intent',
+          message: '缺少预算',
+          retryable: false,
+          safeDetails: { missing_fields: ['budget_limit_micros'] },
+        },
+        draftPreserved: true,
+      },
+    })
+
+    act(() => findButton(mounted.container, '自然语言')?.dispatchEvent(
+      new MouseEvent('mousedown', { bubbles: true, button: 0 }),
+    ))
+    act(() => findButton(mounted.container, '切换到表单修正')?.click())
+
+    expect(onEditNaturalTask).toHaveBeenCalledOnce()
+    expect(onEditNaturalTask).toHaveBeenCalledWith('task-needs-review')
+    expect(onGenerateFormPlan).not.toHaveBeenCalled()
+  })
+
   it('没有计划预览时也在输入区显示持久、可操作的失败反馈', async () => {
     const mounted = mountBuilder({
       onGenerateNaturalPlan: vi.fn(async () => draftPlan),

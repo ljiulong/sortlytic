@@ -91,6 +91,7 @@ export function CollectionBuilder({
   naturalParseState,
   onOpenAiSettings,
   onViewParseDiagnostics,
+  onEditNaturalTask,
 }: {
   actionMessage: string
   activePlan?: RuntimeCollectionPlan
@@ -102,6 +103,7 @@ export function CollectionBuilder({
   naturalParseState?: NaturalParseState
   onOpenAiSettings?: () => void
   onViewParseDiagnostics?: () => void
+  onEditNaturalTask?: (taskId: string) => void
 }) {
   const { t } = useTranslation('collection', { i18n })
   const [naturalText, setNaturalText] = useState(naturalIntentDefault)
@@ -474,7 +476,13 @@ export function CollectionBuilder({
                 state={naturalParseState}
                 onRetry={submitNaturalText}
                 onOpenAiSettings={onOpenAiSettings}
-                onSwitchToForm={() => setActiveMode('form')}
+                onSwitchToForm={() => {
+                  if (naturalParseState.taskId && onEditNaturalTask) {
+                    onEditNaturalTask(naturalParseState.taskId)
+                  } else {
+                    setActiveMode('form')
+                  }
+                }}
                 onViewDiagnostics={onViewParseDiagnostics}
               />
             )}

@@ -149,6 +149,10 @@ function Workbench() {
                   onRetryNaturalPlan={backend.retryNaturalParse}
                   onOpenAiSettings={() => navigate(parseFeedbackNavigationTarget('ai_settings'))}
                   onViewParseDiagnostics={() => navigate(parseFeedbackNavigationTarget('diagnostics'))}
+                  onEditNaturalTask={(taskId) => {
+                    setActiveNav('tasks')
+                    setEditingTaskId(taskId)
+                  }}
                 />
               </div>
             </section>
