@@ -22,6 +22,7 @@ import {
   listTaskRecordCounts,
   listTasks,
   retryTask as retryCollectionTask,
+  runWorkspaceHealthCheck,
   saveCollectionPlan,
   type CollectionPlanView,
   type ExportJobView,
@@ -63,6 +64,7 @@ import {
   parseNaturalTaskAttempt,
   type SuccessfulNaturalTaskAttempt,
 } from './natural-task-attempt'
+import { describeWorkspaceHealth } from './workspace-health'
 
 export {
   mapBackendData,
@@ -379,6 +381,18 @@ export function useWorkbenchBackend() {
     onError: (error) => setActionMessage(backendErrorMessage(error)),
   })
 
+  const workspaceHealthMutation = useMutation({
+    mutationFn: runWorkspaceHealthCheck,
+    onSuccess: (health) => {
+      setActionMessage(describeWorkspaceHealth(health).message)
+      void queryClient.invalidateQueries({ queryKey })
+    },
+    onError: (error) => {
+      setActionMessage(backendErrorMessage(error))
+      void queryClient.invalidateQueries({ queryKey })
+    },
+  })
+
   const data = dataQuery.data ?? createEmptyWorkbenchData(dataQuery.error ? 'error' : 'loading')
   const resolvedNaturalParseState = resolveNaturalParseState(
     naturalParseState,
@@ -442,6 +456,7 @@ export function useWorkbenchBackend() {
       deleteTaskMutation.isPending ||
       confirmTaskMutation.isPending ||
       retryTaskMutation.isPending ||
+      workspaceHealthMutation.isPending ||
       isNaturalParseInProgress(resolvedNaturalParseState.phase) ||
       appUpdater.isUpdateBusy,
     generateFormPlan: generateFormPlanMutation.mutateAsync,
@@ -453,6 +468,7 @@ export function useWorkbenchBackend() {
     deleteTask: deleteTaskMutation.mutateAsync,
     confirmTask: confirmTaskMutation.mutateAsync,
     retryTask: retryTaskMutation.mutateAsync,
+    runWorkspaceHealthCheck: workspaceHealthMutation.mutateAsync,
     exportTask: exportMutation.mutateAsync,
     ...appUpdater,
     refresh: () => queryClient.invalidateQueries({ queryKey }),

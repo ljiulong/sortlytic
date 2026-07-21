@@ -341,6 +341,35 @@ describe('任务页动作', () => {
     expect(invalidateQueriesMock).toHaveBeenCalledWith({ queryKey: ['workbench-backend'] })
   })
 
+  it('工作区健康检查使用独立 mutation 并刷新真实数据', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    invokeMock.mockResolvedValue({
+      workspace_id: 'workspace-1',
+      database_quick_check: 'ok',
+      foreign_keys_enabled: true,
+      journal_mode: 'wal',
+      missing_directories: [],
+      database_writable: true,
+    })
+    renderWorkbenchHook()
+    const healthMutation = mutationOptionsMock.current.at(-1)
+    const actionMessageSetter = stateSettersMock.current[1]
+
+    await healthMutation?.mutationFn?.(undefined)
+    await healthMutation?.onSuccess?.({
+      workspace_id: 'workspace-1',
+      database_quick_check: 'ok',
+      foreign_keys_enabled: true,
+      journal_mode: 'wal',
+      missing_directories: [],
+      database_writable: true,
+    })
+
+    expect(invokeMock).toHaveBeenCalledWith('run_workspace_health_check', { rootPath: null })
+    expect(actionMessageSetter).toHaveBeenCalledWith('工作区健康检查通过')
+    expect(invalidateQueriesMock).toHaveBeenCalledWith({ queryKey: ['workbench-backend'] })
+  })
+
   it('从持久化计划直接确认和入队，不用额度预检阻塞运行', async () => {
     vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
     invokeMock.mockImplementation(async (command: string) => {
