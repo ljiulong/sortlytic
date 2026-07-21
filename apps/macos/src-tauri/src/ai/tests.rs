@@ -1,7 +1,9 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
+use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 use chrono::Utc;
 use serde_json::Value;
@@ -22,6 +24,235 @@ use crate::tikhub::test_support::override_tikhub_base_url_for_current_test;
 use crate::workspace::{create_workspace, open_workspace_database, DATABASE_FILE_NAME};
 
 const TIKHUB_E2E_TOKEN: &str = "sortlytic-e2e-tikhub-token";
+
+#[test]
+fn natural_generation_rejects_ineligible_tasks_before_the_provider_request() {
+  let root_path = unique_temp_workspace("ai-task-eligibility");
+  create_workspace("AI 任务资格测试", &root_path).expect("workspace should be created");
+  configure_active_ai(&root_path, "http://127.0.0.1:1".to_string());
+
+  let form_task = create_collection_task(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "表单任务不能调用 AI".to_string(),
+      source_type: "form".to_string(),
+      platforms: vec!["tiktok".to_string()],
+      data_types: vec!["account".to_string()],
+    },
+  )
+  .expect("form task should be created");
+  let form_error = generate_collection_plan_from_text(
+    &root_path,
+    GenerateCollectionPlanFromTextInput {
+      task_id: form_task.id.clone(),
+      intent_text: "尝试改写表单任务".to_string(),
+      provider_id: None,
+      model_id: None,
+    },
+  )
+  .expect_err("form tasks must be rejected before any provider request");
+  assert_eq!(form_error.code, AppErrorCode::ValidationError);
+  assert!(form_error.message.contains("自然语言"));
+
+  let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
+  let form_attempts = connection
+    .query_row(
+      "SELECT COUNT(*) FROM task_intent WHERE task_id = ?1",
+      [&form_task.id],
+      |row| row.get::<_, i64>(0),
+    )
+    .unwrap();
+  assert_eq!(form_attempts, 0, "资格拒绝不能创建解析记录");
+
+  for status in ["queued", "running", "success", "partial_success"] {
+    let task = create_collection_task(
+      &root_path,
+      CreateCollectionTaskInput {
+        name: format!("拒绝 {status} 任务"),
+        source_type: "natural_language".to_string(),
+        platforms: vec![],
+        data_types: vec![],
+      },
+    )
+    .expect("natural-language task should be created");
+    connection
+      .execute(
+        "UPDATE collection_task SET status = ?1 WHERE id = ?2",
+        rusqlite::params![status, task.id],
+      )
+      .unwrap();
+
+    let error = generate_collection_plan_from_text(
+      &root_path,
+      GenerateCollectionPlanFromTextInput {
+        task_id: task.id.clone(),
+        intent_text: "不应产生模型费用".to_string(),
+        provider_id: None,
+        model_id: None,
+      },
+    )
+    .expect_err("ineligible task status must fail before any provider request");
+
+    assert_eq!(error.code, AppErrorCode::ValidationError, "status={status}");
+    let attempts = connection
+      .query_row(
+        "SELECT COUNT(*) FROM task_intent WHERE task_id = ?1",
+        [&task.id],
+        |row| row.get::<_, i64>(0),
+      )
+      .unwrap();
+    assert_eq!(attempts, 0, "status={status} 不能创建解析记录");
+  }
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn failed_and_cancelled_natural_tasks_can_reparse_in_place() {
+  for status in ["failed", "cancelled"] {
+    let root_path = unique_temp_workspace(&format!("ai-reparse-{status}"));
+    create_workspace("AI 失败任务重新解析", &root_path).expect("workspace should be created");
+    let intent = valid_collection_intent();
+    let response = serde_json::json!({
+      "choices": [{ "message": { "content": intent.to_string() } }]
+    })
+    .to_string();
+    let (base_url, server) = serve_ai_once(200, response, |_| {});
+    configure_active_ai(&root_path, base_url);
+    let task = create_collection_task(
+      &root_path,
+      CreateCollectionTaskInput {
+        name: format!("重新解析 {status} 任务"),
+        source_type: "natural_language".to_string(),
+        platforms: vec![],
+        data_types: vec![],
+      },
+    )
+    .expect("natural-language task should be created");
+    let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
+    connection
+      .execute(
+        "UPDATE collection_task SET status = ?1 WHERE id = ?2",
+        rusqlite::params![status, task.id],
+      )
+      .unwrap();
+
+    let result = generate_collection_plan_from_text(
+      &root_path,
+      GenerateCollectionPlanFromTextInput {
+        task_id: task.id.clone(),
+        intent_text: "采集最近 7 天美国 TikTok 汽车内容，预算 2 美元".to_string(),
+        provider_id: None,
+        model_id: None,
+      },
+    )
+    .expect("failed and cancelled natural tasks should create a new plan version");
+    server.join().expect("test server should finish");
+
+    assert!(result.collection_plan.is_some(), "status={status}");
+    assert_eq!(
+      get_task(&root_path, &task.id).unwrap().status,
+      "waiting_confirmation",
+      "status={status}",
+    );
+    std::fs::remove_dir_all(root_path).ok();
+  }
+}
+
+#[test]
+fn concurrent_natural_generation_allows_only_one_provider_request() {
+  let root_path = unique_temp_workspace("ai-single-flight");
+  create_workspace("AI 单次在途测试", &root_path).expect("workspace should be created");
+  let intent = valid_collection_intent();
+  let response = serde_json::json!({
+    "choices": [{ "message": { "content": intent.to_string() } }]
+  })
+  .to_string();
+  let listener = TcpListener::bind("127.0.0.1:0").expect("test server should bind");
+  let address = listener.local_addr().expect("test address should resolve");
+  let (request_started_tx, request_started_rx) = mpsc::channel();
+  let (release_response_tx, release_response_rx) = mpsc::channel();
+  let server = thread::spawn(move || {
+    let (mut first_stream, _) = listener.accept().expect("first request should arrive");
+    let first_request = read_http_request(&mut first_stream);
+    assert!(first_request.starts_with("POST /v1/chat/completions HTTP/1.1"));
+    request_started_tx.send(()).unwrap();
+    let rescue_second_request = release_response_rx.recv().unwrap();
+    write_json_response(&mut first_stream, 200, "OK", &response);
+    if rescue_second_request {
+      let (mut second_stream, _) = listener.accept().expect("second request should be rescued");
+      let _ = read_http_request(&mut second_stream);
+      write_json_response(&mut second_stream, 200, "OK", &response);
+    }
+  });
+  configure_active_ai(&root_path, format!("http://{address}"));
+  let intent_text = "采集最近 7 天美国 TikTok 汽车内容，预算 2 美元";
+  let task = create_collection_task_with_initial_intent(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "同一任务只允许一次解析".to_string(),
+      source_type: "natural_language".to_string(),
+      platforms: vec![],
+      data_types: vec![],
+    },
+    Some(intent_text),
+  )
+  .expect("task and initial attempt should be created");
+  let input = GenerateCollectionPlanFromTextInput {
+    task_id: task.id.clone(),
+    intent_text: intent_text.to_string(),
+    provider_id: None,
+    model_id: None,
+  };
+  let first_root = root_path.clone();
+  let first_input = input.clone();
+  let first = thread::spawn(move || generate_collection_plan_from_text(first_root, first_input));
+  request_started_rx
+    .recv_timeout(Duration::from_secs(2))
+    .expect("first provider request should start");
+
+  let second_root = root_path.clone();
+  let (second_result_tx, second_result_rx) = mpsc::channel();
+  let second = thread::spawn(move || {
+    second_result_tx
+      .send(generate_collection_plan_from_text(second_root, input))
+      .unwrap();
+  });
+  let second_before_release = second_result_rx.recv_timeout(Duration::from_secs(2));
+  release_response_tx
+    .send(second_before_release.is_err())
+    .expect("first response should be released");
+
+  let first_result = first.join().expect("first generation thread should finish");
+  let second_result = match second_before_release {
+    Ok(result) => result,
+    Err(_) => second_result_rx
+      .recv_timeout(Duration::from_secs(2))
+      .expect("buggy second request should finish after rescue"),
+  };
+  second
+    .join()
+    .expect("second generation thread should finish");
+  server.join().expect("test server should finish");
+
+  assert!(first_result.is_ok());
+  let second_error = second_result.expect_err(
+    "the concurrent call must be rejected while the first provider request is in flight",
+  );
+  assert_eq!(second_error.code, AppErrorCode::ModelRequestError);
+  assert!(second_error.retryable);
+  let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
+  let attempts = connection
+    .query_row(
+      "SELECT COUNT(*) FROM task_intent WHERE task_id = ?1",
+      [&task.id],
+      |row| row.get::<_, i64>(0),
+    )
+    .unwrap();
+  assert_eq!(attempts, 1);
+
+  std::fs::remove_dir_all(root_path).ok();
+}
 
 #[test]
 fn natural_language_generation_requires_an_active_ai_profile() {

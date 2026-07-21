@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use chrono::Utc;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use uuid::Uuid;
 
 use super::collection_intent_schema::parse_collection_intent;
@@ -22,18 +22,9 @@ pub fn generate_collection_plan_from_text(
   if intent_text.is_empty() {
     return Err(ai_error("自然语言采集需求不能为空"));
   }
-  let connection = open_workspace_connection(&root_path)?;
-  ensure_task_exists(&connection, &input.task_id)?;
+  let mut connection = open_workspace_connection(&root_path)?;
   let now = Utc::now().to_rfc3339();
-  let attempt_id =
-    match claim_initial_task_intent_attempt(&connection, &input.task_id, intent_text, &now)? {
-      Some(attempt_id) => attempt_id,
-      None => {
-        let attempt_id = Uuid::new_v4().to_string();
-        create_task_intent_attempt(&connection, &attempt_id, &input.task_id, intent_text, &now)?;
-        attempt_id
-      }
-    };
+  let attempt_id = acquire_task_intent_attempt(&mut connection, &input.task_id, intent_text, &now)?;
   preserve_attempt_error(
     seed_builtin_prompts(&root_path),
     &connection,
@@ -234,6 +225,54 @@ pub fn generate_collection_plan_from_text(
     issues,
     collection_plan,
   })
+}
+
+fn acquire_task_intent_attempt(
+  connection: &mut Connection,
+  task_id: &str,
+  intent_text: &str,
+  claimed_at: &str,
+) -> AppResult<String> {
+  let transaction = connection
+    .transaction_with_behavior(TransactionBehavior::Immediate)
+    .map_err(database_error)?;
+  prepare_task_for_natural_parse(&transaction, task_id)?;
+
+  if let Some(attempt_id) =
+    claim_initial_task_intent_attempt(&transaction, task_id, intent_text, claimed_at)?
+  {
+    transaction.commit().map_err(database_error)?;
+    return Ok(attempt_id);
+  }
+
+  let active_attempt = transaction
+    .query_row(
+      "SELECT id FROM task_intent
+       WHERE task_id = ?1 AND parse_status = 'running'
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1",
+      [task_id],
+      |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(database_error)?;
+  if active_attempt.is_some() {
+    return Err(
+      AppError::new(
+        AppErrorCode::ModelRequestError,
+        "该任务正在解析，请等待当前尝试完成后再重新解析",
+        AppErrorStage::Ai,
+        true,
+      )
+      .with_safe_detail("transport_kind", "busy"),
+    );
+  }
+
+  let attempt_id = Uuid::new_v4().to_string();
+  create_task_intent_attempt(&transaction, &attempt_id, task_id, intent_text, claimed_at)?;
+  update_task_intent_phase(&transaction, &attempt_id, "requesting_ai", None)?;
+  transaction.commit().map_err(database_error)?;
+  Ok(attempt_id)
 }
 
 pub(super) fn claim_initial_task_intent_attempt(
