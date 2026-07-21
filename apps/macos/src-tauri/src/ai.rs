@@ -222,7 +222,9 @@ fn active_ai_profile(
     .and_then(|credential_id| registry.credentials.get(credential_id))
     .map(|credential| credential.secret.clone());
   if profile.provider_type != AiProviderType::Ollama && api_key.is_none() {
-    return Err(ai_config_error("当前 AI 配置缺少 API Key，请重新输入并测试"));
+    return Err(ai_config_error(
+      "当前 AI 配置缺少 API Key，请重新输入并测试",
+    ));
   }
   Ok(ResolvedAiProfile {
     profile_id: profile.id.clone(),
