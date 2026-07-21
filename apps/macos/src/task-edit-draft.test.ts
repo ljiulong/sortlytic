@@ -69,6 +69,29 @@ describe('task edit draft mapping', () => {
     })
   })
 
+  it('keeps stale failure history without reopening a successfully revised task as failed', () => {
+    const staleFailure = attempt({
+      parse_status: 'failed',
+      intent_text: '查找英国 TikTok 宠物用品账号',
+      error_code: 'MODEL_AUTH_ERROR',
+      error_message: 'AI 配置鉴权失败',
+      updated_at: '2026-07-20T00:01:00Z',
+    })
+    const draft = createTaskEditDraft(
+      task({
+        source_type: 'natural_language',
+        status: 'waiting_confirmation',
+        updated_at: '2026-07-20T00:02:00Z',
+      }),
+      plan({ platforms: ['tiktok'], account_source: 'user_search' }),
+      staleFailure,
+    )
+
+    expect(draft.editorMode).toBe('form')
+    expect(draft.originalIntent).toBe('查找英国 TikTok 宠物用品账号')
+    expect(draft.parseProblem).toBeUndefined()
+  })
+
   it('keeps direct identifiers unchanged and supports legacy plan fields', () => {
     const directUrl = 'https://www.tiktok.com/@PetBrandUK'
     const draft = createTaskEditDraft(

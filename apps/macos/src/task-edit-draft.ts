@@ -45,7 +45,9 @@ export function createTaskEditDraft(
   const selectedFields = stringArray(planJson?.selected_fields)
   const planMissingFields = stringArray(planJson?.missing_fields)
   const intentMissingFields = intent?.missing_fields ?? []
-  const parseFailed = attempt && ['failed', 'interrupted'].includes(attempt.parse_status)
+  const parseFailed = attempt
+    && ['failed', 'interrupted'].includes(attempt.parse_status)
+    && !attemptWasSuperseded(task, attempt)
 
   return {
     taskId: task.id,
@@ -79,6 +81,17 @@ export function createTaskEditDraft(
         }
       : undefined,
   }
+}
+
+function attemptWasSuperseded(
+  task: CollectionTaskView,
+  attempt: NaturalParseAttemptView,
+) {
+  const taskUpdatedAt = Date.parse(task.updated_at)
+  const attemptUpdatedAt = Date.parse(attempt.updated_at)
+  return Number.isFinite(taskUpdatedAt)
+    && Number.isFinite(attemptUpdatedAt)
+    && taskUpdatedAt > attemptUpdatedAt
 }
 
 function sourceInputFromPlan(planJson?: Record<string, unknown>) {
