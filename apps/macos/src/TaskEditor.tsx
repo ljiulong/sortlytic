@@ -284,6 +284,7 @@ function TaskEditor({
           <label htmlFor="task-editor-natural-input">原始自然语言需求</label>
           <textarea
             id="task-editor-natural-input"
+            maxLength={10_000}
             rows={6}
             value={draft.originalIntent}
             onChange={(event) => updateDraft({ originalIntent: event.target.value })}

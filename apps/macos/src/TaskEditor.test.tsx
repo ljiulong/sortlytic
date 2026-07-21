@@ -121,6 +121,9 @@ describe('完整任务编辑器', () => {
 
     expect(textareaValue(mounted.container, 'task-editor-natural-input'))
       .toBe('用中文查找英国 TikTok 宠物用品账号')
+    expect(mounted.container.querySelector<HTMLTextAreaElement>(
+      '#task-editor-natural-input',
+    )?.maxLength).toBe(10_000)
     expect(mounted.container.textContent).toContain('AI 配置鉴权失败')
     const retryButton = buttonByText(mounted.container, '重新解析')
     await act(async () => retryButton.click())
