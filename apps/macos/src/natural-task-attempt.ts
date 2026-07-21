@@ -40,6 +40,7 @@ export async function parseNaturalTaskAttempt(
     throw new NaturalParseNeedsReviewError(
       taskId,
       result.issues,
+      result.parsed_intent,
       result.issues.length > 0
         ? `解析完成，需要补充信息：${result.issues.join('；')}`
         : '解析完成，需要补充信息；请切换到表单修正任务',
@@ -66,7 +67,11 @@ export function describeNaturalParseFailure(error: unknown): {
         stage: 'validating_intent',
         message: error.message,
         retryable: false,
-        safe_details: { issues: error.issues },
+        safe_details: {
+          issues: error.issues,
+          missing_fields: error.intent?.missing_fields ?? [],
+          intent: error.intent ?? null,
+        },
       }),
     }
   }
@@ -79,11 +84,18 @@ export function describeNaturalParseFailure(error: unknown): {
 class NaturalParseNeedsReviewError extends Error {
   readonly taskId: string
   readonly issues: string[]
+  readonly intent?: CollectionIntentV1 | null
 
-  constructor(taskId: string, issues: string[], message: string) {
+  constructor(
+    taskId: string,
+    issues: string[],
+    intent: CollectionIntentV1 | null | undefined,
+    message: string,
+  ) {
     super(message)
     this.name = 'NaturalParseNeedsReviewError'
     this.taskId = taskId
     this.issues = issues
+    this.intent = intent
   }
 }
