@@ -126,6 +126,17 @@ function mountBuilder({
 }
 
 describe('自然语言输入区反馈', () => {
+  it('新建任务输入框在前端提示后端字符上限', () => {
+    const mounted = mountBuilder({
+      onGenerateNaturalPlan: vi.fn(async () => draftPlan),
+    })
+    act(() => findButton(mounted.container, '自然语言')?.dispatchEvent(
+      new MouseEvent('mousedown', { bubbles: true, button: 0 }),
+    ))
+
+    expect(mounted.container.querySelector<HTMLTextAreaElement>('#intent')?.maxLength).toBe(10_000)
+  })
+
   it('待修正的持久任务切换到现有任务编辑器而不是新建表单', () => {
     const onEditNaturalTask = vi.fn()
     const onGenerateFormPlan = vi.fn(async () => draftPlan)

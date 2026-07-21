@@ -467,6 +467,7 @@ export function CollectionBuilder({
             <label htmlFor="intent">{t('fields.naturalIntent')}</label>
             <textarea
               id="intent"
+              maxLength={10_000}
               value={naturalText}
               placeholder={t('placeholders.naturalIntent')}
               onChange={(event) => setNaturalText(event.target.value)}
