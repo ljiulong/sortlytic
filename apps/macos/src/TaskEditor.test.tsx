@@ -108,7 +108,7 @@ describe('完整任务编辑器', () => {
 
   it('失败且没有计划的自然语言任务保留原文并可直接重新解析', async () => {
     const onRetryNaturalTask = vi.fn(async () => undefined)
-    apiMocks.getLatestCollectionPlan.mockRejectedValue(new Error('任务还没有采集计划'))
+    apiMocks.getLatestCollectionPlan.mockRejectedValue(missingPlanError())
     const mounted = mountEditor({
       naturalParseAttempt: attempt({
         parse_status: 'failed',
@@ -135,7 +135,7 @@ describe('完整任务编辑器', () => {
   })
 
   it('待补充且没有计划或 ai_run 时仍显示持久化问题和缺失字段', async () => {
-    apiMocks.getLatestCollectionPlan.mockRejectedValue(new Error('任务还没有采集计划'))
+    apiMocks.getLatestCollectionPlan.mockRejectedValue(missingPlanError())
     const mounted = mountEditor({
       naturalParseAttempt: attempt({
         ai_run_id: null,
@@ -159,6 +159,76 @@ describe('完整任务编辑器', () => {
     await act(async () => buttonByText(mounted.container, '切换到表单修正').click())
     expect(mounted.container.textContent).toContain('旧计划需要修正')
     expect(mounted.container.textContent).toContain('当前平台缺少可靠地区来源')
+  })
+
+  it('自然语言任务读取计划遇到数据库错误时显示真实原因而不是空编辑器', async () => {
+    apiMocks.getLatestCollectionPlan.mockRejectedValue({
+      code: 'DATABASE_ERROR',
+      stage: 'database',
+      message: '数据库正在忙，请重新读取',
+      retryable: true,
+      safe_details: {},
+    })
+    const mounted = mountEditor({
+      naturalParseAttempt: attempt({ parse_status: 'failed' }),
+    })
+    await flushEditor()
+
+    expect(mounted.container.querySelector('[role="alert"]')?.textContent)
+      .toContain('数据库正在忙，请重新读取')
+    expect(mounted.container.querySelector('#task-editor-name')).toBeNull()
+  })
+
+  it('读取已关联 AI 运行遇到数据库错误时显示真实原因', async () => {
+    apiMocks.getAiRun.mockRejectedValue({
+      code: 'DATABASE_ERROR',
+      stage: 'database',
+      message: '无法读取 AI 解析记录',
+      retryable: true,
+      safe_details: {},
+    })
+    const mounted = mountEditor({
+      naturalParseAttempt: attempt({ parse_status: 'needs_review' }),
+    })
+    await flushEditor()
+
+    expect(mounted.container.querySelector('[role="alert"]')?.textContent)
+      .toContain('无法读取 AI 解析记录')
+    expect(mounted.container.querySelector('#task-editor-name')).toBeNull()
+  })
+
+  it('已关联 AI 运行记录不存在时显示数据异常而不是静默丢弃意图', async () => {
+    apiMocks.getAiRun.mockRejectedValue({
+      code: 'VALIDATION_ERROR',
+      stage: 'ai',
+      message: 'AI 运行记录不存在',
+      retryable: false,
+      safe_details: {},
+    })
+    const mounted = mountEditor({
+      naturalParseAttempt: attempt({ parse_status: 'needs_review' }),
+    })
+    await flushEditor()
+
+    expect(hasAlert(mounted.container, 'AI 运行记录不存在')).toBe(true)
+    expect(mounted.container.querySelector('#task-editor-name')).toBeNull()
+  })
+
+  it('没有结构化 no_plan 原因时不按错误文案猜测为空计划', async () => {
+    apiMocks.getLatestCollectionPlan.mockRejectedValue({
+      code: 'VALIDATION_ERROR',
+      stage: 'validation',
+      message: '任务还没有采集计划',
+      retryable: false,
+      safe_details: {},
+    })
+    const mounted = mountEditor({
+      naturalParseAttempt: attempt({ parse_status: 'failed' }),
+    })
+    await flushEditor()
+
+    expect(hasAlert(mounted.container, '任务还没有采集计划')).toBe(true)
+    expect(mounted.container.querySelector('#task-editor-name')).toBeNull()
   })
 
   it('保存时先由后端重新生成安全计划，再提交 user_edited 新版本', async () => {
@@ -403,6 +473,24 @@ function buttonByText(container: HTMLElement, label: string) {
     .find((candidate) => candidate.textContent?.includes(label))
   if (!button) throw new Error(`找不到按钮：${label}`)
   return button
+}
+
+function hasAlert(container: HTMLElement, message: string) {
+  return Array.from(container.querySelectorAll('[role="alert"]'))
+    .some((alert) => alert.textContent?.includes(message))
+}
+
+function missingPlanError() {
+  return {
+    code: 'VALIDATION_ERROR',
+    stage: 'validation',
+    message: '任务还没有采集计划',
+    retryable: false,
+    safe_details: {
+      reason: 'no_plan',
+      entity: 'collection_plan',
+    },
+  }
 }
 
 function task(overrides: Partial<CollectionTaskView> = {}): CollectionTaskView {

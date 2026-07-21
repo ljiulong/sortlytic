@@ -19,6 +19,7 @@ import {
 import { accountSourceFilterCapabilities, sourceInputCopy } from './account-source-rules'
 import { countryRegionSelectOptions } from './collection-select-options'
 import { createTaskEditDraft, type TaskEditDraft } from './task-edit-draft'
+import { isMissingCollectionPlanProblem } from './task-editor-plan-error'
 import { validateQueryLocale } from './query-locale-validation'
 import TaskRevisionPreview from './TaskRevisionPreview'
 
@@ -648,12 +649,14 @@ async function loadDraft(taskId: string, attempt?: NaturalParseAttemptView) {
   try {
     plan = await getLatestCollectionPlan(taskId)
   } catch (error) {
-    if (task.source_type !== 'natural_language') throw error
+    if (task.source_type !== 'natural_language' || !isMissingCollectionPlanProblem(error)) {
+      throw error
+    }
   }
   let intent: CollectionIntentV1 | undefined
   if (attempt?.ai_run_id) {
-    const aiRun = await getAiRun(attempt.ai_run_id).catch(() => undefined)
-    intent = collectionIntentFromJson(aiRun?.output_json)
+    const aiRun = await getAiRun(attempt.ai_run_id)
+    intent = collectionIntentFromJson(aiRun.output_json)
   }
   return createTaskEditDraft(task, plan, attempt, intent)
 }
