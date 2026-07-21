@@ -222,6 +222,68 @@ fn latest_task_runs_returns_only_the_newest_attempt_per_task() {
 }
 
 #[test]
+fn latest_task_runs_prefers_new_plan_even_when_attempt_number_restarts() {
+  let (root_path, task, old_plan) = prepared_task_workspace("latest-run-after-revision");
+  enqueue_task(&root_path, &task.id).expect("old plan should enqueue");
+  let first_running = claim_next_task(&root_path)
+    .expect("first claim should succeed")
+    .expect("first old-plan run should be claimed");
+  fail_task_run(
+    &root_path,
+    &first_running.id,
+    "TIKHUB_REQUEST_ERROR",
+    "第一次网络超时",
+    true,
+  )
+  .expect("first old-plan attempt should fail");
+  retry_task(&root_path, &task.id, None).expect("old plan should retry");
+  let second_running = claim_next_task(&root_path)
+    .expect("second claim should succeed")
+    .expect("second old-plan run should be claimed");
+  let old_failure = fail_task_run(
+    &root_path,
+    &second_running.id,
+    "TIKHUB_REQUEST_ERROR",
+    "第二次网络超时",
+    true,
+  )
+  .expect("second old-plan attempt should fail");
+  assert_eq!(old_failure.attempt_number, 2);
+  assert_eq!(old_failure.plan_id.as_deref(), Some(old_plan.id.as_str()));
+
+  let replacement = execution_plan_input(&task.id);
+  let revised = revise_collection_task(
+    &root_path,
+    ReviseCollectionTaskInput {
+      task_id: task.id.clone(),
+      name: "修订后的任务".to_string(),
+      platforms: vec!["tiktok".to_string()],
+      data_types: vec!["keyword_search".to_string()],
+      source: "user_edited".to_string(),
+      plan_json: replacement.plan_json,
+    },
+  )
+  .expect("failed task should be revised in place");
+  confirm_collection_plan(&root_path, &task.id, &revised.collection_plan.id)
+    .expect("revised plan should confirm");
+  let new_run = enqueue_task(&root_path, &task.id).expect("revised plan should enqueue");
+  assert_eq!(new_run.attempt_number, 1);
+  assert_eq!(
+    new_run.plan_id.as_deref(),
+    Some(revised.collection_plan.id.as_str())
+  );
+
+  let latest = list_latest_task_runs(&root_path).expect("latest runs should list");
+
+  assert_eq!(latest.len(), 1);
+  assert_eq!(latest[0].id, new_run.id);
+  assert_eq!(latest[0].plan_id, new_run.plan_id);
+  assert_eq!(latest[0].status, "queued");
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn enqueue_and_retry_materialize_complete_run_step_snapshots() {
   let (root_path, task, plan) = prepared_multi_step_task_workspace("execution-step-snapshot");
 

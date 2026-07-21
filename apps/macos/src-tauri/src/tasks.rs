@@ -357,10 +357,14 @@ pub fn list_latest_task_runs(root_path: impl AsRef<Path>) -> AppResult<Vec<TaskR
               run.current_stage, run.error_code, run.error_message, run.retryable,
               run.cost_actual_json, run.plan_id, run.attempt_number, run.claimed_at
        FROM task_run run
-       WHERE run.attempt_number = (
-         SELECT MAX(candidate.attempt_number)
+       WHERE NOT EXISTS (
+         SELECT 1
          FROM task_run candidate
          WHERE candidate.task_id = run.task_id
+           AND (
+             candidate.started_at > run.started_at
+             OR (candidate.started_at = run.started_at AND candidate.id > run.id)
+           )
        )
        ORDER BY run.started_at DESC, run.id DESC",
     )
