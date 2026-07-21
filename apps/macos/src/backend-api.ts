@@ -468,9 +468,10 @@ export function createCollectionTask(input: {
   source_type: 'form' | 'natural_language'
   platforms: string[]
   data_types: string[]
-}) {
+}, intentText?: string) {
   return invoke<CollectionTaskView>('create_collection_task', {
     input,
+    ...(intentText === undefined ? {} : { intentText }),
     rootPath: null,
   })
 }

@@ -21,7 +21,7 @@ export async function createNaturalTaskAttempt(
     source_type: 'natural_language',
     platforms: [],
     data_types: [],
-  })
+  }, intentText)
   onTaskCreated?.(task.id)
   return parseNaturalTaskAttempt(task.id, intentText)
 }

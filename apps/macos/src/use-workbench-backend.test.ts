@@ -701,8 +701,9 @@ describe('计划生成失败的草稿清理', () => {
     })
     renderWorkbenchHook()
     const generateNaturalMutation = mutationOptionsMock.current[1]
+    const completeIntent = '用中文查找英国 TikTok 宠物用品账号，保留完整原始输入用于失败恢复和诊断，最多 10 个，预算 0.1 美元。'
 
-    await expect(generateNaturalMutation?.mutationFn?.('采集小红书公开账号'))
+    await expect(generateNaturalMutation?.mutationFn?.(completeIntent))
       .rejects.toThrow('AI 结构化输出无效')
     expect(invokeMock.mock.calls.map(([command]) => command)).toEqual([
       'create_collection_task',
@@ -710,11 +711,12 @@ describe('计划生成失败的草稿清理', () => {
     ])
     expect(invokeMock).toHaveBeenNthCalledWith(1, 'create_collection_task', {
       input: {
-        name: '采集小红书公开账号',
+        name: completeIntent.slice(0, 42),
         source_type: 'natural_language',
         platforms: [],
         data_types: [],
       },
+      intentText: completeIntent,
       rootPath: null,
     })
   })
