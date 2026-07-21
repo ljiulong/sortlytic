@@ -20,6 +20,11 @@ const COLLECTION_MAX_ATTEMPTS: usize = 3;
 const COLLECTION_RETRY_BASE_DELAY_MS: u64 = 1_000;
 const COLLECTION_RETRY_MAX_DELAY_MS: u64 = 5_000;
 
+struct RetryAfter {
+  delay: Duration,
+  display: String,
+}
+
 pub fn send_collection_request(
   base_url: Option<String>,
   token: &str,
@@ -133,10 +138,20 @@ fn send_single_request(
       Err(error)
         if error.code == AppErrorCode::TikhubRateLimit && attempt + 1 < COLLECTION_MAX_ATTEMPTS =>
       {
-        std::thread::sleep(collection_retry_delay(attempt, retry_after));
+        std::thread::sleep(collection_retry_delay(
+          attempt,
+          retry_after.as_ref().map(|value| value.delay),
+        ));
       }
       Err(error) if error.code == AppErrorCode::TikhubRateLimit => {
-        return Err(error.with_safe_detail("retry_attempts", (attempt + 1).to_string()));
+        let retry_after = retry_after
+          .map(|value| value.display)
+          .unwrap_or_else(|| collection_retry_delay(attempt, None).as_secs().to_string());
+        return Err(
+          error
+            .with_safe_detail("retry_attempts", (attempt + 1).to_string())
+            .with_safe_detail("retry_after", retry_after),
+        );
       }
       Err(error) => return Err(error),
     }
@@ -156,14 +171,17 @@ fn collection_retry_delay(attempt: usize, retry_after: Option<Duration>) -> Dura
   })
 }
 
-fn retry_after_delay(headers: &HeaderMap) -> Option<Duration> {
+fn retry_after_delay(headers: &HeaderMap) -> Option<RetryAfter> {
   let value = headers.get(RETRY_AFTER)?.to_str().ok()?.trim();
   if let Ok(seconds) = value.parse::<u64>() {
-    return Some(Duration::from_millis(
-      seconds
-        .saturating_mul(1_000)
-        .min(COLLECTION_RETRY_MAX_DELAY_MS),
-    ));
+    return Some(RetryAfter {
+      delay: Duration::from_millis(
+        seconds
+          .saturating_mul(1_000)
+          .min(COLLECTION_RETRY_MAX_DELAY_MS),
+      ),
+      display: seconds.to_string(),
+    });
   }
   let retry_at = DateTime::parse_from_rfc2822(value)
     .ok()?
@@ -172,9 +190,10 @@ fn retry_after_delay(headers: &HeaderMap) -> Option<Duration> {
     .signed_duration_since(Utc::now())
     .num_milliseconds()
     .max(0) as u64;
-  Some(Duration::from_millis(
-    milliseconds.min(COLLECTION_RETRY_MAX_DELAY_MS),
-  ))
+  Some(RetryAfter {
+    delay: Duration::from_millis(milliseconds.min(COLLECTION_RETRY_MAX_DELAY_MS)),
+    display: (milliseconds.saturating_add(999) / 1_000).to_string(),
+  })
 }
 
 pub(super) fn should_try_video_fallback(

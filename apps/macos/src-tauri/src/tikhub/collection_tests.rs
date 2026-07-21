@@ -105,6 +105,10 @@ fn collection_request_retries_business_429_and_stops_after_three_attempts() {
     Some("3")
   );
   assert_eq!(
+    error.safe_details.get("retry_after").map(String::as_str),
+    Some("0")
+  );
+  assert_eq!(
     limited_server.join().expect("limited server should finish"),
     3
   );
