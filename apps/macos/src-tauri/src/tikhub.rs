@@ -407,15 +407,8 @@ fn error_for_status(status: StatusCode, message: String) -> AppError {
     AppErrorStage::Collection,
     retryable,
   )
-}
-
-fn tikhub_request_error(error: impl ToString) -> AppError {
-  AppError::new(
-    AppErrorCode::TikhubRequestError,
-    error.to_string(),
-    AppErrorStage::Collection,
-    true,
-  )
+  .with_safe_detail("response_state", "received")
+  .with_safe_detail("http_status", status.as_u16().to_string())
 }
 
 fn reqwest_request_error(error: reqwest::Error) -> AppError {
@@ -443,25 +436,35 @@ fn reqwest_request_error(error: reqwest::Error) -> AppError {
     AppErrorStage::Collection,
     retryable,
   )
+  .with_safe_detail("response_state", "uncertain")
   .with_safe_detail("transport_error", sanitized_error)
 }
 
 fn read_limited_response_body(reader: impl Read) -> AppResult<String> {
   let mut reader = reader.take(MAX_TIKHUB_RESPONSE_BYTES + 1);
   let mut body = Vec::new();
-  reader
-    .read_to_end(&mut body)
-    .map_err(tikhub_request_error)?;
-  if body.len() as u64 > MAX_TIKHUB_RESPONSE_BYTES {
-    return Err(AppError::new(
+  reader.read_to_end(&mut body).map_err(|_| {
+    AppError::new(
       AppErrorCode::TikhubRequestError,
-      format!(
-        "TikHub 响应体超过 {} MiB 安全上限",
-        MAX_TIKHUB_RESPONSE_BYTES / 1024 / 1024
-      ),
+      "TikHub 响应读取失败",
       AppErrorStage::Collection,
-      false,
-    ));
+      true,
+    )
+    .with_safe_detail("response_state", "uncertain")
+  })?;
+  if body.len() as u64 > MAX_TIKHUB_RESPONSE_BYTES {
+    return Err(
+      AppError::new(
+        AppErrorCode::TikhubRequestError,
+        format!(
+          "TikHub 响应体超过 {} MiB 安全上限",
+          MAX_TIKHUB_RESPONSE_BYTES / 1024 / 1024
+        ),
+        AppErrorStage::Collection,
+        false,
+      )
+      .with_safe_detail("response_state", "received"),
+    );
   }
   String::from_utf8(body).map_err(|error| {
     AppError::new(
@@ -470,6 +473,7 @@ fn read_limited_response_body(reader: impl Read) -> AppResult<String> {
       AppErrorStage::Collection,
       false,
     )
+    .with_safe_detail("response_state", "received")
   })
 }
 
@@ -791,7 +795,40 @@ mod tests {
 
   #[test]
   fn transient_http_statuses_are_retryable() {
-    assert!(error_for_status(StatusCode::REQUEST_TIMEOUT, "已隐藏".to_string()).retryable);
+    let error = error_for_status(StatusCode::REQUEST_TIMEOUT, "已隐藏".to_string());
+    assert!(error.retryable);
+    assert_eq!(
+      error.safe_details.get("response_state").map(String::as_str),
+      Some("received")
+    );
+    assert_eq!(
+      error.safe_details.get("http_status").map(String::as_str),
+      Some("408")
+    );
     assert!(error_for_status(StatusCode::TOO_EARLY, "已隐藏".to_string()).retryable);
+  }
+
+  #[test]
+  fn response_body_read_failures_are_marked_uncertain() {
+    struct FailingReader;
+
+    impl std::io::Read for FailingReader {
+      fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::new(
+          std::io::ErrorKind::ConnectionReset,
+          "credential-like body must not be surfaced",
+        ))
+      }
+    }
+
+    let error = read_limited_response_body(FailingReader)
+      .expect_err("response body read failures must remain distinguishable");
+
+    assert_eq!(error.code, AppErrorCode::TikhubRequestError);
+    assert_eq!(
+      error.safe_details.get("response_state").map(String::as_str),
+      Some("uncertain")
+    );
+    assert!(!error.message.contains("credential-like"));
   }
 }
