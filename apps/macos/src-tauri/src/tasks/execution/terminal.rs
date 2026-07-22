@@ -10,7 +10,7 @@ mod failure;
 #[path = "partial.rs"]
 mod partial;
 
-pub use failure::{cancel_task, fail_task_run};
+pub use failure::{cancel_task, fail_task_run, fail_task_run_with_safe_details};
 
 struct CompletionStep {
   order: i64,

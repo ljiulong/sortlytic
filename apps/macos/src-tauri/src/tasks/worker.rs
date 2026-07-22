@@ -16,10 +16,10 @@ use crate::tikhub::{
   build_collection_request, send_collection_request, CollectionPage, TikHubCollectionRequest,
 };
 
-use super::execution::persist_task_run_error_safe_details;
+use super::execution::fail_task_run_with_safe_details;
 use super::{
-  claim_next_task, complete_task_run, database_error, fail_task_run, get_task_run,
-  open_workspace_connection, task_error, TaskRunView,
+  claim_next_task, complete_task_run, database_error, get_task_run, open_workspace_connection,
+  task_error, TaskRunView,
 };
 
 mod pipeline;
@@ -78,15 +78,14 @@ fn finalize_claimed_run(
         .get("worker_code")
         .cloned()
         .unwrap_or_else(|| serialized_error_code(&error.code));
-      let failed = fail_task_run(
+      fail_task_run_with_safe_details(
         root_path,
         &run.id,
         &error_code,
         &error.message,
         error.retryable,
-      )?;
-      persist_task_run_error_safe_details(root_path, &run.id, &error.safe_details)?;
-      Ok(failed)
+        &error.safe_details,
+      )
     }
   }
 }
