@@ -16,6 +16,7 @@ mod attempts;
 pub(crate) mod collection_intent_schema;
 mod generation;
 pub(crate) mod intent_plan;
+mod parse_lock;
 pub(crate) mod provider_client;
 mod provider_errors;
 mod provider_policy;

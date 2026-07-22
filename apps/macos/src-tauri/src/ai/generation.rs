@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use super::collection_intent_schema::parse_collection_intent;
 use super::intent_plan::build_collection_plan_from_intent;
+use super::parse_lock::NaturalParseLock;
 use super::provider_client::collection_intent_request;
 use super::*;
 use crate::prompts::seed_builtin_prompts;
@@ -21,6 +22,7 @@ pub fn generate_collection_plan_from_text(
   let root_path = root_path.as_ref().to_path_buf();
   let intent_text = normalize_natural_intent_text(&input.intent_text)?;
   let intent_text = intent_text.as_str();
+  let _parse_lock = NaturalParseLock::acquire(&root_path, &input.task_id)?;
   let mut connection = open_workspace_connection(&root_path)?;
   let now = Utc::now().to_rfc3339();
   let attempt_id = acquire_task_intent_attempt(&mut connection, &input.task_id, intent_text, &now)?;
