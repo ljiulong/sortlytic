@@ -55,11 +55,11 @@ fn lists_included_account_counts_from_each_tasks_latest_terminal_run() {
       .expect("normalized record should insert");
   }
   for (run_id, status, started_at) in [
-    ("run-old", "success", "2026-07-16T00:00:00Z"),
+    ("run-old", "success", "2026-07-17T00:00:00Z"),
     (
       "run-latest-terminal",
       "partial_success",
-      "2026-07-17T00:00:00Z",
+      "2026-07-16T00:00:00Z",
     ),
     ("run-current", "running", "2026-07-18T00:00:00Z"),
   ] {
@@ -130,12 +130,12 @@ fn lists_paginated_results_from_the_latest_successful_run_only() {
       .expect("task should insert");
   }
   for (run_id, task_id, status, started_at) in [
-    ("run-old", "task-results", "success", "2026-07-17T00:00:00Z"),
+    ("run-old", "task-results", "success", "2026-07-18T00:00:00Z"),
     (
       "run-latest",
       "task-results",
       "partial_success",
-      "2026-07-18T00:00:00Z",
+      "2026-07-17T00:00:00Z",
     ),
     ("run-other", "other-task", "success", "2026-07-19T00:00:00Z"),
   ] {

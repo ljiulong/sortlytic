@@ -137,7 +137,7 @@ pub fn list_task_record_counts(root_path: impl AsRef<Path>) -> AppResult<Vec<Tas
          FROM task_run AS candidate
          WHERE candidate.task_id = task.id
            AND candidate.status IN ('success', 'partial_success', 'failed', 'cancelled')
-         ORDER BY julianday(candidate.started_at) DESC, candidate.id DESC
+         ORDER BY candidate.run_sequence DESC
          LIMIT 1
        )
        LEFT JOIN collected_account AS account
@@ -186,7 +186,7 @@ pub fn list_task_results(
        JOIN collection_task AS task ON task.id = run.task_id
        LEFT JOIN collection_plan AS plan ON plan.id = run.plan_id
        WHERE run.task_id = ?1 AND run.status IN ('success', 'partial_success')
-       ORDER BY COALESCE(run.ended_at, run.started_at) DESC, run.id DESC
+       ORDER BY run.run_sequence DESC
        LIMIT 1",
       params![task_id],
       |row| {
