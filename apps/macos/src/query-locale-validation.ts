@@ -5,7 +5,7 @@ const primaryLocales: Record<string, string> = {
   AT: 'de-AT', CH: 'de-CH', ES: 'es-ES', MX: 'es-MX', AR: 'es-AR', CL: 'es-CL',
   CO: 'es-CO', PE: 'es-PE', IT: 'it-IT', PT: 'pt-PT', BR: 'pt-BR', NL: 'nl-NL',
   BE: 'nl-BE', SE: 'sv-SE', NO: 'no-NO', DK: 'da-DK', FI: 'fi-FI', PL: 'pl-PL',
-  CZ: 'cs-CZ', GR: 'el-GR', RO: 'ro-RO', HU: 'hu-HU', UA: 'uk-UA', RU: 'ru-RU',
+  CZ: 'cs-CZ', GR: 'el-GR', RO: 'ro-RO', HU: 'hu-HU', BG: 'bg-BG', UA: 'uk-UA', RU: 'ru-RU',
   TR: 'tr-TR', IL: 'he-IL', SA: 'ar-SA', AE: 'ar-AE', EG: 'ar-EG', MA: 'ar-MA',
   IN: 'hi-IN', PK: 'ur-PK', BD: 'bn-BD', TH: 'th-TH', VN: 'vi-VN', ID: 'id-ID',
   MY: 'ms-MY', PH: 'fil-PH',
