@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use super::*;
 
 pub fn fail_task_run(
@@ -6,6 +8,24 @@ pub fn fail_task_run(
   error_code: &str,
   error_message: &str,
   retryable: bool,
+) -> AppResult<TaskRunView> {
+  fail_task_run_with_safe_details(
+    root_path,
+    run_id,
+    error_code,
+    error_message,
+    retryable,
+    &BTreeMap::new(),
+  )
+}
+
+pub fn fail_task_run_with_safe_details(
+  root_path: impl AsRef<Path>,
+  run_id: &str,
+  error_code: &str,
+  error_message: &str,
+  retryable: bool,
+  safe_details: &BTreeMap<String, String>,
 ) -> AppResult<TaskRunView> {
   let mut connection = open_workspace_connection(root_path)?;
   let transaction = immediate_transaction(&mut connection)?;
@@ -98,7 +118,7 @@ pub fn fail_task_run(
   if task_changed != 1 {
     return Err(task_error("父任务状态已变化，无法标记终态"));
   }
-  append_task_log(
+  append_terminal_log(
     &transaction,
     run_id,
     current_stage,
@@ -108,10 +128,59 @@ pub fn fail_task_run(
       "error"
     },
     &message,
+    safe_details,
+    &now,
   )?;
   transaction.commit().map_err(database_error)?;
 
   get_task_run(&connection, run_id)
+}
+
+fn append_terminal_log(
+  connection: &Connection,
+  run_id: &str,
+  stage: &str,
+  level: &str,
+  message: &str,
+  safe_details: &BTreeMap<String, String>,
+  created_at: &str,
+) -> AppResult<()> {
+  let safe_details = safe_details
+    .iter()
+    .filter(|(key, _)| !is_sensitive_detail_key(key))
+    .map(|(key, value)| (key, redact_sensitive_text(value)))
+    .collect::<BTreeMap<_, _>>();
+  connection
+    .execute(
+      "INSERT INTO task_log (id, task_run_id, stage, level, message, safe_details_json, created_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+      params![
+        Uuid::new_v4().to_string(),
+        run_id,
+        stage,
+        level,
+        message,
+        serde_json::to_string(&safe_details).unwrap_or_else(|_| "{}".to_string()),
+        created_at
+      ],
+    )
+    .map(|_| ())
+    .map_err(database_error)
+}
+
+fn is_sensitive_detail_key(key: &str) -> bool {
+  let key = key.to_ascii_lowercase();
+  [
+    "token",
+    "secret",
+    "authorization",
+    "password",
+    "credential",
+    "api_key",
+    "api-key",
+  ]
+  .iter()
+  .any(|needle| key.contains(needle))
 }
 
 pub fn cancel_task(root_path: impl AsRef<Path>, task_id: &str) -> AppResult<CollectionTaskView> {
