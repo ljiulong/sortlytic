@@ -308,18 +308,22 @@ fn update_task_intent_phase(
     .map_err(database_error)
 }
 
+struct TaskIntentSuccessInput<'a> {
+  attempt_id: &'a str,
+  parse_status: &'a str,
+  ai_run_id: &'a str,
+  issues: &'a [String],
+  missing_fields: &'a [String],
+  intent: Option<&'a CollectionIntentV1>,
+  superseded_by_user_edit: bool,
+}
+
 fn update_task_intent_success(
   connection: &Connection,
-  attempt_id: &str,
-  parse_status: &str,
-  ai_run_id: &str,
-  issues: &[String],
-  missing_fields: &[String],
-  intent: Option<&CollectionIntentV1>,
-  superseded_by_user_edit: bool,
+  input: TaskIntentSuccessInput<'_>,
 ) -> AppResult<()> {
   let now = Utc::now().to_rfc3339();
-  if parse_status == "valid" {
+  if input.parse_status == "valid" {
     return connection
       .execute(
         "UPDATE task_intent
@@ -327,17 +331,19 @@ fn update_task_intent_success(
              error_code = NULL, error_message = NULL, retryable = NULL,
              error_safe_details_json = '{}', updated_at = ?2
          WHERE id = ?3",
-        params![ai_run_id, now, attempt_id],
+        params![input.ai_run_id, now, input.attempt_id],
       )
       .map(|_| ())
       .map_err(database_error);
   }
 
-  let safe_issues = issues
+  let safe_issues = input
+    .issues
     .iter()
     .map(|issue| redact_sensitive_text(issue))
     .collect::<Vec<_>>();
-  let safe_missing_fields = missing_fields
+  let safe_missing_fields = input
+    .missing_fields
     .iter()
     .map(|field| redact_sensitive_text(field))
     .collect::<Vec<_>>();
@@ -353,7 +359,8 @@ fn update_task_intent_success(
   } else {
     format!("解析完成，需要修正：{}", message_parts.join("；"))
   };
-  let safe_intent = intent
+  let safe_intent = input
+    .intent
     .and_then(|value| serde_json::to_value(value).ok())
     .map(|mut value| {
       if let Some(source_input) = value
@@ -369,7 +376,7 @@ fn update_task_intent_success(
     "issues": safe_issues,
     "missing_fields": safe_missing_fields,
     "intent": safe_intent,
-    "superseded_by_user_edit": superseded_by_user_edit,
+    "superseded_by_user_edit": input.superseded_by_user_edit,
   });
   connection
     .execute(
@@ -379,11 +386,11 @@ fn update_task_intent_success(
            error_safe_details_json = ?3, updated_at = ?4
        WHERE id = ?5",
       params![
-        ai_run_id,
+        input.ai_run_id,
         error_message,
         safe_details.to_string(),
         now,
-        attempt_id
+        input.attempt_id
       ],
     )
     .map(|_| ())

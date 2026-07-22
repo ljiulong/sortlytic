@@ -255,13 +255,15 @@ pub fn generate_collection_plan_from_text(
     };
     update_task_intent_success(
       &transaction,
-      attempt_id,
-      &final_status,
-      &ai_run_id,
-      &final_issues,
-      &missing_fields,
-      parsed_intent.as_ref(),
-      task_was_edited,
+      TaskIntentSuccessInput {
+        attempt_id,
+        parse_status: &final_status,
+        ai_run_id: &ai_run_id,
+        issues: &final_issues,
+        missing_fields: &missing_fields,
+        intent: parsed_intent.as_ref(),
+        superseded_by_user_edit: task_was_edited,
+      },
     )?;
     transaction.commit().map_err(database_error)?;
     Ok((plan_id, final_status, final_issues))
