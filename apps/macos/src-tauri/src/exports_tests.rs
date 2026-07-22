@@ -107,8 +107,8 @@ fn analysis_report_model_aggregates_latest_results_without_copying_raw_profiles(
   let (root_path, summary_report) = test_report("analysis-model");
   let connection = open_workspace_connection(&root_path).expect("database should open");
   for (run_id, ended_at) in [
-    ("analysis-old-run", "2026-07-18T14:32:17+00:00"),
-    ("analysis-latest-run", "2026-07-19T14:32:17+00:00"),
+    ("analysis-old-run", "2026-07-19T14:32:17+00:00"),
+    ("analysis-latest-run", "2026-07-18T14:32:17+00:00"),
   ] {
     connection
       .execute(

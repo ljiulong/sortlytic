@@ -445,7 +445,7 @@ fn task_analysis(connection: &Connection, task_id: &str) -> AppResult<Value> {
       "SELECT id, status, started_at, ended_at
        FROM task_run
        WHERE task_id = ?1 AND status IN ('success', 'partial_success')
-       ORDER BY COALESCE(ended_at, started_at) DESC, id DESC
+       ORDER BY run_sequence DESC
        LIMIT 1",
       params![task_id],
       |row| {
