@@ -11,6 +11,26 @@ use super::*;
 const TIKHUB_CONNECTOR_MIGRATION_CHECKSUM: &str =
   "c5cf7126f50164158b02c8e72c23d5acae16f05a9d76e7c6e546fab1eb7df069";
 
+#[test]
+fn opening_rejects_unregistered_task_run_columns() {
+  let root_path = unique_temp_workspace("unregistered-task-run-column");
+  create_workspace("未登记运行列", &root_path).expect("workspace should be created");
+  let connection =
+    open_workspace_database(root_path.join(DATABASE_FILE_NAME)).expect("database should open");
+  connection
+    .execute(
+      "ALTER TABLE task_run ADD COLUMN unexpected_unregistered_column TEXT",
+      [],
+    )
+    .expect("unregistered column fixture should be added");
+  drop(connection);
+
+  let error = open_workspace(&root_path).expect_err("unregistered column must be rejected");
+
+  assert!(error.message.contains("迁移 v4") && error.message.contains("结构校验失败"));
+  fs::remove_dir_all(root_path).ok();
+}
+
 #[cfg(unix)]
 #[test]
 fn opening_rejects_symlinked_database_without_modifying_its_target() {
