@@ -19,6 +19,7 @@ tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 chrono = { version = "0.4.45", features = ["serde"] }
+fs4 = "1.1.0"
 log = "0.4"
 printpdf = { version = "0.11.3", default-features = false, features = ["text_layout"] }
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "json", "rustls"] }
