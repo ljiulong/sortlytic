@@ -318,6 +318,10 @@ fn concurrent_natural_generation_allows_only_one_provider_request() {
   assert!(running_attempts[0].ai_run_id.is_some());
   assert!(running_attempts[0].provider_id.is_some());
   assert_eq!(
+    running_attempts[0].provider_name.as_deref(),
+    Some("测试 AI")
+  );
+  assert_eq!(
     running_attempts[0].model_id.as_deref(),
     Some("deepseek-test")
   );

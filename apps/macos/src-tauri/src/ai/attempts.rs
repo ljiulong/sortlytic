@@ -22,6 +22,7 @@ pub struct NaturalParseAttemptView {
   pub retryable: Option<bool>,
   pub error_safe_details_json: Value,
   pub provider_id: Option<String>,
+  pub provider_name: Option<String>,
   pub model_id: Option<String>,
   pub prompt_version_id: Option<String>,
   pub created_at: String,
@@ -45,7 +46,10 @@ pub fn list_latest_task_intents(
        SELECT ranked.id, ranked.task_id, ranked.intent_text, ranked.language,
               ranked.parse_status, ranked.parse_phase, ranked.ai_run_id,
               ranked.error_code, ranked.error_message, ranked.retryable,
-              ranked.error_safe_details_json, snapshot.provider_id, snapshot.model_id,
+              ranked.error_safe_details_json, snapshot.provider_id,
+              CASE WHEN json_valid(snapshot.capabilities_json)
+                THEN json_extract(snapshot.capabilities_json, '$.profile_name') END,
+              snapshot.model_id,
               snapshot.prompt_version_id, ranked.created_at, ranked.updated_at
        FROM ranked
        LEFT JOIN ai_run AS run ON run.id = ranked.ai_run_id
@@ -72,7 +76,10 @@ pub fn list_task_intents(
       "SELECT intent.id, intent.task_id, intent.intent_text, intent.language,
               intent.parse_status, intent.parse_phase, intent.ai_run_id,
               intent.error_code, intent.error_message, intent.retryable,
-              intent.error_safe_details_json, snapshot.provider_id, snapshot.model_id,
+              intent.error_safe_details_json, snapshot.provider_id,
+              CASE WHEN json_valid(snapshot.capabilities_json)
+                THEN json_extract(snapshot.capabilities_json, '$.profile_name') END,
+              snapshot.model_id,
               snapshot.prompt_version_id, intent.created_at, intent.updated_at
        FROM task_intent AS intent
        LEFT JOIN ai_run AS run ON run.id = intent.ai_run_id
@@ -130,10 +137,11 @@ fn map_attempt(row: &Row<'_>) -> rusqlite::Result<NaturalParseAttemptView> {
       .and_then(|value| serde_json::from_str(&value).ok())
       .unwrap_or_else(|| serde_json::json!({})),
     provider_id: row.get(11)?,
-    model_id: row.get(12)?,
-    prompt_version_id: row.get(13)?,
-    created_at: row.get(14)?,
-    updated_at: row.get(15)?,
+    provider_name: row.get(12)?,
+    model_id: row.get(13)?,
+    prompt_version_id: row.get(14)?,
+    created_at: row.get(15)?,
+    updated_at: row.get(16)?,
   })
 }
 
