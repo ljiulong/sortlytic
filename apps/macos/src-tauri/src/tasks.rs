@@ -17,6 +17,7 @@ mod revisions;
 mod snapshot;
 mod validation;
 mod worker;
+mod worker_lock;
 
 #[cfg(test)]
 mod test_support;
@@ -27,9 +28,8 @@ pub use execution::{
 };
 use plans::latest_plan_for_task;
 pub use plans::{confirm_collection_plan, estimate_task_cost, save_collection_plan};
-pub use recovery::recover_interrupted_runs;
 pub use revisions::revise_collection_task;
-pub use worker::execute_next_task;
+pub use worker_lock::{execute_next_task, recover_interrupted_runs};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CreateCollectionTaskInput {

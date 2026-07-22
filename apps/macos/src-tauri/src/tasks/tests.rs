@@ -1477,6 +1477,84 @@ fn delete_task_rejects_queued_and_running_tasks_until_they_are_cancelled() {
 }
 
 #[test]
+fn worker_owner_lock_prevents_another_instance_from_recovering_an_active_run() {
+  use std::fs::OpenOptions;
+  use std::os::unix::fs::PermissionsExt;
+
+  use fs4::FileExt;
+
+  let root_path = unique_temp_workspace("worker-owner-lock");
+  create_workspace("多实例执行器所有权", &root_path).expect("workspace should be created");
+  crate::tasks::test_support::install_successful_tikhub_profile(&root_path)
+    .expect("TikHub profile should install");
+  let task = create_collection_task(&root_path, create_task_input()).expect("task created");
+  let plan = save_collection_plan(&root_path, plan_input(&task.id)).expect("plan saved");
+  confirm_collection_plan(&root_path, &task.id, &plan.id).expect("plan confirmed");
+  enqueue_task(&root_path, &task.id).expect("task enqueued");
+  let run = claim_next_task(&root_path)
+    .expect("task claim should succeed")
+    .expect("queued task should exist");
+  let lock_file = OpenOptions::new()
+    .read(true)
+    .write(true)
+    .create(true)
+    .truncate(false)
+    .open(root_path.join("temp/task-worker.lock"))
+    .expect("worker owner lock file should open");
+  FileExt::try_lock(&lock_file).expect("first worker should own the lock");
+
+  assert_eq!(
+    recover_interrupted_runs(&root_path).expect("busy worker should be skipped"),
+    0
+  );
+  assert!(execute_next_task(&root_path)
+    .expect("busy worker should not execute")
+    .is_none());
+  let connection = open_workspace_connection(&root_path).expect("database should reopen");
+  assert_eq!(
+    get_task_run(&connection, &run.id)
+      .expect("active run should remain")
+      .status,
+    "running"
+  );
+  assert_eq!(
+    get_task(&root_path, &task.id)
+      .expect("active task should remain")
+      .status,
+    "running"
+  );
+  assert_eq!(
+    lock_file.metadata().unwrap().permissions().mode() & 0o7777,
+    0o600
+  );
+  drop(connection);
+  drop(lock_file);
+  assert_eq!(
+    recover_interrupted_runs(&root_path).expect("released owner should allow recovery"),
+    1
+  );
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn worker_owner_lock_rejects_a_symlink_without_touching_its_target() {
+  use std::os::unix::fs::symlink;
+
+  let root_path = unique_temp_workspace("worker-owner-symlink");
+  create_workspace("执行器锁路径安全", &root_path).expect("workspace should be created");
+  let sentinel = root_path.join("sentinel.txt");
+  std::fs::write(&sentinel, "preserve").expect("sentinel should be created");
+  symlink(&sentinel, root_path.join("temp/task-worker.lock"))
+    .expect("malicious lock symlink should be created");
+
+  let error = execute_next_task(&root_path).expect_err("worker lock symlink must fail closed");
+
+  assert_eq!(error.code, AppErrorCode::PermissionError);
+  assert_eq!(std::fs::read_to_string(&sentinel).unwrap(), "preserve");
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn delete_task_reports_a_missing_task() {
   let root_path = unique_temp_workspace("delete-missing-task");
   create_workspace("缺失任务删除测试", &root_path).expect("workspace should be created");
