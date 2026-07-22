@@ -7,10 +7,8 @@ use super::{
   FilterExecution,
 };
 use crate::accounts::normalize_country_region;
-use crate::ai::collection_intent_schema::{
-  primary_query_locale, query_matches_locale_script, valid_query_locale,
-};
 use crate::domain::{AppError, AppErrorStage, AppResult};
+use crate::locale_policy::{primary_query_locale, query_matches_locale_script, valid_query_locale};
 
 pub(super) fn validate_plan_filters(
   plan_json: &Value,
