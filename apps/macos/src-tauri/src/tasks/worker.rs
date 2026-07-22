@@ -16,6 +16,7 @@ use crate::tikhub::{
   build_collection_request, send_collection_request, CollectionPage, TikHubCollectionRequest,
 };
 
+use super::execution::persist_task_run_error_safe_details;
 use super::{
   claim_next_task, complete_task_run, database_error, fail_task_run, get_task_run,
   open_workspace_connection, task_error, TaskRunView,
@@ -57,11 +58,19 @@ pub fn execute_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRu
   };
 
   let result = execute_claimed_run(root_path, &run);
+  finalize_claimed_run(root_path, &run, result).map(Some)
+}
+
+fn finalize_claimed_run(
+  root_path: &Path,
+  run: &TaskRunView,
+  result: AppResult<()>,
+) -> AppResult<TaskRunView> {
   match result {
-    Ok(()) => complete_task_run(root_path, &run.id, Value::Null).map(Some),
+    Ok(()) => complete_task_run(root_path, &run.id, Value::Null),
     Err(error) if error.code == AppErrorCode::Cancelled => {
       let connection = open_workspace_connection(root_path)?;
-      get_task_run(&connection, &run.id).map(Some)
+      get_task_run(&connection, &run.id)
     }
     Err(error) => {
       let error_code = error
@@ -69,14 +78,15 @@ pub fn execute_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRu
         .get("worker_code")
         .cloned()
         .unwrap_or_else(|| serialized_error_code(&error.code));
-      fail_task_run(
+      let failed = fail_task_run(
         root_path,
         &run.id,
         &error_code,
         &error.message,
         error.retryable,
-      )
-      .map(Some)
+      )?;
+      persist_task_run_error_safe_details(root_path, &run.id, &error.safe_details)?;
+      Ok(failed)
     }
   }
 }

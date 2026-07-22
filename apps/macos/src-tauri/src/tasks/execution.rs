@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use chrono::Utc;
@@ -705,4 +706,50 @@ pub(super) fn append_task_log(
     )
     .map(|_| ())
     .map_err(database_error)
+}
+
+pub(super) fn persist_task_run_error_safe_details(
+  root_path: impl AsRef<Path>,
+  run_id: &str,
+  safe_details: &BTreeMap<String, String>,
+) -> AppResult<()> {
+  let safe_details_json = safe_details
+    .iter()
+    .filter(|(key, _)| !is_sensitive_detail_key(key))
+    .map(|(key, value)| (key, redact_sensitive_text(value)))
+    .collect::<BTreeMap<_, _>>();
+  let connection = open_workspace_connection(root_path)?;
+  let changed = connection
+    .execute(
+      "UPDATE task_log SET safe_details_json = ?1
+       WHERE id = (
+         SELECT id FROM task_log
+         WHERE task_run_id = ?2 AND level = 'error'
+         ORDER BY created_at DESC, id DESC LIMIT 1
+       )",
+      params![
+        serde_json::to_string(&safe_details_json).unwrap_or_else(|_| "{}".to_string()),
+        run_id
+      ],
+    )
+    .map_err(database_error)?;
+  if changed != 1 {
+    return Err(task_error("任务终态错误日志不存在，无法保存安全诊断详情"));
+  }
+  Ok(())
+}
+
+fn is_sensitive_detail_key(key: &str) -> bool {
+  let key = key.to_ascii_lowercase();
+  [
+    "token",
+    "secret",
+    "authorization",
+    "password",
+    "credential",
+    "api_key",
+    "api-key",
+  ]
+  .iter()
+  .any(|needle| key.contains(needle))
 }

@@ -654,6 +654,48 @@ fn worker_rejects_cost_before_recording_an_outbound_request() {
 }
 
 #[test]
+fn worker_persists_sanitized_terminal_error_details() {
+  let root = std::env::temp_dir().join(format!("worker-error-details-{}", Uuid::new_v4()));
+  create_workspace("执行器错误详情测试", &root).expect("workspace should be created");
+  install_successful_tikhub_profile(&root).expect("TikHub profile should install");
+  let (task, _) = create_confirmed_item_detail_task(&root);
+  enqueue_task(&root, &task.id).expect("task should be queued");
+  let run = claim_next_task(&root)
+    .expect("worker should claim the task")
+    .expect("queued task should exist");
+  let error = AppError::new(
+    AppErrorCode::TikhubRateLimit,
+    "TikHub 暂时触发限流",
+    AppErrorStage::Collection,
+    true,
+  )
+  .with_safe_detail("retry_after", "17")
+  .with_safe_detail("retry_attempts", "3")
+  .with_safe_detail("api_token", "provider-secret");
+
+  let failed = finalize_claimed_run(&root, &run, Err(error))
+    .expect("worker should persist a failed terminal state");
+
+  assert_eq!(failed.status, "failed");
+  let connection = super::open_workspace_connection(&root).expect("database should open");
+  let safe_details_json: String = connection
+    .query_row(
+      "SELECT safe_details_json FROM task_log
+       WHERE task_run_id = ?1 AND level = 'error'
+       ORDER BY created_at DESC, id DESC LIMIT 1",
+      [&run.id],
+      |row| row.get(0),
+    )
+    .expect("terminal safe details should load");
+  let safe_details: Value = serde_json::from_str(&safe_details_json).unwrap();
+  assert_eq!(safe_details["retry_after"], "17");
+  assert_eq!(safe_details["retry_attempts"], "3");
+  assert!(safe_details.get("api_token").is_none());
+  assert!(!safe_details_json.contains("provider-secret"));
+  std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn worker_treats_cancellation_during_an_inflight_request_as_cancelled() {
   let root = std::env::temp_dir().join(format!("worker-inflight-cancel-{}", Uuid::new_v4()));
   create_workspace("执行中取消测试", &root).expect("workspace should be created");
