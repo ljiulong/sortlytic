@@ -230,6 +230,53 @@ fn validates_query_locale_against_source_kind_and_target_region() {
 }
 
 #[test]
+fn validates_plan_query_scripts_for_non_english_regions() {
+  let mut search_request = request("tiktok", "user_search");
+  search_request.params = serde_json::json!({
+    "keyword": "pet supplies",
+    "region": "GB"
+  });
+  let base_plan = generate_account_collection_plan(search_request)
+    .expect("英国搜索计划应生成")
+    .plan_json;
+
+  for (region, locale, invalid_query, valid_query) in [
+    ("JP", "ja-JP", "pet supplies", "ペット用品"),
+    (
+      "RU",
+      "ru-RU",
+      "pet supplies",
+      "товары для домашних животных",
+    ),
+    ("CN", "zh-CN", "pet supplies", "宠物用品"),
+  ] {
+    let mut candidate = base_plan.clone();
+    candidate["region"] = serde_json::json!(region);
+    candidate["query_locale"] = serde_json::json!(locale);
+    candidate["steps"][0]["params"]["keyword"] = serde_json::json!(invalid_query);
+
+    let validation = validate_collection_plan_v4(&candidate);
+    assert!(
+      !validation.valid,
+      "{locale} 最终计划不能接受错误文字脚本的检索词"
+    );
+    assert!(
+      validation.errors.iter().any(|error| error.contains(locale)),
+      "{locale} 的错误信息必须指出目标检索语言：{:?}",
+      validation.errors
+    );
+
+    candidate["steps"][0]["params"]["keyword"] = serde_json::json!(valid_query);
+    let validation = validate_collection_plan_v4(&candidate);
+    assert!(
+      validation.valid,
+      "{locale} 本地文字检索词应通过最终计划校验：{:?}",
+      validation.errors
+    );
+  }
+}
+
+#[test]
 fn douyin_search_reuses_direct_fields_and_deduplicates_extended_profile() {
   let mut request = request("douyin", "user_search");
   request.params = serde_json::json!({ "keyword": "汽车" });

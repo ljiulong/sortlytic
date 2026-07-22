@@ -148,9 +148,13 @@ fn validate_plan_query_locale(
       .and_then(|params| params.get("keyword"))
       .and_then(Value::as_str);
     if keyword.is_some_and(|value| !query_matches_locale_script(expected, value)) {
-      errors.push(format!(
-        "目标地区 {region} 必须使用英文实际检索词；请修改发现步骤的 keyword"
-      ));
+      errors.push(if expected.starts_with("en-") {
+        format!("目标地区 {region} 必须使用英文实际检索词；请修改发现步骤的 keyword")
+      } else {
+        format!(
+          "目标地区 {region} 的实际检索词必须使用 {expected} 对应文字脚本；请修改发现步骤的 keyword"
+        )
+      });
     }
   } else {
     errors.push(format!(

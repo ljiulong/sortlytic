@@ -212,19 +212,24 @@ fn validate_intent_values(intent: &CollectionIntentV1) -> Result<(), Vec<String>
             "目标地区 {region} 的主检索语言必须为 {expected_locale}"
           ));
         }
-        if expected_locale.starts_with("en-")
-          && intent
-            .source_input
-            .as_deref()
-            .is_some_and(|value| !query_matches_locale_script(expected_locale, value))
+        if intent
+          .source_input
+          .as_deref()
+          .is_some_and(|value| !query_matches_locale_script(expected_locale, value))
           && !intent
             .missing_fields
             .iter()
             .any(|field| field == "source_input")
         {
-          errors.push(format!(
-            "目标地区 {region} 必须使用英文实际检索词；专有名词不确定时请把 source_input 加入 missing_fields"
-          ));
+          errors.push(if expected_locale.starts_with("en-") {
+            format!(
+              "目标地区 {region} 必须使用英文实际检索词；专有名词不确定时请把 source_input 加入 missing_fields"
+            )
+          } else {
+            format!(
+              "目标地区 {region} 的实际检索词必须使用 {expected_locale} 对应文字脚本；专有名词不确定时请把 source_input 加入 missing_fields"
+            )
+          });
         }
       } else if !intent
         .missing_fields
@@ -361,6 +366,7 @@ pub(crate) fn primary_query_locale(region: &str) -> Option<&'static str> {
     "GR" => "el-GR",
     "RO" => "ro-RO",
     "HU" => "hu-HU",
+    "BG" => "bg-BG",
     "UA" => "uk-UA",
     "RU" => "ru-RU",
     "TR" => "tr-TR",
@@ -382,18 +388,102 @@ pub(crate) fn primary_query_locale(region: &str) -> Option<&'static str> {
 }
 
 pub(crate) fn query_matches_locale_script(query_locale: &str, value: &str) -> bool {
-  if !query_locale.starts_with("en-") {
-    return true;
-  }
-  let mut has_ascii_letter = false;
-  for character in value.chars() {
-    if character.is_ascii_alphabetic() {
-      has_ascii_letter = true;
-    } else if character.is_alphabetic() {
-      return false;
+  let language = query_locale.split('-').next().unwrap_or_default();
+  match language {
+    "zh" => value.chars().any(is_han),
+    "ja" => value
+      .chars()
+      .any(|character| is_han(character) || is_japanese_kana(character)),
+    "ko" => value.chars().any(is_hangul),
+    "ru" | "uk" | "bg" => value.chars().any(is_cyrillic),
+    "ar" => value.chars().any(is_arabic),
+    language if is_latin_query_language(language) => {
+      value.chars().any(char::is_alphabetic)
+        && !value.chars().any(|character| {
+          is_han(character)
+            || is_japanese_kana(character)
+            || is_hangul(character)
+            || is_cyrillic(character)
+            || is_arabic(character)
+        })
     }
+    _ => true,
   }
-  has_ascii_letter
+}
+
+fn is_latin_query_language(language: &str) -> bool {
+  matches!(
+    language,
+    "en"
+      | "fr"
+      | "de"
+      | "es"
+      | "it"
+      | "pt"
+      | "nl"
+      | "sv"
+      | "no"
+      | "da"
+      | "fi"
+      | "pl"
+      | "cs"
+      | "ro"
+      | "hu"
+      | "tr"
+      | "vi"
+      | "id"
+      | "ms"
+      | "fil"
+  )
+}
+
+fn is_han(character: char) -> bool {
+  matches!(
+    character as u32,
+    0x3400..=0x4DBF
+      | 0x4E00..=0x9FFF
+      | 0xF900..=0xFAFF
+      | 0x20000..=0x2A6DF
+      | 0x2A700..=0x2EE5F
+      | 0x30000..=0x323AF
+  )
+}
+
+fn is_japanese_kana(character: char) -> bool {
+  matches!(
+    character as u32,
+    0x3040..=0x30FF | 0x31F0..=0x31FF | 0xFF66..=0xFF9D
+  )
+}
+
+fn is_hangul(character: char) -> bool {
+  matches!(
+    character as u32,
+    0x1100..=0x11FF
+      | 0x3130..=0x318F
+      | 0xA960..=0xA97F
+      | 0xAC00..=0xD7AF
+      | 0xD7B0..=0xD7FF
+  )
+}
+
+fn is_cyrillic(character: char) -> bool {
+  matches!(
+    character as u32,
+    0x0400..=0x052F | 0x1C80..=0x1C8F | 0x2DE0..=0x2DFF | 0xA640..=0xA69F
+  )
+}
+
+fn is_arabic(character: char) -> bool {
+  matches!(
+    character as u32,
+    0x0600..=0x06FF
+      | 0x0750..=0x077F
+      | 0x0870..=0x089F
+      | 0x08A0..=0x08FF
+      | 0xFB50..=0xFDFF
+      | 0xFE70..=0xFEFF
+  )
 }
 
 fn unique_invalid_values(values: &[String], allowed: &[String]) -> Vec<String> {
@@ -440,7 +530,7 @@ fn nullable_owned_enum(values: &[String]) -> Value {
 mod tests {
   use serde_json::{json, Value};
 
-  use super::{collection_intent_schema, parse_collection_intent};
+  use super::{collection_intent_schema, parse_collection_intent, query_matches_locale_script};
 
   fn valid_intent() -> Value {
     json!({
@@ -543,6 +633,87 @@ mod tests {
     let errors = parse_collection_intent(&unmapped_region)
       .expect_err("没有确定性主语言映射的地区必须进入待确认");
     assert!(errors.join("\n").contains("主检索语言"));
+  }
+
+  #[test]
+  fn validates_search_query_scripts_for_non_english_regions() {
+    for (region, locale, invalid_query, valid_query) in [
+      ("JP", "ja-JP", "pet supplies", "ペット用品"),
+      (
+        "RU",
+        "ru-RU",
+        "pet supplies",
+        "товары для домашних животных",
+      ),
+      ("CN", "zh-CN", "pet supplies", "宠物用品"),
+    ] {
+      let mut invalid = valid_intent();
+      invalid["region_code"] = json!(region);
+      invalid["query_locale"] = json!(locale);
+      invalid["source_input"] = json!(invalid_query);
+
+      let errors =
+        parse_collection_intent(&invalid).expect_err("非英语地区不能接受错误文字脚本的检索词");
+      assert!(
+        errors.iter().any(|error| error.contains(locale)),
+        "{locale} 的错误信息必须指出目标检索语言：{errors:?}"
+      );
+
+      invalid["source_input"] = json!(valid_query);
+      parse_collection_intent(&invalid)
+        .unwrap_or_else(|errors| panic!("{locale} 本地文字检索词应通过：{errors:?}"));
+    }
+  }
+
+  #[test]
+  fn recognizes_supported_query_script_families_and_latin_conflicts() {
+    for (locale, valid, invalid) in [
+      ("zh-CN", "宠物用品", "pet supplies"),
+      ("ja-JP", "ペット用品", "pet supplies"),
+      ("ko-KR", "반려동물 용품", "pet supplies"),
+      ("ru-RU", "товары для животных", "pet supplies"),
+      ("uk-UA", "товари для тварин", "pet supplies"),
+      ("bg-BG", "стоки за домашни любимци", "pet supplies"),
+      ("ar-SA", "مستلزمات الحيوانات الأليفة", "pet supplies"),
+    ] {
+      assert!(
+        query_matches_locale_script(locale, valid),
+        "{locale} 应接受对应文字脚本"
+      );
+      assert!(
+        !query_matches_locale_script(locale, invalid),
+        "{locale} 不应接受纯英文检索词"
+      );
+    }
+
+    for locale in ["en-GB", "fr-FR", "de-DE", "es-ES", "vi-VN"] {
+      assert!(query_matches_locale_script(locale, "café supplies"));
+      for conflict in ["宠物用品", "반려동물 용품", "товары", "مستلزمات"] {
+        assert!(
+          !query_matches_locale_script(locale, conflict),
+          "拉丁语言 {locale} 不应接受明显冲突的文字脚本"
+        );
+      }
+    }
+  }
+
+  #[test]
+  fn direct_identifiers_remain_untranslated_and_skip_query_script_validation() {
+    for source_input in [
+      "@PetBrandUK",
+      "account_123456",
+      "https://www.tiktok.com/@PetBrandUK",
+      "https://xhslink.com/m/3ZSCJZAMz0a",
+    ] {
+      let mut intent = valid_intent();
+      intent["account_source"] = json!("direct_account");
+      intent["source_input"] = json!(source_input);
+      intent["query_locale"] = Value::Null;
+
+      let parsed = parse_collection_intent(&intent)
+        .unwrap_or_else(|errors| panic!("直接来源 {source_input} 必须原样保留：{errors:?}"));
+      assert_eq!(parsed.source_input.as_deref(), Some(source_input));
+    }
   }
 
   #[test]
