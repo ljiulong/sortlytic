@@ -65,6 +65,7 @@ import {
   type SuccessfulNaturalTaskAttempt,
 } from './natural-task-attempt'
 import { describeWorkspaceHealth } from './workspace-health'
+import { workbenchRefetchInterval } from './workbench-refetch-policy'
 
 export {
   mapBackendData,
@@ -73,7 +74,6 @@ export {
 } from './workbench-backend-mapper'
 
 const queryKey = ['workbench-backend']
-const activeTaskRefetchIntervalMs = 2_000
 
 export type CollectionFormPayload = {
   platform: Platform
@@ -231,10 +231,7 @@ export function useWorkbenchBackend() {
     placeholderData: (previousData) => previousData,
     refetchInterval: (query) => {
       const current = query.state.data as BackendWorkbenchData | undefined
-      if (isNaturalParseInProgress(naturalParseState.phase)) return 1_000
-      return current?.tasks.some((task) => ['已排队', '运行中'].includes(task.status))
-        ? activeTaskRefetchIntervalMs
-        : false
+      return workbenchRefetchInterval(current, naturalParseState.phase)
     },
     refetchIntervalInBackground: false,
   })

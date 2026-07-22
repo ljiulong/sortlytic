@@ -1929,6 +1929,23 @@ describe('useWorkbenchBackend 数据边界', () => {
         ),
       },
     })).toBe(false)
+    const persistedParse = mapBackendData(
+      workspace,
+      [{ ...task, status: 'success' }],
+      tikhubRegistryFixture(),
+      1_000,
+    )
+    persistedParse.currentNaturalParseAttempts = [{
+      id: 'attempt-other-instance',
+      task_id: task.id,
+      intent_text: '另一个实例正在解析',
+      parse_status: 'running',
+      parse_phase: 'requesting_ai',
+      error_safe_details_json: {},
+      created_at: '2026-07-21T00:00:00Z',
+      updated_at: '2026-07-21T00:00:01Z',
+    }]
+    expect(refetchInterval?.({ state: { data: persistedParse } })).toBe(1_000)
     expect(options?.refetchIntervalInBackground).toBe(false)
   })
 
