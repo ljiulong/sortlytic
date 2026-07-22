@@ -51,13 +51,26 @@ pub(super) struct RunStep {
   pub(super) dependency_data_type: Option<String>,
 }
 
+#[cfg(test)]
 pub fn execute_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRunView>> {
+  execute_next_task_with_owner(root_path, || Ok(()))
+}
+
+pub(super) fn execute_next_task_with_owner<G>(
+  root_path: impl AsRef<Path>,
+  ensure_owner: G,
+) -> AppResult<Option<TaskRunView>>
+where
+  G: Fn() -> AppResult<()>,
+{
   let root_path = root_path.as_ref();
+  ensure_owner()?;
   let Some(run) = claim_next_task(root_path)? else {
     return Ok(None);
   };
 
-  let result = execute_claimed_run(root_path, &run);
+  let result = execute_claimed_run(root_path, &run, &ensure_owner);
+  ensure_owner()?;
   finalize_claimed_run(root_path, &run, result).map(Some)
 }
 
@@ -90,14 +103,27 @@ fn finalize_claimed_run(
   }
 }
 
-fn execute_claimed_run(root_path: &Path, run: &TaskRunView) -> AppResult<()> {
+fn execute_claimed_run<G>(root_path: &Path, run: &TaskRunView, ensure_owner: &G) -> AppResult<()>
+where
+  G: Fn() -> AppResult<()>,
+{
   let snapshot = load_runtime_snapshot(root_path, &run.id)?;
   let token = load_runtime_token(root_path, &snapshot)?;
   execute_claimed_run_with_guard(
     root_path,
     run,
-    |request| pricing::guard_request(root_path, &run.id, request).map(|_| ()),
-    |request| send_collection_request(Some(snapshot.base_url.clone()), &token, request),
+    |request| {
+      ensure_owner()?;
+      let result = pricing::guard_request(root_path, &run.id, request).map(|_| ());
+      ensure_owner()?;
+      result
+    },
+    |request| {
+      ensure_owner()?;
+      let result = send_collection_request(Some(snapshot.base_url.clone()), &token, request);
+      ensure_owner()?;
+      result
+    },
   )
 }
 
