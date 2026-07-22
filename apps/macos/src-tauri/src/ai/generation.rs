@@ -11,9 +11,17 @@ use super::provider_client::collection_intent_request;
 use super::*;
 use crate::prompts::seed_builtin_prompts;
 use crate::tasks::{
-  normalize_natural_intent_text, save_collection_plan, update_collection_task,
-  SaveCollectionPlanInput, UpdateCollectionTaskInput,
+  get_latest_collection_plan, normalize_natural_intent_text, save_collection_plan_in_transaction,
+  SaveCollectionPlanInput,
 };
+
+const NATURAL_PARSE_LEASE_SECONDS: i64 = 300;
+
+struct AttemptClaim {
+  id: String,
+  base_task_updated_at: String,
+  base_latest_plan_id: Option<String>,
+}
 
 pub fn generate_collection_plan_from_text(
   root_path: impl AsRef<Path>,
@@ -25,7 +33,8 @@ pub fn generate_collection_plan_from_text(
   let _parse_lock = NaturalParseLock::acquire(&root_path, &input.task_id)?;
   let mut connection = open_workspace_connection(&root_path)?;
   let now = Utc::now().to_rfc3339();
-  let attempt_id = acquire_task_intent_attempt(&mut connection, &input.task_id, intent_text, &now)?;
+  let attempt = acquire_task_intent_attempt(&mut connection, &input.task_id, intent_text, &now)?;
+  let attempt_id = attempt.id.as_str();
   preserve_attempt_error(
     seed_builtin_prompts(&root_path),
     &connection,
@@ -152,88 +161,128 @@ pub fn generate_collection_plan_from_text(
     .map(|plan| plan.cost_estimate_json.clone())
     .unwrap_or_else(|| serde_json::json!({}));
 
-  let updated_ai_run = preserve_attempt_error(
-    connection
+  update_task_intent_phase(&connection, &attempt_id, "building_plan", Some(&ai_run_id))?;
+  let missing_fields = parsed_intent
+    .as_ref()
+    .map(|intent| intent.missing_fields.clone())
+    .unwrap_or_default();
+  let final_result = (|| -> AppResult<(Option<String>, String, Vec<String>)> {
+    let transaction = connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)
+      .map_err(database_error)?;
+    let current_baseline = task_parse_baseline(&transaction, &input.task_id)?;
+    let task_was_edited = current_baseline.0 != attempt.base_task_updated_at
+      || current_baseline.1 != attempt.base_latest_plan_id;
+    let mut final_issues = issues.clone();
+    let final_status = if task_was_edited {
+      final_issues.push(
+        "AI 响应返回前任务已被用户编辑；模型结果已保留为待审核候选，不会覆盖用户计划".to_string(),
+      );
+      "needs_review".to_string()
+    } else {
+      validation_status.clone()
+    };
+    let updated_ai_run = transaction
       .execute(
         "UPDATE ai_run
          SET output_json = ?1, schema_valid = ?2, validation_status = ?3,
              input_tokens = ?4, output_tokens = ?5, latency_ms = ?6,
              cost_estimate_json = ?7
-         WHERE id = ?8 AND validation_status = 'running'",
+         WHERE id = ?8 AND validation_status = 'running'
+           AND EXISTS (
+             SELECT 1 FROM task_intent
+             WHERE id = ?9 AND task_id = ?10 AND parse_status = 'running'
+               AND ai_run_id = ?8
+           )",
         params![
           persisted_intent,
           bool_to_i64(schema_valid),
-          validation_status,
+          final_status,
           response.input_tokens,
           response.output_tokens,
           response.latency_ms,
           cost_estimate_json.to_string(),
-          ai_run_id
+          ai_run_id,
+          attempt_id,
+          input.task_id
         ],
       )
-      .map_err(database_error),
-    &connection,
-    &attempt_id,
-    "validating_intent",
-  )?;
-  if updated_ai_run != 1 {
-    return Err(ai_error("AI 运行记录状态已变化，无法保存模型结果"));
-  }
+      .map_err(database_error)?;
+    if updated_ai_run != 1 {
+      return Err(ai_error("自然语言解析所有权已变化，迟到的模型响应不能保存"));
+    }
 
-  update_task_intent_phase(&connection, &attempt_id, "building_plan", Some(&ai_run_id))?;
-  if let Some(platform) = parsed_intent
-    .as_ref()
-    .and_then(|intent| intent.platform.as_ref())
-  {
-    preserve_attempt_error(
-      update_collection_task(
-        &root_path,
-        &input.task_id,
-        UpdateCollectionTaskInput {
-          name: None,
-          platforms: Some(vec![platform.clone()]),
-          data_types: Some(vec!["account".to_string()]),
-        },
-      )
-      .map(|_| ()),
-      &connection,
-      &attempt_id,
-      "building_plan",
+    let plan_id = if task_was_edited {
+      None
+    } else {
+      if let Some(platform) = parsed_intent
+        .as_ref()
+        .and_then(|intent| intent.platform.as_ref())
+      {
+        let changed = transaction
+          .execute(
+            "UPDATE collection_task
+             SET platforms_json = ?1, data_types_json = '[\"account\"]', updated_at = ?2
+             WHERE id = ?3 AND updated_at = ?4
+               AND status IN ('draft', 'waiting_confirmation')",
+            params![
+              serde_json::json!([platform]).to_string(),
+              Utc::now().to_rfc3339(),
+              input.task_id,
+              attempt.base_task_updated_at
+            ],
+          )
+          .map_err(database_error)?;
+        if changed != 1 {
+          return Err(ai_error("任务状态已变化，AI 结果不能覆盖当前编辑"));
+        }
+      }
+      plan_draft
+        .map(|plan_draft| {
+          save_collection_plan_in_transaction(
+            &transaction,
+            SaveCollectionPlanInput {
+              task_id: input.task_id.clone(),
+              source: "ai_generated".to_string(),
+              plan_json: plan_draft.plan_json,
+              validation_status: plan_draft.validation_status,
+              validation_errors_json: Some(plan_draft.validation_errors_json),
+              cost_estimate_json: Some(plan_draft.cost_estimate_json),
+            },
+          )
+        })
+        .transpose()?
+    };
+    update_task_intent_success(
+      &transaction,
+      attempt_id,
+      &final_status,
+      &ai_run_id,
+      &final_issues,
+      &missing_fields,
+      parsed_intent.as_ref(),
     )?;
-  }
-
-  let collection_plan = match plan_draft {
-    Some(plan_draft) => Some(preserve_attempt_error(
-      save_collection_plan(
-        &root_path,
-        SaveCollectionPlanInput {
-          task_id: input.task_id.clone(),
-          source: "ai_generated".to_string(),
-          plan_json: plan_draft.plan_json,
-          validation_status: plan_draft.validation_status,
-          validation_errors_json: Some(plan_draft.validation_errors_json),
-          cost_estimate_json: Some(plan_draft.cost_estimate_json),
+    transaction.commit().map_err(database_error)?;
+    Ok((plan_id, final_status, final_issues))
+  })();
+  let (plan_id, _final_status, issues) = match final_result {
+    Ok(result) => result,
+    Err(error) => {
+      let _ = persist_failed_ai_run(
+        &connection,
+        FailedAiRunInput {
+          ai_run_id: &ai_run_id,
+          attempt_id,
+          error: &error,
+          latency_ms: response.latency_ms,
         },
-      ),
-      &connection,
-      &attempt_id,
-      "building_plan",
-    )?),
-    None => None,
+      );
+      return Err(error);
+    }
   };
-  let missing_fields = parsed_intent
-    .as_ref()
-    .map(|intent| intent.missing_fields.as_slice())
-    .unwrap_or_default();
-  update_task_intent_success(
-    &connection,
-    &attempt_id,
-    &validation_status,
-    &ai_run_id,
-    &issues,
-    missing_fields,
-    parsed_intent.as_ref(),
-  )?;
+  let collection_plan = plan_id
+    .map(|_| get_latest_collection_plan(&root_path, &input.task_id))
+    .transpose()?;
   let ai_run = get_ai_run(&root_path, &ai_run_id)?;
   let runtime_snapshot = get_runtime_snapshot(&connection, &runtime_snapshot_id)?;
 
@@ -251,27 +300,97 @@ fn acquire_task_intent_attempt(
   task_id: &str,
   intent_text: &str,
   claimed_at: &str,
-) -> AppResult<String> {
+) -> AppResult<AttemptClaim> {
   let transaction = connection
     .transaction_with_behavior(TransactionBehavior::Immediate)
     .map_err(database_error)?;
   prepare_task_for_natural_parse(&transaction, task_id)?;
+  let baseline = task_parse_baseline(&transaction, task_id)?;
 
   if let Some(attempt_id) =
     claim_initial_task_intent_attempt(&transaction, task_id, intent_text, claimed_at)?
   {
+    reject_recent_running_attempt(&transaction, task_id, Some(&attempt_id))?;
     super::attempts::interrupt_task_intents(&transaction, task_id, Some(&attempt_id))?;
     transaction.commit().map_err(database_error)?;
-    return Ok(attempt_id);
+    return Ok(AttemptClaim {
+      id: attempt_id,
+      base_task_updated_at: baseline.0,
+      base_latest_plan_id: baseline.1,
+    });
   }
 
+  reject_recent_running_attempt(&transaction, task_id, None)?;
   super::attempts::interrupt_task_intents(&transaction, task_id, None)?;
 
   let attempt_id = Uuid::new_v4().to_string();
   create_task_intent_attempt(&transaction, &attempt_id, task_id, intent_text, claimed_at)?;
   update_task_intent_phase(&transaction, &attempt_id, "requesting_ai", None)?;
   transaction.commit().map_err(database_error)?;
-  Ok(attempt_id)
+  Ok(AttemptClaim {
+    id: attempt_id,
+    base_task_updated_at: baseline.0,
+    base_latest_plan_id: baseline.1,
+  })
+}
+
+fn reject_recent_running_attempt(
+  connection: &Connection,
+  task_id: &str,
+  except_attempt_id: Option<&str>,
+) -> AppResult<()> {
+  let active_attempt = connection
+    .query_row(
+      "SELECT updated_at, ai_run_id FROM task_intent
+       WHERE task_id = ?1 AND parse_status = 'running'
+         AND (?2 IS NULL OR id <> ?2)
+       ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT 1",
+      params![task_id, except_attempt_id],
+      |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+    )
+    .optional()
+    .map_err(database_error)?;
+  let Some((updated_at, ai_run_id)) = active_attempt else {
+    return Ok(());
+  };
+  let recent = ai_run_id.is_some()
+    || chrono::DateTime::parse_from_rfc3339(&updated_at)
+      .map(|value| {
+        value.with_timezone(&Utc)
+          >= Utc::now() - chrono::Duration::seconds(NATURAL_PARSE_LEASE_SECONDS)
+      })
+      .unwrap_or(true);
+  if recent {
+    return Err(
+      AppError::new(
+        AppErrorCode::ModelRequestError,
+        "该任务已有正在进行的自然语言解析，请等待完成后再重试",
+        AppErrorStage::Ai,
+        true,
+      )
+      .with_safe_detail("reason", "natural_parse_database_lease"),
+    );
+  }
+  Ok(())
+}
+
+fn task_parse_baseline(
+  connection: &Connection,
+  task_id: &str,
+) -> AppResult<(String, Option<String>)> {
+  connection
+    .query_row(
+      "SELECT task.updated_at,
+              (SELECT plan.id FROM collection_plan AS plan
+               WHERE plan.task_id = task.id
+               ORDER BY plan.created_at DESC, plan.id DESC LIMIT 1)
+       FROM collection_task AS task WHERE task.id = ?1",
+      params![task_id],
+      |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()
+    .map_err(database_error)?
+    .ok_or_else(|| ai_error("任务不存在"))
 }
 
 pub(super) fn claim_initial_task_intent_attempt(

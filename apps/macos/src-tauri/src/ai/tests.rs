@@ -18,7 +18,8 @@ use crate::api_profiles::{
 use crate::records::list_task_record_counts;
 use crate::tasks::{
   confirm_collection_plan, create_collection_task, create_collection_task_with_initial_intent,
-  enqueue_task, execute_next_task, get_task, list_task_logs, CreateCollectionTaskInput,
+  enqueue_task, execute_next_task, get_latest_collection_plan, get_task, list_task_logs,
+  revise_collection_task, CreateCollectionTaskInput, ReviseCollectionTaskInput,
 };
 use crate::tikhub::test_support::override_tikhub_base_url_for_current_test;
 use crate::workspace::{create_workspace, open_workspace_database, DATABASE_FILE_NAME};
@@ -351,6 +352,19 @@ fn concurrent_natural_generation_allows_only_one_provider_request() {
     "running"
   );
 
+  let parse_lock_path = std::fs::read_dir(root_path.join("temp"))
+    .unwrap()
+    .filter_map(Result::ok)
+    .map(|entry| entry.path())
+    .find(|path| {
+      path
+        .file_name()
+        .is_some_and(|name| name.to_string_lossy().starts_with("natural-parse-"))
+    })
+    .expect("active parse lock file should exist");
+  std::fs::remove_file(parse_lock_path)
+    .expect("the inode replacement regression requires removing the visible lock path");
+
   let second_root = root_path.clone();
   let (second_result_tx, second_result_rx) = mpsc::channel();
   let second = thread::spawn(move || {
@@ -391,6 +405,187 @@ fn concurrent_natural_generation_allows_only_one_provider_request() {
     .unwrap();
   assert_eq!(attempts, 1);
 
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn late_ai_response_does_not_replace_a_user_edited_plan() {
+  let root_path = unique_temp_workspace("ai-late-response-cas");
+  create_workspace("AI 迟到响应冲突测试", &root_path).expect("workspace should be created");
+  let response = serde_json::json!({
+    "choices": [{ "message": { "content": valid_collection_intent().to_string() } }]
+  })
+  .to_string();
+  let listener = TcpListener::bind("127.0.0.1:0").expect("test server should bind");
+  let address = listener.local_addr().unwrap();
+  let (request_started_tx, request_started_rx) = mpsc::channel();
+  let (release_tx, release_rx) = mpsc::channel();
+  let server = thread::spawn(move || {
+    let (mut stream, _) = listener.accept().expect("provider request should arrive");
+    let _ = read_http_request(&mut stream);
+    request_started_tx.send(()).unwrap();
+    release_rx.recv().unwrap();
+    write_json_response(&mut stream, 200, "OK", &response);
+  });
+  configure_active_ai(&root_path, format!("http://{address}"));
+  let intent_text = "采集最近 7 天美国 TikTok 汽车内容，预算 2 美元";
+  let task = create_collection_task_with_initial_intent(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "迟到响应不能覆盖编辑".to_string(),
+      source_type: "natural_language".to_string(),
+      platforms: vec![],
+      data_types: vec![],
+    },
+    Some(intent_text),
+  )
+  .expect("natural task should be created");
+  let generation_root = root_path.clone();
+  let generation_task_id = task.id.clone();
+  let generation = thread::spawn(move || {
+    generate_collection_plan_from_text(
+      generation_root,
+      GenerateCollectionPlanFromTextInput {
+        task_id: generation_task_id,
+        intent_text: intent_text.to_string(),
+        provider_id: None,
+        model_id: None,
+      },
+    )
+  });
+  request_started_rx
+    .recv_timeout(Duration::from_secs(2))
+    .expect("provider request should be in flight");
+  let intent: CollectionIntentV1 = serde_json::from_value(valid_collection_intent()).unwrap();
+  let user_plan = super::intent_plan::build_collection_plan_from_intent(intent)
+    .collection_plan
+    .expect("valid intent should build a plan");
+  let revised = revise_collection_task(
+    &root_path,
+    ReviseCollectionTaskInput {
+      task_id: task.id.clone(),
+      name: "用户刚保存的修订".to_string(),
+      platforms: vec!["tiktok".to_string()],
+      data_types: vec!["account".to_string()],
+      source: "user_edited".to_string(),
+      plan_json: user_plan.plan_json,
+    },
+  )
+  .expect("user edit should save while AI is in flight");
+  assert_eq!(revised.collection_plan.source, "user_edited");
+  release_tx.send(()).unwrap();
+  let result = generation
+    .join()
+    .expect("generation thread should finish")
+    .expect("conflicted AI output should remain reviewable");
+  server.join().expect("provider server should finish");
+
+  assert!(result.collection_plan.is_none());
+  assert!(result.issues.iter().any(|issue| issue.contains("用户编辑")));
+  assert_eq!(
+    get_latest_collection_plan(&root_path, &task.id)
+      .expect("latest plan should remain readable")
+      .source,
+    "user_edited"
+  );
+  let latest_attempt = list_latest_task_intents(&root_path).unwrap().remove(0);
+  assert_eq!(latest_attempt.parse_status, "needs_review");
+  assert_eq!(
+    latest_attempt.error_code.as_deref(),
+    Some("VALIDATION_ERROR")
+  );
+  assert_eq!(result.ai_run.validation_status, "needs_review");
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn final_ai_persistence_rolls_back_task_plan_and_run_together() {
+  let root_path = unique_temp_workspace("ai-final-atomicity");
+  create_workspace("AI 最终提交原子性", &root_path).expect("workspace should be created");
+  let response = serde_json::json!({
+    "choices": [{ "message": { "content": valid_collection_intent().to_string() } }]
+  })
+  .to_string();
+  let (base_url, server) = serve_ai_once(200, response, |_| {});
+  configure_active_ai(&root_path, base_url);
+  let intent_text = "采集最近 7 天美国 TikTok 汽车内容，预算 2 美元";
+  let task = create_collection_task_with_initial_intent(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "最终提交必须原子".to_string(),
+      source_type: "natural_language".to_string(),
+      platforms: vec![],
+      data_types: vec![],
+    },
+    Some(intent_text),
+  )
+  .expect("natural task should be created");
+  let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
+  connection
+    .execute_batch(
+      "CREATE TRIGGER reject_final_intent BEFORE UPDATE OF parse_status ON task_intent
+       WHEN NEW.parse_status IN ('valid', 'needs_review')
+       BEGIN SELECT RAISE(ABORT, 'forced final intent failure'); END;",
+    )
+    .unwrap();
+  drop(connection);
+
+  generate_collection_plan_from_text(
+    &root_path,
+    GenerateCollectionPlanFromTextInput {
+      task_id: task.id.clone(),
+      intent_text: intent_text.to_string(),
+      provider_id: None,
+      model_id: None,
+    },
+  )
+  .expect_err("forced final write failure must roll back the whole model result");
+  server.join().expect("provider server should finish");
+
+  let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
+  let task_state = connection
+    .query_row(
+      "SELECT status, platforms_json, data_types_json FROM collection_task WHERE id = ?1",
+      [&task.id],
+      |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, String>(1)?,
+          row.get::<_, String>(2)?,
+        ))
+      },
+    )
+    .unwrap();
+  assert_eq!(
+    task_state,
+    ("draft".to_string(), "[]".to_string(), "[]".to_string())
+  );
+  assert_eq!(
+    connection
+      .query_row(
+        "SELECT COUNT(*) FROM collection_plan WHERE task_id = ?1",
+        [&task.id],
+        |row| row.get::<_, i64>(0),
+      )
+      .unwrap(),
+    0
+  );
+  let run_status: String = connection
+    .query_row(
+      "SELECT validation_status FROM ai_run WHERE task_id = ?1",
+      [&task.id],
+      |row| row.get(0),
+    )
+    .unwrap();
+  assert_eq!(run_status, "failed");
+  let intent_status: String = connection
+    .query_row(
+      "SELECT parse_status FROM task_intent WHERE task_id = ?1",
+      [&task.id],
+      |row| row.get(0),
+    )
+    .unwrap();
+  assert_eq!(intent_status, "failed");
   std::fs::remove_dir_all(root_path).ok();
 }
 
