@@ -316,6 +316,7 @@ fn update_task_intent_success(
   issues: &[String],
   missing_fields: &[String],
   intent: Option<&CollectionIntentV1>,
+  superseded_by_user_edit: bool,
 ) -> AppResult<()> {
   let now = Utc::now().to_rfc3339();
   if parse_status == "valid" {
@@ -368,6 +369,7 @@ fn update_task_intent_success(
     "issues": safe_issues,
     "missing_fields": safe_missing_fields,
     "intent": safe_intent,
+    "superseded_by_user_edit": superseded_by_user_edit,
   });
   connection
     .execute(

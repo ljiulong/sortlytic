@@ -38,25 +38,25 @@ pub fn generate_collection_plan_from_text(
   preserve_attempt_error(
     seed_builtin_prompts(&root_path),
     &connection,
-    &attempt_id,
+    attempt_id,
     "preparing",
   )?;
   let prompt = preserve_attempt_error(
     active_prompt_version(&connection, "collection_plan_from_text"),
     &connection,
-    &attempt_id,
+    attempt_id,
     "preparing",
   )?;
   let profile = preserve_attempt_error(
     active_ai_profile(&root_path, &input),
     &connection,
-    &attempt_id,
+    attempt_id,
     "preparing",
   )?;
   let runtime_snapshot_id = Uuid::new_v4().to_string();
   let ai_run_id = Uuid::new_v4().to_string();
 
-  update_task_intent_phase(&connection, &attempt_id, "requesting_ai", None)?;
+  update_task_intent_phase(&connection, attempt_id, "requesting_ai", None)?;
   preserve_attempt_error(
     connection
       .execute(
@@ -86,7 +86,7 @@ pub fn generate_collection_plan_from_text(
       .map(|_| ())
       .map_err(database_error),
     &connection,
-    &attempt_id,
+    attempt_id,
     "requesting_ai",
   )?;
 
@@ -108,10 +108,10 @@ pub fn generate_collection_plan_from_text(
       .map(|_| ())
       .map_err(database_error),
     &connection,
-    &attempt_id,
+    attempt_id,
     "requesting_ai",
   )?;
-  update_task_intent_phase(&connection, &attempt_id, "requesting_ai", Some(&ai_run_id))?;
+  update_task_intent_phase(&connection, attempt_id, "requesting_ai", Some(&ai_run_id))?;
 
   let request = collection_intent_request(&prompt.content, intent_text);
   let call_started_at = std::time::Instant::now();
@@ -123,7 +123,7 @@ pub fn generate_collection_plan_from_text(
         &connection,
         FailedAiRunInput {
           ai_run_id: &ai_run_id,
-          attempt_id: &attempt_id,
+          attempt_id,
           error: &error,
           latency_ms,
         },
@@ -131,7 +131,7 @@ pub fn generate_collection_plan_from_text(
       return Err(error);
     }
   };
-  update_task_intent_phase(&connection, &attempt_id, "validating_intent", None)?;
+  update_task_intent_phase(&connection, attempt_id, "validating_intent", None)?;
   let raw_intent = response.output_json;
   let (parsed_intent, plan_draft, issues, schema_valid, validation_status) =
     match parse_collection_intent(&raw_intent) {
@@ -161,7 +161,7 @@ pub fn generate_collection_plan_from_text(
     .map(|plan| plan.cost_estimate_json.clone())
     .unwrap_or_else(|| serde_json::json!({}));
 
-  update_task_intent_phase(&connection, &attempt_id, "building_plan", Some(&ai_run_id))?;
+  update_task_intent_phase(&connection, attempt_id, "building_plan", Some(&ai_run_id))?;
   let missing_fields = parsed_intent
     .as_ref()
     .map(|intent| intent.missing_fields.clone())
@@ -261,6 +261,7 @@ pub fn generate_collection_plan_from_text(
       &final_issues,
       &missing_fields,
       parsed_intent.as_ref(),
+      task_was_edited,
     )?;
     transaction.commit().map_err(database_error)?;
     Ok((plan_id, final_status, final_issues))

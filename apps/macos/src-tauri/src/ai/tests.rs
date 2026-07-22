@@ -460,17 +460,16 @@ fn late_ai_response_does_not_replace_a_user_edited_plan() {
   let user_plan = super::intent_plan::build_collection_plan_from_intent(intent)
     .collection_plan
     .expect("valid intent should build a plan");
-  let revised = revise_collection_task(
-    &root_path,
-    ReviseCollectionTaskInput::user_edited_for_test(
-      task.id.clone(),
-      "用户刚保存的修订",
-      vec!["tiktok".to_string()],
-      vec!["account".to_string()],
-      user_plan.plan_json,
-    ),
-  )
-  .expect("user edit should save while AI is in flight");
+  let mut revision = ReviseCollectionTaskInput::user_edited_for_test(
+    task.id.clone(),
+    "用户刚保存的修订",
+    vec!["tiktok".to_string()],
+    vec!["account".to_string()],
+    user_plan.plan_json,
+  );
+  revision.original_intent = Some("用户修订后的原始需求".to_string());
+  let revised = revise_collection_task(&root_path, revision)
+    .expect("user edit should save while AI is in flight");
   assert_eq!(revised.collection_plan.source, "user_edited");
   release_tx.send(()).unwrap();
   let result = generation
@@ -494,6 +493,15 @@ fn late_ai_response_does_not_replace_a_user_edited_plan() {
     Some("VALIDATION_ERROR")
   );
   assert_eq!(result.ai_run.validation_status, "needs_review");
+  let history = list_task_intents(&root_path, &task.id).unwrap();
+  let late_candidate = history
+    .iter()
+    .find(|attempt| attempt.ai_run_id.as_deref() == Some(result.ai_run.id.as_str()))
+    .expect("late AI candidate should remain auditable");
+  assert_eq!(
+    late_candidate.error_safe_details_json["superseded_by_user_edit"],
+    true
+  );
   std::fs::remove_dir_all(root_path).ok();
 }
 
