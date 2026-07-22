@@ -35,6 +35,7 @@ const BUSINESS_FIELDS: &[&str] = &[
   "record_limit",
   "budget_limit_micros",
 ];
+const MAX_INTENT_DIAGNOSTICS: usize = 16;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -137,21 +138,18 @@ pub(crate) fn parse_collection_intent(value: &Value) -> Result<CollectionIntentV
       ));
     }
   }
-  for field in object.keys() {
-    if !REQUIRED_FIELDS.contains(&field.as_str()) {
-      errors.push(format!(
-        "collection_intent_v1 不允许字段 {field}；端点、步骤和成本必须由后端生成"
-      ));
-    }
+  if object
+    .keys()
+    .any(|field| !REQUIRED_FIELDS.contains(&field.as_str()))
+  {
+    errors.push("collection_intent_v1 不允许额外字段；端点、步骤和成本必须由后端生成".to_string());
   }
   if !errors.is_empty() {
+    errors.truncate(MAX_INTENT_DIAGNOSTICS);
     return Err(errors);
   }
-  let parsed = serde_json::from_value::<CollectionIntentV1>(value.clone()).map_err(|error| {
-    vec![format!(
-      "模型输出不符合 collection_intent_v1 Schema：{error}"
-    )]
-  })?;
+  let parsed = serde_json::from_value::<CollectionIntentV1>(value.clone())
+    .map_err(|_| vec!["模型输出不符合 collection_intent_v1 Schema：字段类型无效".to_string()])?;
   validate_intent_values(&parsed)?;
   Ok(parsed)
 }
@@ -245,10 +243,8 @@ fn validate_intent_values(intent: &CollectionIntentV1) -> Result<(), Vec<String>
     errors.push("直接账号、作品或关系列表来源不得设置 query_locale 或翻译标识".to_string());
   }
   let account_fields = account_field_keys();
-  for field in unique_invalid_values(&intent.selected_fields, &account_fields) {
-    errors.push(format!(
-      "collection_intent_v1.selected_fields 包含未知或重复字段 {field}"
-    ));
+  if contains_invalid_or_duplicate(&intent.selected_fields, &account_fields) {
+    errors.push("collection_intent_v1.selected_fields 包含未知或重复字段".to_string());
   }
   if intent
     .time_range_days
@@ -264,7 +260,7 @@ fn validate_intent_values(intent: &CollectionIntentV1) -> Result<(), Vec<String>
     errors.push("collection_intent_v1.age_range 必须是 0 到 130 的有效闭区间".to_string());
   }
   if let Some(genders) = intent.gender_filter.as_ref() {
-    for gender in unique_invalid_values(
+    if contains_invalid_or_duplicate(
       genders,
       &[
         "male".to_string(),
@@ -272,9 +268,7 @@ fn validate_intent_values(intent: &CollectionIntentV1) -> Result<(), Vec<String>
         "other".to_string(),
       ],
     ) {
-      errors.push(format!(
-        "collection_intent_v1.gender_filter 包含未知或重复值 {gender}"
-      ));
+      errors.push("collection_intent_v1.gender_filter 包含未知或重复值".to_string());
     }
   }
   if intent.record_limit.is_some_and(|value| value <= 0) {
@@ -283,16 +277,14 @@ fn validate_intent_values(intent: &CollectionIntentV1) -> Result<(), Vec<String>
   if intent.budget_limit_micros.is_some_and(|value| value <= 0) {
     errors.push("collection_intent_v1.budget_limit_micros 必须是正整数或 null".to_string());
   }
-  for field in unique_invalid_values(
+  if contains_invalid_or_duplicate(
     &intent.missing_fields,
     &BUSINESS_FIELDS
       .iter()
       .map(|value| (*value).to_string())
       .collect::<Vec<_>>(),
   ) {
-    errors.push(format!(
-      "collection_intent_v1.missing_fields 包含未知或重复字段 {field}"
-    ));
+    errors.push("collection_intent_v1.missing_fields 包含未知或重复字段".to_string());
   }
   if !(0.0..=1.0).contains(&intent.confidence) {
     errors.push("collection_intent_v1.confidence 必须位于 0 到 1 之间".to_string());
@@ -300,6 +292,7 @@ fn validate_intent_values(intent: &CollectionIntentV1) -> Result<(), Vec<String>
   if errors.is_empty() {
     Ok(())
   } else {
+    errors.truncate(MAX_INTENT_DIAGNOSTICS);
     Err(errors)
   }
 }
@@ -486,13 +479,11 @@ fn is_arabic(character: char) -> bool {
   )
 }
 
-fn unique_invalid_values(values: &[String], allowed: &[String]) -> Vec<String> {
+fn contains_invalid_or_duplicate(values: &[String], allowed: &[String]) -> bool {
   let mut seen = BTreeSet::new();
   values
     .iter()
-    .filter(|value| !allowed.contains(value) || !seen.insert((*value).clone()))
-    .cloned()
-    .collect()
+    .any(|value| !allowed.contains(value) || !seen.insert(value))
 }
 
 fn nullable_string() -> Value {
@@ -564,7 +555,8 @@ mod tests {
   #[test]
   fn rejects_execution_fields_and_missing_top_level_fields() {
     let mut intent = valid_intent();
-    intent["endpoint_key"] = json!("tiktok.user_search");
+    let secret = "sk-live-schema-secret-sentinel";
+    intent[secret] = json!("tiktok.user_search");
     intent
       .as_object_mut()
       .expect("对象")
@@ -572,8 +564,33 @@ mod tests {
 
     let errors = parse_collection_intent(&intent).expect_err("越权字段和缺失字段必须被拒绝");
     let message = errors.join("\n");
-    assert!(message.contains("endpoint_key"));
+    assert!(!message.contains(secret), "模型控制的字段名不得进入诊断");
+    assert!(message.contains("额外字段"));
     assert!(message.contains("budget_limit_micros"));
+  }
+
+  #[test]
+  fn schema_diagnostics_never_echo_model_values_and_remain_bounded() {
+    let secret = "sk-live-schema-secret-sentinel";
+    let mut intent = valid_intent();
+    intent["selected_fields"] = json!(["bio", secret]);
+    intent["gender_filter"] = json!([secret]);
+    intent["missing_fields"] = json!([secret]);
+
+    let errors = parse_collection_intent(&intent).expect_err("非法模型值必须被拒绝");
+    assert!(errors.len() <= 4, "诊断类别必须有界：{errors:?}");
+    assert!(
+      errors.iter().all(|error| !error.contains(secret)),
+      "模型控制的数组值不得进入诊断：{errors:?}"
+    );
+
+    let mut unknown_fields = valid_intent();
+    for index in 0..100 {
+      unknown_fields[format!("{secret}-{index}")] = json!(true);
+    }
+    let errors = parse_collection_intent(&unknown_fields).expect_err("额外字段必须被拒绝");
+    assert_eq!(errors.len(), 1, "额外字段不得逐项放大诊断");
+    assert!(!errors.join("\n").contains(secret));
   }
 
   #[test]
