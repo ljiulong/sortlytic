@@ -36,6 +36,8 @@ const BUSINESS_FIELDS: &[&str] = &[
   "budget_limit_micros",
 ];
 const MAX_INTENT_DIAGNOSTICS: usize = 16;
+const MAX_SOURCE_INPUT_CHARS: usize = 2_000;
+const MAX_SOURCE_INPUT_BYTES: usize = 8_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -73,7 +75,10 @@ pub(crate) fn collection_intent_schema() -> Value {
       "schema_version": { "type": "integer", "const": 1 },
       "platform": nullable_enum(&["tiktok", "douyin", "xiaohongshu"]),
       "account_source": nullable_owned_enum(&account_sources),
-      "source_input": nullable_string(),
+      "source_input": {
+        "type": ["string", "null"],
+        "maxLength": MAX_SOURCE_INPUT_CHARS
+      },
       "query_locale": nullable_string(),
       "region_code": nullable_string(),
       "selected_fields": {
@@ -174,12 +179,13 @@ fn validate_intent_values(intent: &CollectionIntentV1) -> Result<(), Vec<String>
   {
     errors.push("collection_intent_v1.account_source 不是受支持的账号来源".to_string());
   }
-  if intent
-    .source_input
-    .as_deref()
-    .is_some_and(|value| value.trim().is_empty())
-  {
-    errors.push("collection_intent_v1.source_input 不能是空字符串".to_string());
+  if let Some(value) = intent.source_input.as_deref() {
+    if value.trim().is_empty() {
+      errors.push("collection_intent_v1.source_input 不能是空字符串".to_string());
+    }
+    if value.chars().count() > MAX_SOURCE_INPUT_CHARS || value.len() > MAX_SOURCE_INPUT_BYTES {
+      errors.push("collection_intent_v1.source_input 超过安全长度上限".to_string());
+    }
   }
   if let Some(region) = intent.region_code.as_deref() {
     if normalize_country_region(Some(region)).as_deref() != Some(region) {
@@ -762,6 +768,10 @@ mod tests {
     let schema = collection_intent_schema();
     assert_eq!(schema["additionalProperties"], json!(false));
     assert_eq!(schema["properties"]["schema_version"]["const"], json!(1));
+    assert_eq!(
+      schema["properties"]["source_input"]["maxLength"],
+      json!(2_000)
+    );
     assert!(schema["properties"].get("endpoint_key").is_none());
     assert!(schema["properties"].get("steps").is_none());
     assert!(schema["properties"].get("cost_estimate").is_none());

@@ -838,6 +838,67 @@ fn invalid_model_intent_does_not_change_existing_task_scope_or_create_a_plan() {
 }
 
 #[test]
+fn oversized_model_source_input_is_not_persisted_or_built_into_a_plan() {
+  let root_path = unique_temp_workspace("ai-oversized-model-source");
+  create_workspace("AI 巨型检索词测试", &root_path).expect("workspace should be created");
+  let mut intent = valid_collection_intent();
+  intent["source_input"] = serde_json::json!("a".repeat(20_000));
+  let response = serde_json::json!({
+    "choices": [{ "message": { "content": intent.to_string() } }]
+  })
+  .to_string();
+  let (base_url, server) = serve_ai_once(200, response, |_| {});
+  configure_active_ai(&root_path, base_url);
+  let task = create_collection_task(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "拒绝巨型模型检索词".to_string(),
+      source_type: "natural_language".to_string(),
+      platforms: vec![],
+      data_types: vec![],
+    },
+  )
+  .expect("task should be created");
+
+  let result = generate_collection_plan_from_text(
+    &root_path,
+    GenerateCollectionPlanFromTextInput {
+      task_id: task.id.clone(),
+      intent_text: "采集美国 TikTok 汽车账号".to_string(),
+      provider_id: None,
+      model_id: None,
+    },
+  )
+  .expect("超限业务字段应保留固定诊断供人工修正");
+  server.join().expect("test server should finish");
+
+  assert!(!result.ai_run.schema_valid);
+  assert_eq!(result.ai_run.validation_status, "needs_review");
+  assert!(result.ai_run.output_json.is_none());
+  assert!(result.collection_plan.is_none());
+  assert!(result
+    .issues
+    .iter()
+    .any(|issue| issue.contains("source_input")));
+  let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
+  let persisted_bytes: i64 = connection
+    .query_row(
+      "SELECT length(COALESCE(run.output_json, ''))
+            + length(COALESCE(intent.error_message, ''))
+            + length(intent.error_safe_details_json)
+       FROM ai_run AS run
+       JOIN task_intent AS intent ON intent.ai_run_id = run.id
+       WHERE run.task_id = ?1",
+      [&task.id],
+      |row| row.get(0),
+    )
+    .unwrap();
+  assert!(persisted_bytes < 4_000, "固定诊断不得复制巨型模型字段");
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn model_cannot_rewrite_a_direct_account_identifier_from_the_original_request() {
   let root_path = unique_temp_workspace("ai-direct-identifier-preservation");
   create_workspace("AI 直接标识保留测试", &root_path).expect("workspace should be created");

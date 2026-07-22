@@ -146,8 +146,7 @@ pub fn generate_collection_plan_from_text(
     };
   let persisted_intent = parsed_intent
     .as_ref()
-    .and_then(|intent| serde_json::to_value(intent).ok())
-    .unwrap_or_else(|| raw_intent.clone());
+    .and_then(|intent| serde_json::to_string(intent).ok());
   let cost_estimate_json = plan_draft
     .as_ref()
     .map(|plan| plan.cost_estimate_json.clone())
@@ -162,7 +161,7 @@ pub fn generate_collection_plan_from_text(
              cost_estimate_json = ?7
          WHERE id = ?8 AND validation_status = 'running'",
         params![
-          persisted_intent.to_string(),
+          persisted_intent,
           bool_to_i64(schema_valid),
           validation_status,
           response.input_tokens,
