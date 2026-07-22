@@ -393,7 +393,9 @@ pub fn list_latest_task_runs(root_path: impl AsRef<Path>) -> AppResult<Vec<TaskR
               run.cost_actual_json, run.plan_id, run.attempt_number, run.claimed_at,
               COALESCE((
                 SELECT log.safe_details_json FROM task_log AS log
-                WHERE log.task_run_id = run.id AND log.level = 'error'
+                WHERE log.task_run_id = run.id
+                  AND ((run.status = 'failed' AND log.level = 'error')
+                    OR (run.status = 'partial_success' AND log.level = 'warning'))
                 ORDER BY log.created_at DESC, log.id DESC LIMIT 1
               ), '{}')
        FROM task_run run
@@ -507,7 +509,9 @@ fn get_task_run(connection: &Connection, run_id: &str) -> AppResult<TaskRunView>
               run.plan_id, run.attempt_number, run.claimed_at,
               COALESCE((
                 SELECT log.safe_details_json FROM task_log AS log
-                WHERE log.task_run_id = run.id AND log.level = 'error'
+                WHERE log.task_run_id = run.id
+                  AND ((run.status = 'failed' AND log.level = 'error')
+                    OR (run.status = 'partial_success' AND log.level = 'warning'))
                 ORDER BY log.created_at DESC, log.id DESC LIMIT 1
               ), '{}')
        FROM task_run AS run

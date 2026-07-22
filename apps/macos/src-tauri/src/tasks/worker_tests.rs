@@ -663,25 +663,67 @@ fn worker_persists_sanitized_terminal_error_details() {
   let run = claim_next_task(&root)
     .expect("worker should claim the task")
     .expect("queued task should exist");
+  let connection = super::open_workspace_connection(&root).expect("database should open");
+  connection
+    .execute(
+      "INSERT INTO collected_account (
+         id, task_run_id, platform, identity_key, username, data_source, collected_at,
+         output_included, created_at, updated_at
+       ) VALUES ('partial-account', ?1, 'tiktok', 'id:partial-account', '预算内结果',
+                 'TikHub API', ?2, 1, ?2, ?2)",
+      rusqlite::params![run.id, "2026-07-21T00:00:00+00:00"],
+    )
+    .expect("partial result should persist");
+  let run_step_id: String = connection
+    .query_row(
+      "SELECT id FROM task_run_step WHERE task_run_id = ?1 ORDER BY created_at, id LIMIT 1",
+      [&run.id],
+      |row| row.get(0),
+    )
+    .expect("run step should exist");
+  connection
+    .execute(
+      "INSERT INTO collection_page_checkpoint (
+         id, task_run_step_id, page_index, idempotency_key, status,
+         request_attempt_count, record_count_received, record_count_persisted,
+         cost_actual_json, requested_at, response_received_at, committed_at,
+         created_at, updated_at
+       ) VALUES (?1, ?2, 0, ?3, 'completed', 1, 1, 1, ?4, ?5, ?5, ?5, ?5, ?5)",
+      rusqlite::params![
+        Uuid::new_v4().to_string(),
+        run_step_id,
+        Uuid::new_v4().to_string(),
+        serde_json::json!({
+          "currency": "USD",
+          "amount_micros": 100_000,
+          "billing_status": "quoted_not_final"
+        })
+        .to_string(),
+        "2026-07-21T00:00:00+00:00"
+      ],
+    )
+    .expect("settled cost evidence should persist");
+  drop(connection);
   let error = AppError::new(
-    AppErrorCode::TikhubRateLimit,
-    "TikHub 暂时触发限流",
+    AppErrorCode::CostLimitError,
+    "TikHub 本次报价将超过任务预算",
     AppErrorStage::Collection,
-    true,
+    false,
   )
   .with_safe_detail("retry_after", "17")
   .with_safe_detail("retry_attempts", "3")
   .with_safe_detail("api_token", "provider-secret");
 
   let failed = finalize_claimed_run(&root, &run, Err(error))
-    .expect("worker should persist a failed terminal state");
+    .expect("worker should atomically persist a partial-success terminal state");
 
-  assert_eq!(failed.status, "failed");
+  assert_eq!(failed.status, "partial_success");
+  assert_eq!(failed.error_safe_details_json["retry_after"], "17");
   let connection = super::open_workspace_connection(&root).expect("database should open");
   let safe_details_json: String = connection
     .query_row(
       "SELECT safe_details_json FROM task_log
-       WHERE task_run_id = ?1 AND level = 'error'
+       WHERE task_run_id = ?1 AND level = 'warning'
        ORDER BY created_at DESC, id DESC LIMIT 1",
       [&run.id],
       |row| row.get(0),

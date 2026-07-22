@@ -450,7 +450,7 @@ fn task_diagnostic_views_return_explicit_unknown_codes_for_legacy_values() {
 }
 
 #[test]
-fn latest_task_runs_include_terminal_error_safe_details_without_n_plus_one_queries() {
+fn latest_task_runs_include_terminal_warning_safe_details_without_n_plus_one_queries() {
   let root_path = unique_temp_workspace("latest-run-safe-details");
   create_workspace("运行错误详情测试", &root_path).expect("workspace should be created");
   let task = create_collection_task(&root_path, create_task_input()).expect("task created");
@@ -461,8 +461,8 @@ fn latest_task_runs_include_terminal_error_safe_details_without_n_plus_one_queri
   connection
     .execute(
       "UPDATE task_run
-       SET status = 'failed', ended_at = ?1, current_stage = '执行失败',
-           error_code = 'TIKHUB_RATE_LIMIT', error_message = 'TikHub 暂时触发限流'
+       SET status = 'partial_success', ended_at = ?1, current_stage = '部分成功',
+           error_code = 'COST_LIMIT_ERROR', error_message = '已按预算停止'
        WHERE id = ?2",
       params![Utc::now().to_rfc3339(), run.id],
     )
@@ -471,7 +471,7 @@ fn latest_task_runs_include_terminal_error_safe_details_without_n_plus_one_queri
     .execute(
       "INSERT INTO task_log (
          id, task_run_id, stage, level, message, safe_details_json, created_at
-       ) VALUES ('terminal-details-log', ?1, '执行失败', 'error', 'TikHub 暂时触发限流',
+       ) VALUES ('terminal-details-log', ?1, '部分成功', 'warning', '已按预算停止',
                  '{\"retry_after\":\"17\",\"retry_attempts\":\"3\"}', ?2)",
       params![run.id, Utc::now().to_rfc3339()],
     )
