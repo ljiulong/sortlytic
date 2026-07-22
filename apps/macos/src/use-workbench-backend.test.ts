@@ -1519,6 +1519,7 @@ describe('mapBackendData', () => {
       error_message: 'TikHub 请求超时',
       retryable: true,
       cost_actual_json: {},
+      error_safe_details_json: { retry_after: '17', retry_attempts: '3' },
     }
     const result = mapBackendData(
       workspace,
@@ -1535,6 +1536,7 @@ describe('mapBackendData', () => {
       currentStageCode: 'PERSISTING_RESULTS',
       errorCode: 'TIKHUB_REQUEST_ERROR',
       errorMessage: 'TikHub 请求超时',
+      safeDetails: { retry_after: '17', retry_attempts: '3' },
       retryable: true,
       startedAt: '2026-07-12T00:01:00Z',
       endedAt: '2026-07-12T00:02:00Z',

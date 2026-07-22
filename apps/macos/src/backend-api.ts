@@ -196,6 +196,7 @@ export type TaskRunView = {
   error_message?: string | null
   retryable: boolean
   cost_actual_json: Record<string, unknown>
+  error_safe_details_json: Record<string, unknown>
 }
 
 export type NaturalParseAttemptView = {
