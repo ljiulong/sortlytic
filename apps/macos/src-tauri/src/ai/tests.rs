@@ -488,9 +488,11 @@ fn late_ai_response_does_not_replace_a_user_edited_plan() {
   );
   let latest_attempt = list_latest_task_intents(&root_path).unwrap().remove(0);
   assert_eq!(latest_attempt.parse_status, "needs_review");
+  assert_eq!(latest_attempt.intent_text, "用户修订后的原始需求");
+  assert!(latest_attempt.ai_run_id.is_none());
   assert_eq!(
-    latest_attempt.error_code.as_deref(),
-    Some("VALIDATION_ERROR")
+    latest_attempt.error_safe_details_json["source"],
+    "user_edited"
   );
   assert_eq!(result.ai_run.validation_status, "needs_review");
   let history = list_task_intents(&root_path, &task.id).unwrap();

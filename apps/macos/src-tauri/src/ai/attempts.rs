@@ -44,6 +44,17 @@ pub fn list_latest_task_intents(
                   ORDER BY intent.updated_at DESC, intent.created_at DESC, intent.id DESC
                 ) AS attempt_rank
          FROM task_intent AS intent
+         WHERE CASE
+           WHEN json_valid(intent.error_safe_details_json)
+             THEN COALESCE(
+               json_extract(
+                 intent.error_safe_details_json,
+                 '$.superseded_by_user_edit'
+               ),
+               0
+             )
+           ELSE 0
+         END != 1
        )
        SELECT ranked.id, ranked.task_id, ranked.intent_text, ranked.language,
               ranked.parse_status, ranked.parse_phase, ranked.ai_run_id,
