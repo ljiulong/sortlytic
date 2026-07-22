@@ -65,7 +65,8 @@ pub fn generate_collection_plan_from_text(
             "structured_output": true,
             "schema_enforced_locally": true,
             "prompt_content_hash": prompt.content_hash,
-            "provider_type": provider_type_name(profile.config.provider_type)
+            "provider_type": provider_type_name(profile.config.provider_type),
+            "profile_name": profile.profile_name
           })
           .to_string(),
           now
@@ -78,6 +79,29 @@ pub fn generate_collection_plan_from_text(
     "requesting_ai",
   )?;
 
+  preserve_attempt_error(
+    connection
+      .execute(
+        "INSERT INTO ai_run (
+          id, task_id, runtime_snapshot_id, run_type, input_summary, schema_valid,
+          validation_status, retry_count, cost_estimate_json, created_at
+        ) VALUES (?1, ?2, ?3, 'collection_intent_generation', ?4, 0, 'running', 0, '{}', ?5)",
+        params![
+          ai_run_id,
+          input.task_id,
+          runtime_snapshot_id,
+          intent_text,
+          now
+        ],
+      )
+      .map(|_| ())
+      .map_err(database_error),
+    &connection,
+    &attempt_id,
+    "requesting_ai",
+  )?;
+  update_task_intent_phase(&connection, &attempt_id, "requesting_ai", Some(&ai_run_id))?;
+
   let request = collection_intent_request(&prompt.content, intent_text);
   let call_started_at = std::time::Instant::now();
   let response = match call_model_for_intent(&profile.config, &request) {
@@ -89,12 +113,8 @@ pub fn generate_collection_plan_from_text(
         FailedAiRunInput {
           ai_run_id: &ai_run_id,
           attempt_id: &attempt_id,
-          task_id: &input.task_id,
-          runtime_snapshot_id: &runtime_snapshot_id,
-          intent_text,
           error: &error,
           latency_ms,
-          created_at: &now,
         },
       )?;
       return Err(error);
@@ -131,35 +151,33 @@ pub fn generate_collection_plan_from_text(
     .map(|plan| plan.cost_estimate_json.clone())
     .unwrap_or_else(|| serde_json::json!({}));
 
-  preserve_attempt_error(
+  let updated_ai_run = preserve_attempt_error(
     connection
       .execute(
-      "INSERT INTO ai_run (
-        id, task_id, runtime_snapshot_id, run_type, input_summary, output_json, schema_valid,
-        validation_status, input_tokens, output_tokens, latency_ms, retry_count,
-        cost_estimate_json, created_at
-      ) VALUES (?1, ?2, ?3, 'collection_intent_generation', ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, ?11, ?12)",
-      params![
-        ai_run_id,
-        input.task_id,
-        runtime_snapshot_id,
-        intent_text,
-        persisted_intent.to_string(),
-        bool_to_i64(schema_valid),
-        validation_status,
-        response.input_tokens,
-        response.output_tokens,
-        response.latency_ms,
-        cost_estimate_json.to_string(),
-        now
-      ],
+        "UPDATE ai_run
+         SET output_json = ?1, schema_valid = ?2, validation_status = ?3,
+             input_tokens = ?4, output_tokens = ?5, latency_ms = ?6,
+             cost_estimate_json = ?7
+         WHERE id = ?8 AND validation_status = 'running'",
+        params![
+          persisted_intent.to_string(),
+          bool_to_i64(schema_valid),
+          validation_status,
+          response.input_tokens,
+          response.output_tokens,
+          response.latency_ms,
+          cost_estimate_json.to_string(),
+          ai_run_id
+        ],
       )
-      .map(|_| ())
       .map_err(database_error),
     &connection,
     &attempt_id,
     "validating_intent",
   )?;
+  if updated_ai_run != 1 {
+    return Err(ai_error("AI 运行记录状态已变化，无法保存模型结果"));
+  }
 
   update_task_intent_phase(&connection, &attempt_id, "building_plan", Some(&ai_run_id))?;
   if let Some(platform) = parsed_intent

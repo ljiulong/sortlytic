@@ -229,6 +229,7 @@ fn active_ai_profile(
   }
   Ok(ResolvedAiProfile {
     profile_id: profile.id.clone(),
+    profile_name: redact_sensitive_text(&profile.name),
     config: ProviderConfig {
       provider_type: profile.provider_type,
       api_format: profile.api_format,
@@ -244,25 +245,23 @@ fn persist_failed_ai_run(connection: &Connection, input: FailedAiRunInput<'_>) -
     .ok()
     .and_then(|value| value.as_str().map(ToString::to_string))
     .unwrap_or_else(|| "MODEL_PROTOCOL_ERROR".to_string());
-  connection
+  let changed = connection
     .execute(
-      "INSERT INTO ai_run (
-        id, task_id, runtime_snapshot_id, run_type, input_summary, schema_valid,
-        validation_status, error_code, error_message, latency_ms, retry_count,
-        cost_estimate_json, created_at
-      ) VALUES (?1, ?2, ?3, 'collection_intent_generation', ?4, 0, 'failed', ?5, ?6, ?7, 0, '{}', ?8)",
+      "UPDATE ai_run
+       SET schema_valid = 0, validation_status = 'failed', error_code = ?1,
+           error_message = ?2, latency_ms = ?3
+       WHERE id = ?4 AND validation_status = 'running'",
       params![
-        input.ai_run_id,
-        input.task_id,
-        input.runtime_snapshot_id,
-        input.intent_text,
         error_code,
         input.error.message,
         input.latency_ms,
-        input.created_at
+        input.ai_run_id
       ],
     )
     .map_err(database_error)?;
+  if changed != 1 {
+    return Err(ai_error("AI 运行记录状态已变化，无法保存失败结果"));
+  }
   update_task_intent_failure(
     connection,
     input.attempt_id,
@@ -646,18 +645,15 @@ struct ActivePromptVersion {
 #[derive(Debug)]
 struct ResolvedAiProfile {
   profile_id: String,
+  profile_name: String,
   config: ProviderConfig,
 }
 
 struct FailedAiRunInput<'a> {
   ai_run_id: &'a str,
   attempt_id: &'a str,
-  task_id: &'a str,
-  runtime_snapshot_id: &'a str,
-  intent_text: &'a str,
   error: &'a AppError,
   latency_ms: i64,
-  created_at: &'a str,
 }
 
 #[cfg(test)]

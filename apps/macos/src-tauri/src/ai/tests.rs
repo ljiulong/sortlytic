@@ -307,6 +307,30 @@ fn concurrent_natural_generation_allows_only_one_provider_request() {
     .recv_timeout(Duration::from_secs(2))
     .expect("first provider request should start");
 
+  let running_attempts = list_latest_task_intents(&root_path)
+    .expect("running attempt should be visible while the provider response is blocked");
+  assert_eq!(running_attempts.len(), 1);
+  assert_eq!(running_attempts[0].parse_status, "running");
+  assert_eq!(
+    running_attempts[0].parse_phase.as_deref(),
+    Some("requesting_ai")
+  );
+  assert!(running_attempts[0].ai_run_id.is_some());
+  assert!(running_attempts[0].provider_id.is_some());
+  assert_eq!(
+    running_attempts[0].model_id.as_deref(),
+    Some("deepseek-test")
+  );
+  let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
+  let running_ai_runs = connection
+    .query_row(
+      "SELECT COUNT(*), MAX(validation_status) FROM ai_run WHERE task_id = ?1",
+      [&task.id],
+      |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+    )
+    .unwrap();
+  assert_eq!(running_ai_runs, (1, "running".to_string()));
+
   let second_root = root_path.clone();
   let (second_result_tx, second_result_rx) = mpsc::channel();
   let second = thread::spawn(move || {
