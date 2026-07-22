@@ -105,6 +105,53 @@ describe('task edit draft mapping', () => {
     expect(draft.parseProblem).toBeUndefined()
   })
 
+  it('keeps a user plan authoritative when a superseded AI candidate arrives later', () => {
+    const draft = createTaskEditDraft(
+      task({ source_type: 'natural_language', status: 'waiting_confirmation' }),
+      plan({
+        platforms: ['tiktok'],
+        account_source: 'user_search',
+        query_locale: 'en-GB',
+        region: 'GB',
+        time_range: '30',
+        record_limit: 10,
+        budget_limit: { amount_micros: 100_000 },
+        steps: [{ params: { keyword: 'user saved pets' } }],
+      }),
+      attempt({
+        parse_status: 'needs_review',
+        updated_at: '2026-07-20T00:03:00Z',
+        error_safe_details_json: {
+          superseded_by_user_edit: true,
+          issues: ['迟到候选不得覆盖用户计划'],
+        },
+      }),
+      intent({
+        platform: 'xiaohongshu',
+        account_source: 'keyword_search',
+        source_input: '迟到模型检索词',
+        query_locale: 'zh-CN',
+        region_code: 'CN',
+        time_range_days: 7,
+        record_limit: 99,
+        budget_limit_micros: 900_000,
+      }),
+    )
+
+    expect(draft).toMatchObject({
+      platform: 'tiktok',
+      accountSource: 'user_search',
+      sourceInput: 'user saved pets',
+      queryLocale: 'en-GB',
+      regionCode: 'GB',
+      timeRangeDays: '30',
+      recordLimit: 10,
+      budgetLimitMicros: 100_000,
+    })
+    expect(draft.validationIssues).not.toContain('迟到候选不得覆盖用户计划')
+    expect(draft.parseProblem).toBeUndefined()
+  })
+
   it('keeps direct identifiers unchanged and supports legacy plan fields', () => {
     const directUrl = 'https://www.tiktok.com/@PetBrandUK'
     const draft = createTaskEditDraft(

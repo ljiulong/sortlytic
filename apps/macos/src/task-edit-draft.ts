@@ -44,8 +44,14 @@ export function createTaskEditDraft(
   const taskPlatforms = stringArray(task.platforms_json)
   const selectedFields = stringArray(planJson?.selected_fields)
   const planMissingFields = stringArray(planJson?.missing_fields)
-  const intentMissingFields = intent?.missing_fields ?? []
-  const currentAttempt = attempt && !attemptWasSuperseded(task, attempt) ? attempt : undefined
+  const supersededByUserEdit = attempt?.error_safe_details_json.superseded_by_user_edit === true
+  const currentIntent = supersededByUserEdit ? undefined : intent
+  const intentMissingFields = currentIntent?.missing_fields ?? []
+  const currentAttempt = attempt
+    && !supersededByUserEdit
+    && !attemptWasSuperseded(task, attempt)
+    ? attempt
+    : undefined
   const parseFailed = currentAttempt
     && ['failed', 'interrupted'].includes(currentAttempt.parse_status)
   const needsReview = currentAttempt?.parse_status === 'needs_review'
@@ -65,17 +71,21 @@ export function createTaskEditDraft(
       ? 'natural_language'
       : 'form',
     originalIntent: attempt?.intent_text ?? '',
-    platform: intent?.platform ?? planPlatforms[0] ?? taskPlatforms[0] ?? '',
-    accountSource: intent?.account_source ?? stringValue(planJson?.account_source) ?? '',
-    sourceInput: intent?.source_input ?? sourceInputFromPlan(planJson) ?? '',
-    queryLocale: intent?.query_locale ?? stringValue(planJson?.query_locale) ?? '',
-    regionCode: intent?.region_code ?? regionFromPlan(planJson?.region),
-    timeRangeDays: intent?.time_range_days?.toString() ?? timeRangeFromPlan(planJson?.time_range),
-    recordLimit: intent?.record_limit ?? positiveInteger(planJson?.record_limit),
-    budgetLimitMicros: intent?.budget_limit_micros ?? budgetFromPlan(planJson?.budget_limit),
-    selectedFields: selectedFields.length > 0 ? selectedFields : intent?.selected_fields ?? [],
-    ageRange: intent?.age_range ?? ageRangeFromPlan(planJson?.age_range),
-    genderFilter: normalizeGenders(intent?.gender_filter ?? planJson?.gender_filter),
+    platform: planPlatforms[0] ?? currentIntent?.platform ?? taskPlatforms[0] ?? '',
+    accountSource: stringValue(planJson?.account_source) ?? currentIntent?.account_source ?? '',
+    sourceInput: sourceInputFromPlan(planJson) ?? currentIntent?.source_input ?? '',
+    queryLocale: stringValue(planJson?.query_locale) ?? currentIntent?.query_locale ?? '',
+    regionCode: regionFromPlan(planJson?.region) || currentIntent?.region_code || '',
+    timeRangeDays: timeRangeFromPlan(planJson?.time_range)
+      || currentIntent?.time_range_days?.toString()
+      || '',
+    recordLimit: positiveInteger(planJson?.record_limit) ?? currentIntent?.record_limit ?? undefined,
+    budgetLimitMicros: budgetFromPlan(planJson?.budget_limit)
+      ?? currentIntent?.budget_limit_micros
+      ?? undefined,
+    selectedFields: selectedFields.length > 0 ? selectedFields : currentIntent?.selected_fields ?? [],
+    ageRange: ageRangeFromPlan(planJson?.age_range) ?? currentIntent?.age_range ?? undefined,
+    genderFilter: normalizeGenders(planJson?.gender_filter ?? currentIntent?.gender_filter),
     schemaVersion: plan?.schema_version,
     planJson,
     validationIssues: [...new Set([
