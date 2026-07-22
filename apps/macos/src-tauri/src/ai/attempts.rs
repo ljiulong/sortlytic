@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use chrono::Utc;
-use rusqlite::{params, Connection, Row};
+use rusqlite::{params, Connection, Row, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -100,7 +100,7 @@ pub fn list_task_intents(
 
 pub(crate) fn mark_interrupted_task_intents(root_path: impl AsRef<Path>) -> AppResult<usize> {
   let root_path = root_path.as_ref();
-  let connection = open_connection(root_path)?;
+  let mut connection = open_connection(root_path)?;
   let task_ids = {
     let mut statement = connection
       .prepare("SELECT DISTINCT task_id FROM task_intent WHERE parse_status = 'running'")
@@ -116,7 +116,11 @@ pub(crate) fn mark_interrupted_task_intents(root_path: impl AsRef<Path>) -> AppR
   for task_id in task_ids {
     match NaturalParseLock::acquire(root_path, &task_id) {
       Ok(_lock) => {
-        interrupted += interrupt_task_intents(&connection, &task_id, None)?;
+        let transaction = connection
+          .transaction_with_behavior(TransactionBehavior::Immediate)
+          .map_err(database_error)?;
+        interrupted += interrupt_task_intents(&transaction, &task_id, None)?;
+        transaction.commit().map_err(database_error)?;
       }
       Err(error) if is_active_parse_lock(&error) => {}
       Err(error) => return Err(error),
@@ -130,6 +134,22 @@ pub(crate) fn interrupt_task_intents(
   task_id: &str,
   except_attempt_id: Option<&str>,
 ) -> AppResult<usize> {
+  let now = Utc::now().to_rfc3339();
+  connection
+    .execute(
+      "UPDATE ai_run
+       SET schema_valid = 0, validation_status = 'failed',
+           error_code = 'AI_PARSE_INTERRUPTED',
+           error_message = '上次自然语言解析在应用关闭前未完成，请重新解析'
+       WHERE validation_status = 'running' AND id IN (
+         SELECT ai_run_id FROM task_intent
+         WHERE task_id = ?1 AND parse_status = 'running'
+           AND ai_run_id IS NOT NULL
+           AND (?2 IS NULL OR id <> ?2)
+       )",
+      params![task_id, except_attempt_id],
+    )
+    .map_err(database_error)?;
   connection
     .execute(
       "UPDATE task_intent
@@ -140,7 +160,7 @@ pub(crate) fn interrupt_task_intents(
            updated_at = ?1
        WHERE task_id = ?2 AND parse_status = 'running'
          AND (?3 IS NULL OR id <> ?3)",
-      params![Utc::now().to_rfc3339(), task_id, except_attempt_id],
+      params![now, task_id, except_attempt_id],
     )
     .map_err(database_error)
 }
@@ -195,6 +215,7 @@ mod tests {
   use uuid::Uuid;
 
   use super::*;
+  use crate::prompts::seed_builtin_prompts;
   use crate::tasks::{create_collection_task, CreateCollectionTaskInput};
   use crate::workspace::create_workspace;
 
@@ -239,6 +260,7 @@ mod tests {
         )
         .unwrap();
     }
+    insert_running_ai_run(&root, &task.id, "intent-new");
     drop(connection);
 
     assert_eq!(mark_interrupted_task_intents(&root).unwrap(), 1);
@@ -261,6 +283,23 @@ mod tests {
     assert_eq!(history[0].id, "intent-new");
     assert_eq!(history[1].id, "intent-old");
     assert_eq!(history[1].parse_status, "failed");
+    let connection = open_connection(&root).unwrap();
+    let ai_run = connection
+      .query_row(
+        "SELECT validation_status, error_code, error_message FROM ai_run WHERE id = 'run-active'",
+        [],
+        |row| {
+          Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+          ))
+        },
+      )
+      .unwrap();
+    assert_eq!(ai_run.0, "failed");
+    assert_eq!(ai_run.1.as_deref(), Some("AI_PARSE_INTERRUPTED"));
+    assert!(ai_run.2.is_some_and(|message| message.contains("应用关闭")));
 
     fs::remove_dir_all(root).ok();
   }
@@ -291,6 +330,7 @@ mod tests {
         [&task.id],
       )
       .unwrap();
+    insert_running_ai_run(&root, &task.id, "intent-fresh");
     drop(connection);
     let active_lock = super::super::parse_lock::NaturalParseLock::acquire(&root, &task.id).unwrap();
 
@@ -298,6 +338,16 @@ mod tests {
     let attempt = list_latest_task_intents(&root).unwrap().remove(0);
     assert_eq!(attempt.parse_status, "running");
     assert_eq!(attempt.parse_phase.as_deref(), Some("requesting_ai"));
+    let connection = open_connection(&root).unwrap();
+    let ai_status: String = connection
+      .query_row(
+        "SELECT validation_status FROM ai_run WHERE id = 'run-active'",
+        [],
+        |row| row.get(0),
+      )
+      .unwrap();
+    assert_eq!(ai_status, "running");
+    drop(connection);
 
     drop(active_lock);
     assert_eq!(mark_interrupted_task_intents(&root).unwrap(), 1);
@@ -307,5 +357,42 @@ mod tests {
     );
 
     fs::remove_dir_all(root).ok();
+  }
+
+  fn insert_running_ai_run(root: &Path, task_id: &str, attempt_id: &str) {
+    seed_builtin_prompts(root).unwrap();
+    let connection = open_connection(root).unwrap();
+    let prompt_id: String = connection
+      .query_row(
+        "SELECT id FROM prompt_version ORDER BY created_at LIMIT 1",
+        [],
+        |row| row.get(0),
+      )
+      .unwrap();
+    connection
+      .execute(
+        "INSERT INTO runtime_snapshot (
+           id, task_id, provider_id, model_id, api_format, base_url_type,
+           prompt_version_id, output_schema_id, capabilities_json, config_source, created_at
+         ) VALUES ('snapshot-active', ?1, 'provider', 'model', 'openai_compatible',
+                   'custom', ?2, 'collection_intent_v1', '{}', 'test', ?3)",
+        params![task_id, prompt_id, Utc::now().to_rfc3339()],
+      )
+      .unwrap();
+    connection
+      .execute(
+        "INSERT INTO ai_run (
+           id, task_id, runtime_snapshot_id, run_type, validation_status, created_at
+         ) VALUES ('run-active', ?1, 'snapshot-active',
+                   'collection_intent_generation', 'running', ?2)",
+        params![task_id, Utc::now().to_rfc3339()],
+      )
+      .unwrap();
+    connection
+      .execute(
+        "UPDATE task_intent SET ai_run_id = 'run-active' WHERE id = ?1",
+        [attempt_id],
+      )
+      .unwrap();
   }
 }
