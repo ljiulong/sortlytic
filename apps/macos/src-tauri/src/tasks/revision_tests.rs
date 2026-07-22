@@ -207,6 +207,39 @@ fn copied_natural_language_tasks_keep_the_latest_original_request() {
 }
 
 #[test]
+fn natural_language_revision_persists_the_edited_original_request() {
+  let root_path = workspace("revise-natural-language-intent");
+  let original = "用中文查找英国 TikTok 宠物用品账号";
+  let edited = "用中文查找英国 TikTok 宠物食品账号，最多 20 个";
+  let task = create_collection_task_with_initial_intent(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "英国宠物用品账号".to_string(),
+      source_type: "natural_language".to_string(),
+      platforms: vec![],
+      data_types: vec![],
+    },
+    Some(original),
+  )
+  .expect("natural-language task should be created");
+  let mut serialized =
+    serde_json::to_value(revise_input(&task.id, "英国宠物食品账号", 20, 1)).unwrap();
+  serialized["original_intent"] = serde_json::json!(edited);
+  let input: ReviseCollectionTaskInput = serde_json::from_value(serialized).unwrap();
+
+  revise_collection_task(&root_path, input).expect("natural-language revision should save");
+
+  let attempts = crate::ai::list_task_intents(&root_path, &task.id).unwrap();
+  assert_eq!(attempts.len(), 2);
+  assert_eq!(attempts[0].intent_text, edited);
+  assert_eq!(attempts[0].parse_status, "needs_review");
+  assert_eq!(attempts[0].ai_run_id, None);
+  assert_eq!(attempts[0].error_safe_details_json["source"], "user_edited");
+  assert_eq!(attempts[1].intent_text, original);
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn old_runs_remain_bound_to_the_plan_that_actually_ran() {
   let root_path = workspace("revise-run-binding");
   let task = create_collection_task(&root_path, task_input()).expect("task created");

@@ -6,9 +6,9 @@ use uuid::Uuid;
 
 use super::plans::{latest_plan_for_task, save_collection_plan_in_transaction};
 use super::{
-  database_error, get_task_by_id, json_array, normalize_required, normalize_string_list,
-  open_workspace_connection, task_error, write_task_audit_log, ReviseCollectionTaskInput,
-  RevisedCollectionTaskView, SaveCollectionPlanInput,
+  database_error, get_task_by_id, json_array, normalize_natural_intent_text, normalize_required,
+  normalize_string_list, open_workspace_connection, task_error, write_task_audit_log,
+  ReviseCollectionTaskInput, RevisedCollectionTaskView, SaveCollectionPlanInput,
 };
 use crate::domain::AppResult;
 
@@ -41,6 +41,14 @@ pub fn revise_collection_task(
   if input.source.trim() != "user_edited" {
     return Err(task_error("任务修订的计划来源必须为 user_edited"));
   }
+  let edited_intent = match (
+    current.source_type.as_str(),
+    input.original_intent.as_deref(),
+  ) {
+    ("natural_language", Some(intent)) => Some(normalize_natural_intent_text(intent)?),
+    (_, None) => None,
+    (_, Some(_)) => return Err(task_error("只有自然语言任务可以修改原始需求")),
+  };
 
   let name = normalize_required("任务名称", &input.name)?;
   let platforms = normalize_string_list("平台", input.platforms, false)?;
@@ -89,7 +97,15 @@ pub fn revise_collection_task(
   };
 
   if current.source_type == "natural_language" {
-    if let Some(source_task_id) = copied_from_task_id.as_deref() {
+    if let Some(intent_text) = edited_intent.as_deref() {
+      persist_user_edited_intent(
+        &transaction,
+        &target_task_id,
+        intent_text,
+        copied_from_task_id.as_deref(),
+        &now,
+      )?;
+    } else if let Some(source_task_id) = copied_from_task_id.as_deref() {
       copy_latest_natural_language_intent(&transaction, source_task_id, &target_task_id, &now)?;
     }
   }
@@ -123,6 +139,39 @@ pub fn revise_collection_task(
     collection_plan,
     copied_from_task_id,
   })
+}
+
+fn persist_user_edited_intent(
+  transaction: &Transaction<'_>,
+  task_id: &str,
+  intent_text: &str,
+  copied_from_task_id: Option<&str>,
+  now: &str,
+) -> AppResult<()> {
+  let safe_details = serde_json::json!({
+    "source": "user_edited",
+    "copied_from_task_id": copied_from_task_id,
+  });
+  transaction
+    .execute(
+      "INSERT INTO task_intent (
+         id, task_id, intent_text, language, parse_status, parse_phase,
+         ai_run_id, error_code, error_message, retryable,
+         error_safe_details_json, created_at, updated_at
+       ) VALUES (?1, ?2, ?3, 'zh-CN', 'needs_review', 'needs_review', NULL,
+                 'VALIDATION_ERROR',
+                 '原始自然语言需求已由用户编辑；如需更新 AI 解析结果，请点击“重新解析”',
+                 0, ?4, ?5, ?5)",
+      params![
+        Uuid::new_v4().to_string(),
+        task_id,
+        intent_text,
+        safe_details.to_string(),
+        now
+      ],
+    )
+    .map(|_| ())
+    .map_err(database_error)
 }
 
 fn copy_latest_natural_language_intent(

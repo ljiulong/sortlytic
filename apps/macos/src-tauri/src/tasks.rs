@@ -63,6 +63,8 @@ pub struct ReviseCollectionTaskInput {
   pub name: String,
   pub platforms: Vec<String>,
   pub data_types: Vec<String>,
+  #[serde(default)]
+  pub original_intent: Option<String>,
   pub source: String,
   pub plan_json: Value,
 }
