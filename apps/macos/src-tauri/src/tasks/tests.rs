@@ -489,6 +489,99 @@ fn latest_task_runs_include_terminal_warning_safe_details_without_n_plus_one_que
 }
 
 #[test]
+fn latest_task_runs_follow_monotonic_sequence_when_the_clock_moves_backwards() {
+  let root_path = unique_temp_workspace("latest-run-monotonic-sequence");
+  create_workspace("运行单调序号测试", &root_path).expect("workspace should be created");
+  let task = create_collection_task(&root_path, create_task_input()).expect("task created");
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  connection
+    .execute(
+      "INSERT INTO task_run (id, task_id, status, started_at)
+       VALUES ('run-before-clock-change', ?1, 'failed', '2026-07-21T02:00:00Z')",
+      [&task.id],
+    )
+    .unwrap();
+  connection
+    .execute(
+      "INSERT INTO task_run (id, task_id, status, started_at)
+       VALUES ('run-after-clock-change', ?1, 'failed', '2026-07-21T01:00:00Z')",
+      [&task.id],
+    )
+    .unwrap();
+  drop(connection);
+
+  let latest_runs = list_latest_task_runs(&root_path).expect("latest runs should list");
+
+  assert_eq!(latest_runs.len(), 1);
+  assert_eq!(latest_runs[0].id, "run-after-clock-change");
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
+fn enqueue_and_retry_persist_monotonic_run_sequences() {
+  let root_path = unique_temp_workspace("persist-monotonic-run-sequence");
+  create_workspace("运行序号写入测试", &root_path).expect("workspace should be created");
+  let task = create_collection_task(&root_path, create_task_input()).expect("task created");
+  let plan = save_collection_plan(&root_path, plan_input(&task.id)).expect("plan saved");
+  confirm_collection_plan(&root_path, &task.id, &plan.id).expect("plan confirmed");
+  let first = enqueue_task(&root_path, &task.id).expect("first run should enqueue");
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  connection
+    .execute(
+      "UPDATE task_run SET status = 'failed', retryable = 1 WHERE id = ?1",
+      [&first.id],
+    )
+    .unwrap();
+  connection
+    .execute(
+      "UPDATE collection_task SET status = 'failed' WHERE id = ?1",
+      [&task.id],
+    )
+    .unwrap();
+  drop(connection);
+
+  let second = retry_task(&root_path, &task.id, None).expect("retry should enqueue");
+  let connection = open_workspace_connection(&root_path).expect("database should reopen");
+  connection
+    .execute(
+      "UPDATE task_run
+       SET started_at = CASE id
+         WHEN ?1 THEN '2026-07-21T02:00:00Z'
+         WHEN ?2 THEN '2026-07-21T01:00:00Z'
+       END,
+       status = 'failed', retryable = CASE id WHEN ?1 THEN 0 ELSE 1 END
+       WHERE id IN (?1, ?2)",
+      params![first.id, second.id],
+    )
+    .unwrap();
+  connection
+    .execute(
+      "UPDATE collection_task SET status = 'failed' WHERE id = ?1",
+      [&task.id],
+    )
+    .unwrap();
+  drop(connection);
+  let third = retry_task(&root_path, &task.id, None)
+    .expect("latest monotonic failure should remain retryable after clock rollback");
+  let connection = open_workspace_connection(&root_path).expect("database should reopen");
+  let sequences = connection
+    .prepare("SELECT id, run_sequence FROM task_run WHERE task_id = ?1 ORDER BY run_sequence")
+    .unwrap()
+    .query_map([&task.id], |row| {
+      Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+    })
+    .unwrap()
+    .collect::<Result<Vec<_>, _>>()
+    .unwrap();
+
+  assert_eq!(
+    sequences,
+    vec![(first.id, 1), (second.id, 2), (third.id, 3)]
+  );
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn latest_persisted_plan_can_be_loaded_for_queue_actions() {
   let root_path = unique_temp_workspace("latest-task-plan");
   create_workspace("任务测试", &root_path).expect("workspace should be created");

@@ -54,14 +54,16 @@ pub fn enqueue_task(root_path: impl AsRef<Path>, task_id: &str) -> AppResult<Tas
 
   let plan_id = confirmed_plan_id(&transaction, task_id)?;
   let attempt_number = next_attempt_number(&transaction, task_id, &plan_id)?;
+  let run_sequence = next_run_sequence(&transaction, task_id)?;
   let run_id = Uuid::new_v4().to_string();
   let now = Utc::now().to_rfc3339();
   transaction
     .execute(
       "INSERT INTO task_run (
-        id, task_id, plan_id, attempt_number, status, started_at, current_stage, retryable
-      ) VALUES (?1, ?2, ?3, ?4, 'queued', ?5, '等待执行', 0)",
-      params![run_id, task_id, plan_id, attempt_number, now],
+        id, task_id, plan_id, attempt_number, run_sequence, status, started_at,
+        current_stage, retryable
+      ) VALUES (?1, ?2, ?3, ?4, ?5, 'queued', ?6, '等待执行', 0)",
+      params![run_id, task_id, plan_id, attempt_number, run_sequence, now],
     )
     .map_err(database_error)?;
   materialize_run_steps(&transaction, &run_id, &plan_id, &now)?;
@@ -225,14 +227,24 @@ pub fn retry_task(
   let plan_id = latest_retryable_failed_plan_id(&transaction, task_id)?;
   require_executable_plan(&transaction, task_id, &plan_id)?;
   let attempt_number = next_attempt_number(&transaction, task_id, &plan_id)?;
+  let run_sequence = next_run_sequence(&transaction, task_id)?;
   let run_id = Uuid::new_v4().to_string();
   let now = Utc::now().to_rfc3339();
   transaction
     .execute(
       "INSERT INTO task_run (
-        id, task_id, plan_id, attempt_number, status, started_at, current_stage, retryable
-      ) VALUES (?1, ?2, ?3, ?4, 'queued', ?5, ?6, 0)",
-      params![run_id, task_id, plan_id, attempt_number, now, stage],
+        id, task_id, plan_id, attempt_number, run_sequence, status, started_at,
+        current_stage, retryable
+      ) VALUES (?1, ?2, ?3, ?4, ?5, 'queued', ?6, ?7, 0)",
+      params![
+        run_id,
+        task_id,
+        plan_id,
+        attempt_number,
+        run_sequence,
+        now,
+        stage
+      ],
     )
     .map_err(database_error)?;
   materialize_run_steps(&transaction, &run_id, &plan_id, &now)?;
@@ -658,7 +670,7 @@ fn latest_retryable_failed_plan_id(connection: &Connection, task_id: &str) -> Ap
       "SELECT plan_id, retryable
        FROM task_run
        WHERE task_id = ?1 AND status = 'failed'
-       ORDER BY started_at DESC, id DESC
+       ORDER BY run_sequence DESC
        LIMIT 1",
       params![task_id],
       |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)? != 0)),
@@ -689,6 +701,21 @@ fn next_attempt_number(connection: &Connection, task_id: &str, plan_id: &str) ->
   latest
     .checked_add(1)
     .ok_or_else(|| task_error("任务运行尝试次数已达到上限"))
+}
+
+fn next_run_sequence(connection: &Connection, task_id: &str) -> AppResult<i64> {
+  let latest = connection
+    .query_row(
+      "SELECT MAX(run_sequence) FROM task_run WHERE task_id = ?1",
+      [task_id],
+      |row| row.get::<_, Option<i64>>(0),
+    )
+    .map_err(database_error)?
+    .unwrap_or(0);
+
+  latest
+    .checked_add(1)
+    .ok_or_else(|| task_error("任务运行序号已达到上限"))
 }
 
 pub(super) fn append_task_log(

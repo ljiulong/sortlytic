@@ -406,12 +406,9 @@ pub fn list_latest_task_runs(root_path: impl AsRef<Path>) -> AppResult<Vec<TaskR
          SELECT 1
          FROM task_run candidate
          WHERE candidate.task_id = run.task_id
-           AND (
-             candidate.started_at > run.started_at
-             OR (candidate.started_at = run.started_at AND candidate.id > run.id)
-           )
+           AND candidate.run_sequence > run.run_sequence
        )
-       ORDER BY run.started_at DESC, run.id DESC",
+       ORDER BY run.run_sequence DESC",
     )
     .map_err(database_error)?;
   let rows = statement
