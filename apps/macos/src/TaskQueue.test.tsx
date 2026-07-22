@@ -728,6 +728,7 @@ describe('TaskQueue', () => {
         currentStageCode: 'PERSISTING_RESULTS',
         errorCode: 'TIKHUB_REQUEST_ERROR',
         errorMessage: 'TikHub 请求超时',
+        safeDetails: { retry_after: '17', retry_attempts: '3' },
         retryable: true,
         startedAt: '2026-07-17T08:00:00Z',
         endedAt: '2026-07-17T08:00:30Z',
@@ -740,6 +741,7 @@ describe('TaskQueue', () => {
     expect(markup).toContain('持久化采集结果')
     expect(markup).toContain('TIKHUB_REQUEST_ERROR')
     expect(markup).toContain('TikHub 请求超时')
+    expect(markup).toContain('Retry-After：17')
     expect(markup).toContain('<dt>可重试</dt><dd>是</dd>')
     expect(markup).toContain('dateTime="2026-07-17T08:00:00Z"')
     expect(markup).toContain('查看运行日志')

@@ -71,6 +71,7 @@ export default function TaskRunDetails({
           message={errorMessage ?? errorFallback}
           retryable={run.retryable}
           attemptedAt={run.endedAt ?? run.startedAt}
+          safeDetails={run.safeDetails}
           isBusy={isBusy}
           onAction={onProblemAction}
         />
