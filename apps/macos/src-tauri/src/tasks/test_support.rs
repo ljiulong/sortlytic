@@ -15,14 +15,15 @@ impl ReviseCollectionTaskInput {
     data_types: Vec<String>,
     plan_json: serde_json::Value,
   ) -> Self {
-    Self {
-      task_id: task_id.into(),
-      name: name.into(),
-      platforms,
-      data_types,
-      source: "user_edited".to_string(),
-      plan_json,
-    }
+    serde_json::from_value(serde_json::json!({
+      "task_id": task_id.into(),
+      "name": name.into(),
+      "platforms": platforms,
+      "data_types": data_types,
+      "source": "user_edited",
+      "plan_json": plan_json,
+    }))
+    .expect("test revision input should deserialize")
   }
 }
 
