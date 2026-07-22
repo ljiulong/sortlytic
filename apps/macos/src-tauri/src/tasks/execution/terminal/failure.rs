@@ -34,7 +34,7 @@ pub fn fail_task_run_with_safe_details(
   let code = normalize_required("错误代码", error_code)?;
   let message = redact_sensitive_text(&normalize_required("错误信息", error_message)?);
   let now = Utc::now().to_rfc3339();
-  let has_request_evidence = run_has_request_evidence(&transaction, run_id)?;
+  let has_uncertain_request = run_has_uncertain_request(&transaction, run_id)?;
   let output_records = output_record_count(&transaction, run_id)?;
   let budget_stopped_with_results = code == "COST_LIMIT_ERROR" && output_records > 0;
   let terminal_status = if budget_stopped_with_results {
@@ -91,7 +91,7 @@ pub fn fail_task_run_with_safe_details(
         current_stage,
         code,
         message,
-        i64::from(!budget_stopped_with_results && retryable && !has_request_evidence),
+        i64::from(!budget_stopped_with_results && retryable && !has_uncertain_request),
         terminal_cost_json.as_deref(),
         run_id
       ],
@@ -312,19 +312,15 @@ fn settled_cost_summary(connection: &Connection, run_id: &str) -> AppResult<Stri
   )
 }
 
-fn run_has_request_evidence(connection: &Connection, run_id: &str) -> AppResult<bool> {
+fn run_has_uncertain_request(connection: &Connection, run_id: &str) -> AppResult<bool> {
   connection
     .query_row(
       "SELECT EXISTS(
          SELECT 1 FROM collection_page_checkpoint AS checkpoint
          JOIN task_run_step AS run_step
            ON run_step.id = checkpoint.task_run_step_id
-         WHERE run_step.task_run_id = ?1 AND (
-           checkpoint.status IN ('requesting', 'response_received', 'completed', 'uncertain')
-           OR checkpoint.request_attempt_count > 0
-           OR checkpoint.requested_at IS NOT NULL
-           OR checkpoint.provider_response_json IS NOT NULL
-         )
+         WHERE run_step.task_run_id = ?1
+           AND checkpoint.status IN ('requesting', 'uncertain')
        )",
       params![run_id],
       |row| row.get::<_, i64>(0),

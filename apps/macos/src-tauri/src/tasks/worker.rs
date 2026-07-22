@@ -350,13 +350,23 @@ where
     ensure_run_accepts_response(root_path, &run_id)?;
     let page = match page_result {
       Ok(page) => page,
-      Err(error) => {
+      Err(error) if response_status_is_uncertain(&error) => {
         mark_checkpoint_uncertain(&connection, &checkpoint_id, &error.message)?;
         return Err(worker_error(
           "UNCERTAIN_REQUEST_AFTER_FAILURE",
           "TikHub 请求已发出但响应状态不确定，已禁止自动重试",
           false,
         ));
+      }
+      Err(error) => {
+        mark_checkpoint_failed_with_retryable(
+          &connection,
+          &checkpoint_id,
+          &serialized_error_code(&error.code),
+          &error.message,
+          error.retryable,
+        )?;
+        return Err(error);
       }
     };
     let response_received_at = Utc::now().to_rfc3339();
@@ -634,14 +644,30 @@ pub(super) fn mark_checkpoint_failed(
   error_code: &str,
   error_message: &str,
 ) -> AppResult<()> {
+  mark_checkpoint_failed_with_retryable(connection, checkpoint_id, error_code, error_message, false)
+}
+
+fn mark_checkpoint_failed_with_retryable(
+  connection: &rusqlite::Connection,
+  checkpoint_id: &str,
+  error_code: &str,
+  error_message: &str,
+  retryable: bool,
+) -> AppResult<()> {
   let now = Utc::now().to_rfc3339();
   let changed = connection
     .execute(
       "UPDATE collection_page_checkpoint
-       SET status = 'failed', retryable = 0, last_error_code = ?1,
-           last_error_message = ?2, updated_at = ?3
-       WHERE id = ?4 AND status = 'requesting'",
-      params![error_code, error_message, now, checkpoint_id],
+       SET status = 'failed', retryable = ?1, last_error_code = ?2,
+           last_error_message = ?3, updated_at = ?4
+       WHERE id = ?5 AND status = 'requesting'",
+      params![
+        i64::from(retryable),
+        error_code,
+        error_message,
+        now,
+        checkpoint_id
+      ],
     )
     .map_err(database_error)?;
   if changed != 1 {
@@ -735,6 +761,13 @@ fn serialized_error_code(code: &AppErrorCode) -> String {
     .unwrap_or_else(|_| "WORKER_ERROR".to_string())
     .trim_matches('"')
     .to_string()
+}
+
+fn response_status_is_uncertain(error: &AppError) -> bool {
+  error
+    .safe_details
+    .get("response_state")
+    .is_some_and(|state| state == "uncertain")
 }
 
 #[cfg(test)]

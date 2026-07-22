@@ -654,6 +654,81 @@ fn worker_rejects_cost_before_recording_an_outbound_request() {
 }
 
 #[test]
+fn worker_preserves_definitive_provider_errors_after_request_dispatch() {
+  let cases = [
+    (AppErrorCode::TikhubAuthError, "401", false, None),
+    (AppErrorCode::CostLimitError, "402", false, None),
+    (AppErrorCode::TikhubRateLimit, "429", true, Some("17")),
+  ];
+
+  for (code, http_status, retryable, retry_after) in cases {
+    let root = std::env::temp_dir().join(format!(
+      "worker-provider-error-{http_status}-{}",
+      Uuid::new_v4()
+    ));
+    create_workspace("执行器供应商错误测试", &root).expect("workspace should be created");
+    install_successful_tikhub_profile(&root).expect("TikHub profile should install");
+    let (task, _) = create_confirmed_item_detail_task(&root);
+    enqueue_task(&root, &task.id).expect("task should be queued");
+    let run = claim_next_task(&root)
+      .expect("worker should claim the task")
+      .expect("queued task should exist");
+    let mut provider_error = AppError::new(
+      code.clone(),
+      format!("TikHub 请求失败，HTTP {http_status}：响应正文已隐藏"),
+      AppErrorStage::Collection,
+      retryable,
+    )
+    .with_safe_detail("response_state", "received")
+    .with_safe_detail("http_status", http_status);
+    if let Some(retry_after) = retry_after {
+      provider_error = provider_error.with_safe_detail("retry_after", retry_after);
+    }
+
+    let execution_error =
+      execute_claimed_run_with_fetcher(&root, &run, |_request| Err(provider_error.clone()))
+        .expect_err("definitive provider failures must stop the worker");
+
+    assert_eq!(execution_error.code, code);
+    assert_eq!(execution_error.retryable, retryable);
+    assert_eq!(
+      execution_error
+        .safe_details
+        .get("retry_after")
+        .map(String::as_str),
+      retry_after
+    );
+    let failed = finalize_claimed_run(&root, &run, Err(execution_error))
+      .expect("provider failure should persist as the original terminal error");
+    let expected_code = serialized_error_code(&code);
+    assert_eq!(failed.status, "failed");
+    assert_eq!(failed.error_code.as_deref(), Some(expected_code.as_str()));
+    assert_eq!(failed.retryable, retryable);
+    assert_eq!(
+      failed.error_safe_details_json["retry_after"].as_str(),
+      retry_after
+    );
+
+    let connection = super::open_workspace_connection(&root).expect("database should open");
+    let checkpoint: (String, String, i64) = connection
+      .query_row(
+        "SELECT status, last_error_code, retryable
+         FROM collection_page_checkpoint
+         WHERE task_run_step_id IN (
+           SELECT id FROM task_run_step WHERE task_run_id = ?1
+         )",
+        [&run.id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+      )
+      .expect("definitive checkpoint should be readable");
+    assert_eq!(checkpoint.0, "failed");
+    assert_eq!(checkpoint.1, expected_code);
+    assert_eq!(checkpoint.2, i64::from(retryable));
+    std::fs::remove_dir_all(root).ok();
+  }
+}
+
+#[test]
 fn worker_persists_sanitized_terminal_error_details() {
   let root = std::env::temp_dir().join(format!("worker-error-details-{}", Uuid::new_v4()));
   create_workspace("执行器错误详情测试", &root).expect("workspace should be created");
