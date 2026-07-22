@@ -409,7 +409,11 @@ fn update_task_intent_failure(
       "UPDATE task_intent
        SET parse_status = 'failed', parse_phase = ?1, ai_run_id = COALESCE(?2, ai_run_id),
            error_code = ?3, error_message = ?4, retryable = ?5,
-           error_safe_details_json = ?6, updated_at = ?7
+           error_safe_details_json = json_patch(
+             CASE WHEN json_valid(error_safe_details_json)
+               THEN error_safe_details_json ELSE '{}' END,
+             ?6
+           ), updated_at = ?7
        WHERE id = ?8",
       params![
         phase,

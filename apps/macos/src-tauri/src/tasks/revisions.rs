@@ -97,6 +97,7 @@ pub fn revise_collection_task(
   };
 
   if current.source_type == "natural_language" {
+    supersede_model_attempts(&transaction, &target_task_id, &now)?;
     if let Some(intent_text) = edited_intent.as_deref() {
       persist_user_edited_intent(
         &transaction,
@@ -139,6 +140,32 @@ pub fn revise_collection_task(
     collection_plan,
     copied_from_task_id,
   })
+}
+
+fn supersede_model_attempts(
+  transaction: &Transaction<'_>,
+  task_id: &str,
+  now: &str,
+) -> AppResult<()> {
+  transaction
+    .execute(
+      "UPDATE task_intent
+       SET error_safe_details_json = json_set(
+             CASE WHEN json_valid(error_safe_details_json)
+               THEN error_safe_details_json ELSE '{}' END,
+             '$.superseded_by_user_edit', json('true')
+           ),
+           updated_at = ?2
+       WHERE task_id = ?1
+         AND COALESCE(
+           CASE WHEN json_valid(error_safe_details_json)
+             THEN json_extract(error_safe_details_json, '$.source') END,
+           ''
+         ) NOT IN ('user_edited', 'user_edited_copy')",
+      params![task_id, now],
+    )
+    .map(|_| ())
+    .map_err(database_error)
 }
 
 fn persist_user_edited_intent(

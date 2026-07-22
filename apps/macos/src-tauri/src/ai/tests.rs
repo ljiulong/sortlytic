@@ -508,6 +508,92 @@ fn late_ai_response_does_not_replace_a_user_edited_plan() {
 }
 
 #[test]
+fn late_provider_failure_does_not_replace_a_user_edited_intent() {
+  let root_path = unique_temp_workspace("ai-late-failure-cas");
+  create_workspace("AI 迟到失败冲突测试", &root_path).expect("workspace should be created");
+  let listener = TcpListener::bind("127.0.0.1:0").expect("test server should bind");
+  let address = listener.local_addr().unwrap();
+  let (request_started_tx, request_started_rx) = mpsc::channel();
+  let (release_tx, release_rx) = mpsc::channel();
+  let server = thread::spawn(move || {
+    let (mut stream, _) = listener.accept().expect("provider request should arrive");
+    let _ = read_http_request(&mut stream);
+    request_started_tx.send(()).unwrap();
+    release_rx.recv().unwrap();
+    write_json_response(
+      &mut stream,
+      500,
+      "Internal Server Error",
+      r#"{"error":{"message":"temporary provider failure"}}"#,
+    );
+  });
+  configure_active_ai(&root_path, format!("http://{address}"));
+  let intent_text = "采集最近 7 天美国 TikTok 汽车内容，预算 2 美元";
+  let task = create_collection_task_with_initial_intent(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "迟到失败不能覆盖编辑".to_string(),
+      source_type: "natural_language".to_string(),
+      platforms: vec![],
+      data_types: vec![],
+    },
+    Some(intent_text),
+  )
+  .expect("natural task should be created");
+  let generation_root = root_path.clone();
+  let generation_task_id = task.id.clone();
+  let generation = thread::spawn(move || {
+    generate_collection_plan_from_text(
+      generation_root,
+      GenerateCollectionPlanFromTextInput {
+        task_id: generation_task_id,
+        intent_text: intent_text.to_string(),
+        provider_id: None,
+        model_id: None,
+      },
+    )
+  });
+  request_started_rx
+    .recv_timeout(Duration::from_secs(2))
+    .expect("provider request should be in flight");
+  let intent: CollectionIntentV1 = serde_json::from_value(valid_collection_intent()).unwrap();
+  let user_plan = super::intent_plan::build_collection_plan_from_intent(intent)
+    .collection_plan
+    .expect("valid intent should build a plan");
+  let mut revision = ReviseCollectionTaskInput::user_edited_for_test(
+    task.id.clone(),
+    "用户保存的失败前修订",
+    vec!["tiktok".to_string()],
+    vec!["account".to_string()],
+    user_plan.plan_json,
+  );
+  revision.original_intent = Some("用户修订后的当前需求".to_string());
+  revise_collection_task(&root_path, revision).expect("user revision should persist");
+  release_tx.send(()).unwrap();
+
+  let provider_error = generation
+    .join()
+    .expect("generation thread should finish")
+    .expect_err("provider failure should remain visible to the caller");
+  server.join().expect("provider server should finish");
+  let latest = list_latest_task_intents(&root_path).unwrap().remove(0);
+
+  assert_eq!(provider_error.code, AppErrorCode::ModelRequestError);
+  assert_eq!(latest.intent_text, "用户修订后的当前需求");
+  assert!(latest.ai_run_id.is_none());
+  let history = list_task_intents(&root_path, &task.id).unwrap();
+  let late_failure = history
+    .iter()
+    .find(|attempt| attempt.parse_status == "failed")
+    .expect("late provider failure should remain auditable");
+  assert_eq!(
+    late_failure.error_safe_details_json["superseded_by_user_edit"],
+    true
+  );
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn final_ai_persistence_rolls_back_task_plan_and_run_together() {
   let root_path = unique_temp_workspace("ai-final-atomicity");
   create_workspace("AI 最终提交原子性", &root_path).expect("workspace should be created");
