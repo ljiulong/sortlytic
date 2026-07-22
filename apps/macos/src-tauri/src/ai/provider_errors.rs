@@ -45,6 +45,11 @@ pub(super) fn status_error(status: StatusCode, retry_after: Option<&str>) -> App
       "AI 服务请求过于频繁或额度不足，请稍后重试",
       true,
     ),
+    408 => (
+      AppErrorCode::ModelRequestError,
+      "AI 服务请求超时，请重新解析",
+      true,
+    ),
     500..=599 => (
       AppErrorCode::ModelRequestError,
       "AI 服务暂时不可用，请稍后重试",

@@ -293,10 +293,10 @@ fn parse_response(
     .and_then(|value| value.to_str().ok())
     .and_then(safe_retry_after)
     .map(ToString::to_string);
-  let body = read_limited_body(response)?;
   if !status.is_success() {
     return Err(status_error(status, retry_after.as_deref()));
   }
+  let body = read_limited_body(response)?;
   let envelope: Value = serde_json::from_str(&body).map_err(|_| {
     model_error(
       AppErrorCode::ModelProtocolError,
@@ -439,13 +439,16 @@ fn integer_at(value: &Value, pointer: &str) -> Option<i64> {
 }
 
 #[cfg(test)]
+#[path = "provider_test_server.rs"]
+mod provider_test_server;
+
+#[cfg(test)]
 mod tests {
-  use std::io::{Read, Write};
   use std::net::TcpListener;
-  use std::thread;
 
   use reqwest::StatusCode;
 
+  use super::provider_test_server::{serve_once, serve_once_with_retry_after};
   use super::*;
 
   const SECRET_SENTINEL: &str = "sk-model-secret-sentinel";
@@ -616,6 +619,10 @@ mod tests {
 
   #[test]
   fn transient_http_and_transport_failures_use_a_retryable_request_code() {
+    let request_timeout = status_error(StatusCode::REQUEST_TIMEOUT, None);
+    assert_eq!(request_timeout.code, AppErrorCode::ModelRequestError);
+    assert!(request_timeout.retryable);
+
     let unavailable = status_error(StatusCode::SERVICE_UNAVAILABLE, None);
     assert_eq!(
       serde_json::to_value(&unavailable).unwrap()["code"],
@@ -650,6 +657,34 @@ mod tests {
         .map(String::as_str),
       Some("connect")
     );
+  }
+
+  #[test]
+  fn oversized_error_bodies_do_not_override_http_status_or_retry_after() {
+    for (status, expected_code, retry_after) in [
+      (429, AppErrorCode::ModelRateLimit, Some("17")),
+      (503, AppErrorCode::ModelRequestError, None),
+    ] {
+      let body = "x".repeat((MAX_MODEL_RESPONSE_BYTES + 1) as usize);
+      let (base_url, server) = serve_once_with_retry_after(status, body, retry_after, |_| {});
+      let error = call_model(
+        &config(AiProviderType::CustomOpenaiCompatible, base_url),
+        &model_request(),
+      )
+      .expect_err("非成功状态必须优先按 HTTP 语义分类");
+      server.join().expect("test server should finish");
+
+      assert_eq!(error.code, expected_code);
+      assert!(error.retryable);
+      assert_eq!(
+        error.safe_details.get("http_status"),
+        Some(&status.to_string())
+      );
+      assert_eq!(
+        error.safe_details.get("retry_after").map(String::as_str),
+        retry_after
+      );
+    }
   }
 
   #[test]
@@ -730,55 +765,5 @@ mod tests {
         "additionalProperties": false
       }),
     }
-  }
-
-  fn serve_once(
-    status: u16,
-    body: String,
-    inspect: impl FnOnce(&str) + Send + 'static,
-  ) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("test server should bind");
-    let address = listener
-      .local_addr()
-      .expect("test server address should resolve");
-    let server = thread::spawn(move || {
-      let (mut stream, _) = listener.accept().expect("test server should accept");
-      let mut request = Vec::new();
-      let mut buffer = [0_u8; 8192];
-      loop {
-        let bytes_read = stream
-          .read(&mut buffer)
-          .expect("request should be readable");
-        if bytes_read == 0 {
-          break;
-        }
-        request.extend_from_slice(&buffer[..bytes_read]);
-        let text = String::from_utf8_lossy(&request);
-        if let Some(header_end) = text.find("\r\n\r\n") {
-          let content_length = text[..header_end]
-            .lines()
-            .find_map(|line| {
-              line
-                .to_ascii_lowercase()
-                .strip_prefix("content-length:")
-                .and_then(|value| value.trim().parse::<usize>().ok())
-            })
-            .unwrap_or(0);
-          if request.len() >= header_end + 4 + content_length {
-            break;
-          }
-        }
-      }
-      let request = String::from_utf8_lossy(&request).into_owned();
-      inspect(&request);
-      let reason = if status == 200 { "OK" } else { "Unauthorized" };
-      write!(
-        stream,
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-      )
-      .expect("response should be writable");
-    });
-    (format!("http://{address}"), server)
   }
 }
