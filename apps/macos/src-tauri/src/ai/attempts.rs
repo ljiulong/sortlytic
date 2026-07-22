@@ -1,12 +1,14 @@
 use std::path::Path;
 
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use rusqlite::{params, Connection, Row};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 use crate::workspace::{open_workspace_database, DATABASE_FILE_NAME};
+
+use super::parse_lock::NaturalParseLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NaturalParseAttemptView {
@@ -97,13 +99,37 @@ pub fn list_task_intents(
 }
 
 pub(crate) fn mark_interrupted_task_intents(root_path: impl AsRef<Path>) -> AppResult<usize> {
+  let root_path = root_path.as_ref();
   let connection = open_connection(root_path)?;
-  interrupt_expired_task_intents(&connection)
+  let task_ids = {
+    let mut statement = connection
+      .prepare("SELECT DISTINCT task_id FROM task_intent WHERE parse_status = 'running'")
+      .map_err(database_error)?;
+    let rows = statement
+      .query_map([], |row| row.get::<_, String>(0))
+      .map_err(database_error)?;
+    rows
+      .collect::<rusqlite::Result<Vec<_>>>()
+      .map_err(database_error)?
+  };
+  let mut interrupted = 0;
+  for task_id in task_ids {
+    match NaturalParseLock::acquire(root_path, &task_id) {
+      Ok(_lock) => {
+        interrupted += interrupt_task_intents(&connection, &task_id, None)?;
+      }
+      Err(error) if is_active_parse_lock(&error) => {}
+      Err(error) => return Err(error),
+    }
+  }
+  Ok(interrupted)
 }
 
-pub(crate) fn interrupt_expired_task_intents(connection: &Connection) -> AppResult<usize> {
-  let now = Utc::now();
-  let cutoff = now - Duration::seconds(120);
+pub(crate) fn interrupt_task_intents(
+  connection: &Connection,
+  task_id: &str,
+  except_attempt_id: Option<&str>,
+) -> AppResult<usize> {
   connection
     .execute(
       "UPDATE task_intent
@@ -112,11 +138,15 @@ pub(crate) fn interrupt_expired_task_intents(connection: &Connection) -> AppResu
            error_message = '上次自然语言解析在应用关闭前未完成，请重新解析',
            retryable = 1,
            updated_at = ?1
-       WHERE parse_status = 'running'
-         AND (julianday(updated_at) IS NULL OR julianday(updated_at) <= julianday(?2))",
-      params![now.to_rfc3339(), cutoff.to_rfc3339()],
+       WHERE task_id = ?2 AND parse_status = 'running'
+         AND (?3 IS NULL OR id <> ?3)",
+      params![Utc::now().to_rfc3339(), task_id, except_attempt_id],
     )
     .map_err(database_error)
+}
+
+fn is_active_parse_lock(error: &AppError) -> bool {
+  error.safe_details.get("reason").map(String::as_str) == Some("natural_parse_locked")
 }
 
 fn map_attempt(row: &Row<'_>) -> rusqlite::Result<NaturalParseAttemptView> {
@@ -236,9 +266,9 @@ mod tests {
   }
 
   #[test]
-  fn keeps_fresh_running_attempt_when_another_instance_opens_the_workspace() {
-    let root = std::env::temp_dir().join(format!("fresh-intent-{}", Uuid::new_v4()));
-    create_workspace("新鲜解析租约", &root).unwrap();
+  fn keeps_old_running_attempt_while_its_process_lock_is_held() {
+    let root = std::env::temp_dir().join(format!("locked-intent-{}", Uuid::new_v4()));
+    create_workspace("解析进程锁", &root).unwrap();
     let task = create_collection_task(
       &root,
       CreateCollectionTaskInput {
@@ -250,23 +280,31 @@ mod tests {
     )
     .unwrap();
     let connection = open_connection(&root).unwrap();
-    let now = Utc::now().to_rfc3339();
     connection
       .execute(
         "INSERT INTO task_intent (
           id, task_id, intent_text, language, parse_status, parse_phase,
           error_safe_details_json, created_at, updated_at
         ) VALUES ('intent-fresh', ?1, '正在解析', 'zh-CN', 'running',
-                  'requesting_ai', '{}', ?2, ?2)",
-        params![task.id, now],
+                  'requesting_ai', '{}', '2000-01-01T00:00:00Z',
+                  '2000-01-01T00:00:00Z')",
+        [&task.id],
       )
       .unwrap();
     drop(connection);
+    let active_lock = super::super::parse_lock::NaturalParseLock::acquire(&root, &task.id).unwrap();
 
     assert_eq!(mark_interrupted_task_intents(&root).unwrap(), 0);
     let attempt = list_latest_task_intents(&root).unwrap().remove(0);
     assert_eq!(attempt.parse_status, "running");
     assert_eq!(attempt.parse_phase.as_deref(), Some("requesting_ai"));
+
+    drop(active_lock);
+    assert_eq!(mark_interrupted_task_intents(&root).unwrap(), 1);
+    assert_eq!(
+      list_latest_task_intents(&root).unwrap()[0].parse_status,
+      "interrupted"
+    );
 
     fs::remove_dir_all(root).ok();
   }

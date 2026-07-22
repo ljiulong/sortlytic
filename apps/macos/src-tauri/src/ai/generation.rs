@@ -257,37 +257,16 @@ fn acquire_task_intent_attempt(
     .transaction_with_behavior(TransactionBehavior::Immediate)
     .map_err(database_error)?;
   prepare_task_for_natural_parse(&transaction, task_id)?;
-  super::attempts::interrupt_expired_task_intents(&transaction)?;
 
   if let Some(attempt_id) =
     claim_initial_task_intent_attempt(&transaction, task_id, intent_text, claimed_at)?
   {
+    super::attempts::interrupt_task_intents(&transaction, task_id, Some(&attempt_id))?;
     transaction.commit().map_err(database_error)?;
     return Ok(attempt_id);
   }
 
-  let active_attempt = transaction
-    .query_row(
-      "SELECT id FROM task_intent
-       WHERE task_id = ?1 AND parse_status = 'running'
-       ORDER BY created_at DESC, id DESC
-       LIMIT 1",
-      [task_id],
-      |row| row.get::<_, String>(0),
-    )
-    .optional()
-    .map_err(database_error)?;
-  if active_attempt.is_some() {
-    return Err(
-      AppError::new(
-        AppErrorCode::ModelRequestError,
-        "该任务正在解析，请等待当前尝试完成后再重新解析",
-        AppErrorStage::Ai,
-        true,
-      )
-      .with_safe_detail("transport_kind", "busy"),
-    );
-  }
+  super::attempts::interrupt_task_intents(&transaction, task_id, None)?;
 
   let attempt_id = Uuid::new_v4().to_string();
   create_task_intent_attempt(&transaction, &attempt_id, task_id, intent_text, claimed_at)?;

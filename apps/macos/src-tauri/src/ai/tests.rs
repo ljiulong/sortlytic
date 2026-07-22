@@ -334,6 +334,22 @@ fn concurrent_natural_generation_allows_only_one_provider_request() {
     )
     .unwrap();
   assert_eq!(running_ai_runs, (1, "running".to_string()));
+  connection
+    .execute(
+      "UPDATE task_intent SET updated_at = '2000-01-01T00:00:00Z' WHERE task_id = ?1",
+      [&task.id],
+    )
+    .unwrap();
+  drop(connection);
+  assert_eq!(
+    mark_interrupted_task_intents(&root_path).unwrap(),
+    0,
+    "an old timestamp must not interrupt a provider request whose process lock is held"
+  );
+  assert_eq!(
+    list_latest_task_intents(&root_path).unwrap()[0].parse_status,
+    "running"
+  );
 
   let second_root = root_path.clone();
   let (second_result_tx, second_result_rx) = mpsc::channel();
