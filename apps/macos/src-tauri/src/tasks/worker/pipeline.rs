@@ -11,9 +11,10 @@ use super::pricing::checkpoint_quote_json;
 use super::targets::{materialize_targets, PipelineTarget, TargetStepInput};
 use super::{
   database_error, insert_prepared_checkpoint, mark_checkpoint_completed, mark_checkpoint_failed,
-  mark_checkpoint_requesting, mark_checkpoint_response_received, mark_checkpoint_uncertain,
-  mark_step_running, mark_step_stopped, mark_step_success, open_workspace_connection,
-  persist_step_accounts, task_error, worker_error, RunStep,
+  mark_checkpoint_failed_with_retryable, mark_checkpoint_requesting,
+  mark_checkpoint_response_received, mark_checkpoint_uncertain, mark_step_running,
+  mark_step_stopped, mark_step_success, open_workspace_connection, persist_step_accounts,
+  response_status_is_uncertain, serialized_error_code, task_error, worker_error, RunStep,
 };
 use crate::domain::AppResult;
 use crate::domain::{AppError, AppErrorCode};
@@ -164,13 +165,23 @@ where
       )?;
       return Ok(());
     }
-    Err(error) => {
+    Err(error) if response_status_is_uncertain(&error) => {
       mark_checkpoint_uncertain(connection, &checkpoint_id, &error.message)?;
       return Err(worker_error(
         "UNCERTAIN_REQUEST_AFTER_FAILURE",
         "TikHub 目标请求已发出但响应状态不确定，已禁止自动重试",
         false,
       ));
+    }
+    Err(error) => {
+      mark_checkpoint_failed_with_retryable(
+        connection,
+        &checkpoint_id,
+        &serialized_error_code(&error.code),
+        &error.message,
+        error.retryable,
+      )?;
+      return Err(error);
     }
   };
   let response_received_at = Utc::now().to_rfc3339();

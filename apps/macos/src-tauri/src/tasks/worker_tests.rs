@@ -729,6 +729,102 @@ fn worker_preserves_definitive_provider_errors_after_request_dispatch() {
 }
 
 #[test]
+fn pipeline_worker_preserves_rate_limit_details_after_request_dispatch() {
+  let root = std::env::temp_dir().join(format!("worker-v3-rate-limit-{}", Uuid::new_v4()));
+  create_workspace("多目标执行器限流测试", &root).expect("workspace should be created");
+  install_successful_tikhub_profile(&root).expect("TikHub profile should install");
+  let task = create_collection_task(
+    &root,
+    CreateCollectionTaskInput {
+      name: "多目标限流".to_string(),
+      source_type: "form".to_string(),
+      platforms: vec!["tiktok".to_string()],
+      data_types: vec!["item_detail".to_string()],
+    },
+  )
+  .expect("task should create");
+  let draft = crate::collection::generate_form_collection_plan(
+    crate::collection::FormCollectionPlanRequest {
+      platform: "tiktok".to_string(),
+      data_type: None,
+      data_types: vec!["item_detail".to_string()],
+      params: json!({
+        "keyword": "car",
+        "region": "US",
+        "time_range": "30",
+        "page_size": 20
+      }),
+      age_range: None,
+      request_limit: Some(1),
+      record_limit: Some(1),
+      budget_limit_micros: Some(1_000_000),
+    },
+  )
+  .expect("pipeline plan should generate");
+  let plan = save_collection_plan(
+    &root,
+    SaveCollectionPlanInput {
+      task_id: task.id.clone(),
+      source: draft.source,
+      plan_json: draft.plan_json,
+      validation_status: draft.validation_status,
+      validation_errors_json: Some(draft.validation_errors_json),
+      cost_estimate_json: Some(draft.cost_estimate_json),
+    },
+  )
+  .expect("pipeline plan should save");
+  confirm_collection_plan(&root, &task.id, &plan.id).expect("pipeline plan should confirm");
+  enqueue_task(&root, &task.id).expect("task should be queued");
+  let run = claim_next_task(&root)
+    .expect("worker should claim the task")
+    .expect("queued task should exist");
+  let provider_error = AppError::new(
+    AppErrorCode::TikhubRateLimit,
+    "TikHub 请求失败，HTTP 429：响应正文已隐藏",
+    AppErrorStage::Collection,
+    true,
+  )
+  .with_safe_detail("response_state", "received")
+  .with_safe_detail("http_status", "429")
+  .with_safe_detail("retry_after", "23");
+
+  let execution_error =
+    execute_claimed_run_with_fetcher(&root, &run, |_request| Err(provider_error.clone()))
+      .expect_err("pipeline provider limit must stop the worker");
+
+  assert_eq!(execution_error.code, AppErrorCode::TikhubRateLimit);
+  assert_eq!(
+    execution_error
+      .safe_details
+      .get("retry_after")
+      .map(String::as_str),
+    Some("23")
+  );
+  let failed = finalize_claimed_run(&root, &run, Err(execution_error))
+    .expect("pipeline failure should preserve provider semantics");
+  assert_eq!(failed.error_code.as_deref(), Some("TIKHUB_RATE_LIMIT"));
+  assert!(failed.retryable);
+  assert_eq!(failed.error_safe_details_json["retry_after"], "23");
+  let connection = super::open_workspace_connection(&root).expect("database should open");
+  let checkpoint: (String, String, i64) = connection
+    .query_row(
+      "SELECT status, last_error_code, retryable
+       FROM collection_page_checkpoint
+       WHERE task_run_step_id IN (
+         SELECT id FROM task_run_step WHERE task_run_id = ?1
+       )",
+      [&run.id],
+      |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )
+    .expect("pipeline checkpoint should be readable");
+  assert_eq!(
+    checkpoint,
+    ("failed".to_string(), "TIKHUB_RATE_LIMIT".to_string(), 1)
+  );
+  std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn worker_persists_sanitized_terminal_error_details() {
   let root = std::env::temp_dir().join(format!("worker-error-details-{}", Uuid::new_v4()));
   create_workspace("执行器错误详情测试", &root).expect("workspace should be created");
