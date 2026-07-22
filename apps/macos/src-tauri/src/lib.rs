@@ -8,6 +8,7 @@ pub mod collection;
 mod config_commands;
 pub mod domain;
 pub mod exports;
+mod locale_policy;
 #[cfg(target_os = "macos")]
 mod native_window;
 pub mod prompts;

@@ -5,6 +5,9 @@ use serde_json::{json, Value};
 
 use crate::accounts::normalize_country_region;
 use crate::collection::{account_field_keys, account_source_keys};
+pub(crate) use crate::locale_policy::{
+  primary_query_locale, query_matches_locale_script, valid_query_locale,
+};
 
 const REQUIRED_FIELDS: &[&str] = &[
   "schema_version",
@@ -303,188 +306,6 @@ fn validate_intent_values(intent: &CollectionIntentV1) -> Result<(), Vec<String>
   }
 }
 
-pub(crate) fn valid_query_locale(value: &str) -> bool {
-  let mut segments = value.split('-');
-  let Some(language) = segments.next() else {
-    return false;
-  };
-  let Some(region) = segments.next() else {
-    return false;
-  };
-  segments.next().is_none()
-    && (2..=3).contains(&language.len())
-    && language
-      .chars()
-      .all(|character| character.is_ascii_lowercase())
-    && region.len() == 2
-    && region
-      .chars()
-      .all(|character| character.is_ascii_uppercase())
-    && normalize_country_region(Some(region)).is_some()
-}
-
-pub(crate) fn primary_query_locale(region: &str) -> Option<&'static str> {
-  Some(match region {
-    "GB" => "en-GB",
-    "US" => "en-US",
-    "CA" => "en-CA",
-    "AU" => "en-AU",
-    "NZ" => "en-NZ",
-    "IE" => "en-IE",
-    "SG" => "en-SG",
-    "ZA" => "en-ZA",
-    "NG" => "en-NG",
-    "KE" => "en-KE",
-    "CN" => "zh-CN",
-    "HK" => "zh-HK",
-    "MO" => "zh-MO",
-    "TW" => "zh-TW",
-    "JP" => "ja-JP",
-    "KR" => "ko-KR",
-    "FR" => "fr-FR",
-    "DE" => "de-DE",
-    "AT" => "de-AT",
-    "CH" => "de-CH",
-    "ES" => "es-ES",
-    "MX" => "es-MX",
-    "AR" => "es-AR",
-    "CL" => "es-CL",
-    "CO" => "es-CO",
-    "PE" => "es-PE",
-    "IT" => "it-IT",
-    "PT" => "pt-PT",
-    "BR" => "pt-BR",
-    "NL" => "nl-NL",
-    "BE" => "nl-BE",
-    "SE" => "sv-SE",
-    "NO" => "no-NO",
-    "DK" => "da-DK",
-    "FI" => "fi-FI",
-    "PL" => "pl-PL",
-    "CZ" => "cs-CZ",
-    "GR" => "el-GR",
-    "RO" => "ro-RO",
-    "HU" => "hu-HU",
-    "BG" => "bg-BG",
-    "UA" => "uk-UA",
-    "RU" => "ru-RU",
-    "TR" => "tr-TR",
-    "IL" => "he-IL",
-    "SA" => "ar-SA",
-    "AE" => "ar-AE",
-    "EG" => "ar-EG",
-    "MA" => "ar-MA",
-    "IN" => "hi-IN",
-    "PK" => "ur-PK",
-    "BD" => "bn-BD",
-    "TH" => "th-TH",
-    "VN" => "vi-VN",
-    "ID" => "id-ID",
-    "MY" => "ms-MY",
-    "PH" => "fil-PH",
-    _ => return None,
-  })
-}
-
-pub(crate) fn query_matches_locale_script(query_locale: &str, value: &str) -> bool {
-  let language = query_locale.split('-').next().unwrap_or_default();
-  match language {
-    "zh" => value.chars().any(is_han),
-    "ja" => value
-      .chars()
-      .any(|character| is_han(character) || is_japanese_kana(character)),
-    "ko" => value.chars().any(is_hangul),
-    "ru" | "uk" | "bg" => value.chars().any(is_cyrillic),
-    "ar" => value.chars().any(is_arabic),
-    language if is_latin_query_language(language) => {
-      value.chars().any(char::is_alphabetic)
-        && !value.chars().any(|character| {
-          is_han(character)
-            || is_japanese_kana(character)
-            || is_hangul(character)
-            || is_cyrillic(character)
-            || is_arabic(character)
-        })
-    }
-    _ => true,
-  }
-}
-
-fn is_latin_query_language(language: &str) -> bool {
-  matches!(
-    language,
-    "en"
-      | "fr"
-      | "de"
-      | "es"
-      | "it"
-      | "pt"
-      | "nl"
-      | "sv"
-      | "no"
-      | "da"
-      | "fi"
-      | "pl"
-      | "cs"
-      | "ro"
-      | "hu"
-      | "tr"
-      | "vi"
-      | "id"
-      | "ms"
-      | "fil"
-  )
-}
-
-fn is_han(character: char) -> bool {
-  matches!(
-    character as u32,
-    0x3400..=0x4DBF
-      | 0x4E00..=0x9FFF
-      | 0xF900..=0xFAFF
-      | 0x20000..=0x2A6DF
-      | 0x2A700..=0x2EE5F
-      | 0x30000..=0x323AF
-  )
-}
-
-fn is_japanese_kana(character: char) -> bool {
-  matches!(
-    character as u32,
-    0x3040..=0x30FF | 0x31F0..=0x31FF | 0xFF66..=0xFF9D
-  )
-}
-
-fn is_hangul(character: char) -> bool {
-  matches!(
-    character as u32,
-    0x1100..=0x11FF
-      | 0x3130..=0x318F
-      | 0xA960..=0xA97F
-      | 0xAC00..=0xD7AF
-      | 0xD7B0..=0xD7FF
-  )
-}
-
-fn is_cyrillic(character: char) -> bool {
-  matches!(
-    character as u32,
-    0x0400..=0x052F | 0x1C80..=0x1C8F | 0x2DE0..=0x2DFF | 0xA640..=0xA69F
-  )
-}
-
-fn is_arabic(character: char) -> bool {
-  matches!(
-    character as u32,
-    0x0600..=0x06FF
-      | 0x0750..=0x077F
-      | 0x0870..=0x089F
-      | 0x08A0..=0x08FF
-      | 0xFB50..=0xFDFF
-      | 0xFE70..=0xFEFF
-  )
-}
-
 fn contains_invalid_or_duplicate(values: &[String], allowed: &[String]) -> bool {
   let mut seen = BTreeSet::new();
   values
@@ -698,6 +519,12 @@ mod tests {
       ("uk-UA", "товари для тварин", "pet supplies"),
       ("bg-BG", "стоки за домашни любимци", "pet supplies"),
       ("ar-SA", "مستلزمات الحيوانات الأليفة", "pet supplies"),
+      ("el-GR", "προϊόντα για κατοικίδια", "宠物用品"),
+      ("he-IL", "ציוד לחיות מחמד", "宠物用品"),
+      ("hi-IN", "पालतू पशु उत्पाद", "宠物用品"),
+      ("ur-PK", "پالتو جانوروں کی مصنوعات", "宠物用品"),
+      ("bn-BD", "পোষা প্রাণীর পণ্য", "宠物用品"),
+      ("th-TH", "ผลิตภัณฑ์สัตว์เลี้ยง", "宠物用品"),
     ] {
       assert!(
         query_matches_locale_script(locale, valid),
@@ -711,7 +538,13 @@ mod tests {
 
     for locale in ["en-GB", "fr-FR", "de-DE", "es-ES", "vi-VN"] {
       assert!(query_matches_locale_script(locale, "café supplies"));
-      for conflict in ["宠物用品", "반려동물 용품", "товары", "مستلزمات"] {
+      for conflict in [
+        "宠物用品",
+        "반려동물 용품",
+        "товары",
+        "مستلزمات",
+        "पालतू पशु उत्पाद",
+      ] {
         assert!(
           !query_matches_locale_script(locale, conflict),
           "拉丁语言 {locale} 不应接受明显冲突的文字脚本"
