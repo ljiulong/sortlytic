@@ -265,14 +265,13 @@ fn endpoint_whitelist_errors_keep_the_revision_editable() {
 
   let revised = revise_collection_task(
     &root_path,
-    ReviseCollectionTaskInput {
-      task_id: task.id,
-      name: "宠物园区".to_string(),
-      platforms: vec!["xiaohongshu".to_string()],
-      data_types: vec!["account".to_string()],
-      source: "user_edited".to_string(),
-      plan_json: plan,
-    },
+    ReviseCollectionTaskInput::user_edited_for_test(
+      task.id,
+      "宠物园区",
+      vec!["xiaohongshu".to_string()],
+      vec!["account".to_string()],
+      plan,
+    ),
   )
   .expect("invalid revision should remain editable");
 
@@ -315,13 +314,12 @@ fn revise_input(
   record_limit: i64,
   client_request_estimate: i64,
 ) -> ReviseCollectionTaskInput {
-  ReviseCollectionTaskInput {
-    task_id: task_id.to_string(),
-    name: name.to_string(),
-    platforms: vec!["tiktok".to_string()],
-    data_types: vec!["keyword_search".to_string()],
-    source: "user_edited".to_string(),
-    plan_json: serde_json::json!({
+  ReviseCollectionTaskInput::user_edited_for_test(
+    task_id,
+    name,
+    vec!["tiktok".to_string()],
+    vec!["keyword_search".to_string()],
+    serde_json::json!({
       "schema_version": 2,
       "platforms": ["tiktok"],
       "data_types": ["keyword_search"],
@@ -340,7 +338,7 @@ fn revise_input(
       "missing_fields": [],
       "requires_user_confirmation": true
     }),
-  }
+  )
 }
 
 fn workspace(label: &str) -> std::path::PathBuf {
