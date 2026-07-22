@@ -31,7 +31,7 @@ pub fn save_collection_plan(
   get_collection_plan(&connection, &id)
 }
 
-pub(super) fn save_collection_plan_in_transaction(
+pub(crate) fn save_collection_plan_in_transaction(
   connection: &Connection,
   input: SaveCollectionPlanInput,
 ) -> AppResult<String> {
