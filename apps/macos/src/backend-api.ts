@@ -212,6 +212,7 @@ export type NaturalParseAttemptView = {
   retryable?: boolean | null
   error_safe_details_json: Record<string, unknown>
   provider_id?: string | null
+  provider_name?: string | null
   model_id?: string | null
   prompt_version_id?: string | null
   created_at: string

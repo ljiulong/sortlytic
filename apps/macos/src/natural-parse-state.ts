@@ -19,6 +19,7 @@ export type NaturalParseState = {
   startedAt?: string
   finishedAt?: string
   providerId?: string
+  providerName?: string
   modelId?: string
   promptVersionId?: string
   problem?: BackendProblem
@@ -55,6 +56,7 @@ export function naturalParseStateFromAttempt(
     startedAt: attempt.created_at,
     finishedAt: terminal ? attempt.updated_at : undefined,
     providerId: attempt.provider_id ?? undefined,
+    providerName: attempt.provider_name ?? undefined,
     modelId: attempt.model_id ?? undefined,
     promptVersionId: attempt.prompt_version_id ?? undefined,
     problem: problemFromAttempt(attempt, phase),
