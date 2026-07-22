@@ -102,7 +102,15 @@ fn copied_natural_language_tasks_keep_the_latest_original_request() {
   )
   .expect("natural-language task created");
   save_collection_plan(&root_path, plan_input(&task.id)).expect("plan saved");
+  crate::prompts::seed_builtin_prompts(&root_path).expect("prompts seeded");
   let connection = open_workspace_connection(&root_path).expect("database open");
+  let prompt_id: String = connection
+    .query_row(
+      "SELECT id FROM prompt_version ORDER BY created_at LIMIT 1",
+      [],
+      |row| row.get(0),
+    )
+    .expect("prompt exists");
   for (id, intent_text, ai_run_id, created_at) in [
     (
       "intent-old",
@@ -117,6 +125,26 @@ fn copied_natural_language_tasks_keep_the_latest_original_request() {
       "2026-07-20T00:01:00Z",
     ),
   ] {
+    let snapshot_id = format!("snapshot-{ai_run_id}");
+    connection
+      .execute(
+        "INSERT INTO runtime_snapshot (
+           id, task_id, provider_id, model_id, api_format, base_url_type,
+           prompt_version_id, output_schema_id, capabilities_json, config_source, created_at
+         ) VALUES (?1, ?2, 'provider', 'model', 'openai_compatible', 'custom',
+                   ?3, 'collection_intent_v1', '{}', 'test', ?4)",
+        params![snapshot_id, task.id, prompt_id, created_at],
+      )
+      .expect("snapshot inserted");
+    connection
+      .execute(
+        "INSERT INTO ai_run (
+           id, task_id, runtime_snapshot_id, run_type, schema_valid,
+           validation_status, created_at
+         ) VALUES (?1, ?2, ?3, 'collection_intent_generation', 1, 'valid', ?4)",
+        params![ai_run_id, task.id, snapshot_id, created_at],
+      )
+      .expect("valid AI run inserted");
     connection
       .execute(
         "INSERT INTO task_intent (
@@ -127,6 +155,16 @@ fn copied_natural_language_tasks_keep_the_latest_original_request() {
       )
       .expect("intent inserted");
   }
+  connection
+    .execute(
+      "INSERT INTO task_intent (
+         id, task_id, intent_text, language, parse_status, parse_phase,
+         error_code, error_message, retryable, error_safe_details_json, created_at, updated_at
+       ) VALUES ('intent-failed-later', ?1, '不应复制的失败输入', 'zh-CN', 'failed',
+                 'requesting_ai', 'MODEL_REQUEST_ERROR', 'AI 服务请求超时', 1, '{}', ?2, ?2)",
+      params![task.id, "2026-07-20T00:02:00Z"],
+    )
+    .expect("newer failed intent inserted");
   drop(connection);
   set_task_status(&root_path, &task.id, "success");
 
@@ -144,23 +182,25 @@ fn copied_natural_language_tasks_keep_the_latest_original_request() {
   assert_eq!(copied.task_id, revised.task.id);
   assert_eq!(copied.intent_text, "用中文查找英国 TikTok 宠物用品账号");
   assert_eq!(copied.language.as_deref(), Some("zh-CN"));
-  assert_eq!(copied.parse_status, "valid");
-  assert_eq!(copied.parse_phase.as_deref(), Some("success"));
+  assert_eq!(copied.parse_status, "needs_review");
+  assert_eq!(copied.parse_phase.as_deref(), Some("needs_review"));
   assert_eq!(copied.ai_run_id, None, "old AI runs must not be reused");
   assert_eq!(
     copied.error_safe_details_json,
     serde_json::json!({
       "source": "user_edited_copy",
       "copied_from_task_id": task.id,
+      "origin_attempt_id": "intent-latest",
     })
   );
 
   let original_attempts = crate::ai::list_task_intents(&root_path, &task.id)
     .expect("original intents should remain available");
-  assert_eq!(original_attempts.len(), 2);
-  assert_eq!(original_attempts[0].id, "intent-latest");
+  assert_eq!(original_attempts.len(), 3);
+  assert_eq!(original_attempts[0].id, "intent-failed-later");
+  assert_eq!(original_attempts[1].id, "intent-latest");
   assert_eq!(
-    original_attempts[0].ai_run_id.as_deref(),
+    original_attempts[1].ai_run_id.as_deref(),
     Some("ai-run-latest")
   );
   std::fs::remove_dir_all(root_path).ok();

@@ -133,22 +133,31 @@ fn copy_latest_natural_language_intent(
 ) -> AppResult<()> {
   let latest_intent = transaction
     .query_row(
-      "SELECT intent_text, language
-       FROM task_intent
-       WHERE task_id = ?1
-       ORDER BY updated_at DESC, created_at DESC, id DESC
+      "SELECT intent.id, intent.intent_text, intent.language
+       FROM task_intent AS intent
+       JOIN ai_run AS run ON run.id = intent.ai_run_id
+       WHERE intent.task_id = ?1 AND intent.parse_status = 'valid'
+         AND run.schema_valid = 1 AND run.validation_status = 'valid'
+       ORDER BY intent.updated_at DESC, intent.created_at DESC, intent.id DESC
        LIMIT 1",
       params![source_task_id],
-      |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+      |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, String>(1)?,
+          row.get::<_, Option<String>>(2)?,
+        ))
+      },
     )
     .optional()
     .map_err(database_error)?;
-  let Some((intent_text, language)) = latest_intent else {
+  let Some((origin_attempt_id, intent_text, language)) = latest_intent else {
     return Ok(());
   };
   let safe_details = serde_json::json!({
     "source": "user_edited_copy",
     "copied_from_task_id": source_task_id,
+    "origin_attempt_id": origin_attempt_id,
   });
   transaction
     .execute(
@@ -156,7 +165,10 @@ fn copy_latest_natural_language_intent(
         id, task_id, intent_text, language, parse_status, parse_phase,
         ai_run_id, error_code, error_message, retryable,
         error_safe_details_json, created_at, updated_at
-      ) VALUES (?1, ?2, ?3, ?4, 'valid', 'success', NULL, NULL, NULL, NULL, ?5, ?6, ?6)",
+      ) VALUES (?1, ?2, ?3, ?4, 'needs_review', 'needs_review', NULL,
+                'VALIDATION_ERROR',
+                '原始需求来自成功任务副本；如需使用 AI 重新解析，请点击“重新解析”',
+                0, ?5, ?6, ?6)",
       params![
         Uuid::new_v4().to_string(),
         target_task_id,
