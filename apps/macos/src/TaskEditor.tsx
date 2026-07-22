@@ -185,6 +185,9 @@ function TaskEditor({
         name: draft.name.trim(),
         platforms: [draft.platform],
         data_types: ['account'],
+        original_intent: draft.sourceType === 'natural_language'
+          ? draft.originalIntent.trim()
+          : null,
         source: 'user_edited',
         plan_json: planJson,
       })
@@ -673,6 +676,7 @@ function validateDraft(
   queryLocaleError: string,
 ) {
   if (draft.name.trim().length < 2) return '任务名称至少需要 2 个字符'
+  if (draft.sourceType === 'natural_language' && !draft.originalIntent.trim()) return '请填写原始自然语言需求'
   if (!draft.platform) return '请选择平台'
   if (!draft.accountSource) return '请选择账号来源'
   if (!draft.sourceInput.trim()) return '请填写当前账号来源需要的检索词、账号或作品信息'

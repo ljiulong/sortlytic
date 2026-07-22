@@ -171,6 +171,7 @@ export type ReviseCollectionTaskInput = {
   name: string
   platforms: string[]
   data_types: string[]
+  original_intent?: string | null
   source: 'user_edited'
   plan_json: Record<string, unknown>
 }

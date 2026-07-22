@@ -259,6 +259,52 @@ describe('完整任务编辑器', () => {
     }))
   })
 
+  it('保存自然语言任务修订时携带用户编辑后的原始需求', async () => {
+    const mounted = mountEditor({
+      naturalParseAttempt: attempt({ parse_status: 'valid' }),
+    })
+    await flushEditor()
+    const edited = '用中文查找英国 TikTok 宠物食品账号，最多 20 个'
+    const textarea = mounted.container.querySelector<HTMLTextAreaElement>(
+      '#task-editor-natural-input',
+    )
+
+    await act(async () => {
+      if (!textarea) throw new Error('找不到原始自然语言输入框')
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )?.set?.call(textarea, edited)
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => buttonByText(mounted.container, '切换到表单修正').click())
+    await act(async () => buttonByText(mounted.container, '保存新计划版本').click())
+    await flushEditor()
+
+    expect(apiMocks.reviseCollectionTask).toHaveBeenCalledWith(expect.objectContaining({
+      original_intent: edited,
+    }))
+  })
+
+  it('保存表单任务修订时不伪造自然语言原始需求', async () => {
+    apiMocks.getTask.mockResolvedValue(task({ source_type: 'form' }))
+    apiMocks.getLatestCollectionPlan.mockResolvedValue(plan({
+      plan_json: { ...plan().plan_json, query_locale: 'en-GB' },
+    }))
+    const mounted = mountEditor({})
+    await flushEditor()
+    await flushEditor()
+
+    const saveButton = buttonByText(mounted.container, '保存新计划版本') as HTMLButtonElement
+    expect(saveButton.disabled).toBe(false)
+    await act(async () => saveButton.click())
+    await flushEditor()
+
+    expect(apiMocks.reviseCollectionTask).toHaveBeenCalledWith(expect.objectContaining({
+      original_intent: null,
+    }))
+  })
+
   it('英国搜索来源拒绝非标准和地区不匹配的目标检索语言', async () => {
     for (const queryLocale of ['english-uk', 'zh-CN']) {
       apiMocks.getAiRun.mockResolvedValue({
