@@ -5,9 +5,22 @@ import type {
   CollectionTaskView,
   NaturalParseAttemptView,
 } from './backend-api'
-import { createTaskEditDraft } from './task-edit-draft'
+import { collectionIntentFromJson, createTaskEditDraft } from './task-edit-draft'
 
 describe('task edit draft mapping', () => {
+  it.each([
+    { ...intent(), source_input: { keyword: 'object' } },
+    { ...intent(), source_input: 42 },
+    { ...intent(), source_input: ['array'] },
+    { ...intent(), selected_fields: ['country_region', 42] },
+    { ...intent(), missing_fields: 'region_code' },
+    { ...intent(), confidence: Number.NaN },
+    { ...intent(), age_range: { min: 45, max: 21 } },
+    { ...intent(), gender_filter: ['female', 'inferred'] },
+  ])('rejects malformed legacy AI intent output without unsafe casts', (value) => {
+    expect(collectionIntentFromJson(value)).toBeUndefined()
+  })
+
   it('restores every editable field from a v4 plan and parsed intent', () => {
     const draft = createTaskEditDraft(
       task({ source_type: 'natural_language' }),

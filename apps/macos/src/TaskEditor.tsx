@@ -18,7 +18,11 @@ import {
 } from './backend-api'
 import { accountSourceFilterCapabilities, sourceInputCopy } from './account-source-rules'
 import { countryRegionSelectOptions } from './collection-select-options'
-import { createTaskEditDraft, type TaskEditDraft } from './task-edit-draft'
+import {
+  collectionIntentFromJson,
+  createTaskEditDraft,
+  type TaskEditDraft,
+} from './task-edit-draft'
 import { isMissingCollectionPlanProblem } from './task-editor-plan-error'
 import { validateQueryLocale } from './query-locale-validation'
 import TaskRevisionPreview from './TaskRevisionPreview'
@@ -687,13 +691,6 @@ function validateDraft(
   return ''
 }
 
-function collectionIntentFromJson(value: unknown): CollectionIntentV1 | undefined {
-  if (!isRecord(value) || value.schema_version !== 1 || !Array.isArray(value.selected_fields)) {
-    return undefined
-  }
-  return value as CollectionIntentV1
-}
-
 function intentFromDraft(draft: TaskEditDraft): CollectionIntentV1 {
   return {
     schema_version: 1,
@@ -748,10 +745,6 @@ function platformValue(value: string): CollectionIntentV1['platform'] {
 function timeRangeValue(value: string): CollectionIntentV1['time_range_days'] {
   const days = Number(value)
   return [1, 7, 30, 180].includes(days) ? days as 1 | 7 | 30 | 180 : null
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
 function EditorField({

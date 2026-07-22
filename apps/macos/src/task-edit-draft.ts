@@ -98,6 +98,30 @@ export function createTaskEditDraft(
   }
 }
 
+export function collectionIntentFromJson(value: unknown): CollectionIntentV1 | undefined {
+  if (!isRecord(value)
+    || value.schema_version !== 1
+    || !nullablePlatform(value.platform)
+    || !nullableString(value.account_source)
+    || !nullableString(value.source_input)
+    || !nullableString(value.query_locale)
+    || !nullableString(value.region_code)
+    || !stringArrayValue(value.selected_fields)
+    || !nullableTimeRange(value.time_range_days)
+    || !nullableAgeRange(value.age_range)
+    || !nullableGenderFilter(value.gender_filter)
+    || !nullablePositiveInteger(value.record_limit)
+    || !nullablePositiveInteger(value.budget_limit_micros)
+    || !stringArrayValue(value.missing_fields)
+    || typeof value.confidence !== 'number'
+    || !Number.isFinite(value.confidence)
+    || value.confidence < 0
+    || value.confidence > 1) {
+    return undefined
+  }
+  return value as CollectionIntentV1
+}
+
 function attemptWasSuperseded(
   task: CollectionTaskView,
   attempt: NaturalParseAttemptView,
@@ -159,6 +183,46 @@ function stringArray(value: unknown) {
 
 function stringValue(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function nullableString(value: unknown) {
+  return value === undefined || value === null || typeof value === 'string'
+}
+
+function nullablePlatform(value: unknown) {
+  return value === undefined
+    || value === null
+    || (typeof value === 'string' && ['tiktok', 'douyin', 'xiaohongshu'].includes(value))
+}
+
+function stringArrayValue(value: unknown) {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+}
+
+function nullableTimeRange(value: unknown) {
+  return value === undefined
+    || value === null
+    || (typeof value === 'number' && [1, 7, 30, 180].includes(value))
+}
+
+function nullableAgeRange(value: unknown) {
+  if (value === undefined || value === null) return true
+  if (!isRecord(value)) return false
+  const min = nonNegativeInteger(value.min)
+  const max = nonNegativeInteger(value.max)
+  return min !== undefined && max !== undefined && min <= max && max <= 130
+}
+
+function nullableGenderFilter(value: unknown) {
+  return value === undefined
+    || value === null
+    || (Array.isArray(value)
+      && value.every((gender) => typeof gender === 'string'
+        && ['male', 'female', 'other'].includes(gender)))
+}
+
+function nullablePositiveInteger(value: unknown) {
+  return value === undefined || value === null || positiveInteger(value) !== undefined
 }
 
 function positiveInteger(value: unknown) {
