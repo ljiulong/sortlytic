@@ -462,14 +462,13 @@ fn late_ai_response_does_not_replace_a_user_edited_plan() {
     .expect("valid intent should build a plan");
   let revised = revise_collection_task(
     &root_path,
-    ReviseCollectionTaskInput {
-      task_id: task.id.clone(),
-      name: "用户刚保存的修订".to_string(),
-      platforms: vec!["tiktok".to_string()],
-      data_types: vec!["account".to_string()],
-      source: "user_edited".to_string(),
-      plan_json: user_plan.plan_json,
-    },
+    ReviseCollectionTaskInput::user_edited_for_test(
+      task.id.clone(),
+      "用户刚保存的修订",
+      vec!["tiktok".to_string()],
+      vec!["account".to_string()],
+      user_plan.plan_json,
+    ),
   )
   .expect("user edit should save while AI is in flight");
   assert_eq!(revised.collection_plan.source, "user_edited");

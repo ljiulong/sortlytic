@@ -254,14 +254,13 @@ fn latest_task_runs_prefers_new_plan_even_when_attempt_number_restarts() {
   let replacement = execution_plan_input(&task.id);
   let revised = revise_collection_task(
     &root_path,
-    ReviseCollectionTaskInput {
-      task_id: task.id.clone(),
-      name: "修订后的任务".to_string(),
-      platforms: vec!["tiktok".to_string()],
-      data_types: vec!["keyword_search".to_string()],
-      source: "user_edited".to_string(),
-      plan_json: replacement.plan_json,
-    },
+    ReviseCollectionTaskInput::user_edited_for_test(
+      task.id.clone(),
+      "修订后的任务",
+      vec!["tiktok".to_string()],
+      vec!["keyword_search".to_string()],
+      replacement.plan_json,
+    ),
   )
   .expect("failed task should be revised in place");
   confirm_collection_plan(&root_path, &task.id, &revised.collection_plan.id)

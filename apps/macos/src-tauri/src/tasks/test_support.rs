@@ -5,6 +5,26 @@ use crate::api_profiles::{
   CredentialProviderType, TikhubApiProfile,
 };
 use crate::domain::AppResult;
+use crate::tasks::ReviseCollectionTaskInput;
+
+impl ReviseCollectionTaskInput {
+  pub(crate) fn user_edited_for_test(
+    task_id: impl Into<String>,
+    name: impl Into<String>,
+    platforms: Vec<String>,
+    data_types: Vec<String>,
+    plan_json: serde_json::Value,
+  ) -> Self {
+    Self {
+      task_id: task_id.into(),
+      name: name.into(),
+      platforms,
+      data_types,
+      source: "user_edited".to_string(),
+      plan_json,
+    }
+  }
+}
 
 const TEST_PROFILE_ID: &str = "00000000-0000-4000-8000-000000000001";
 const TEST_CREDENTIAL_ID: &str = "00000000-0000-4000-8000-000000000002";
