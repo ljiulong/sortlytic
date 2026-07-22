@@ -78,8 +78,92 @@ fn successful_tasks_are_copied_before_editing() {
       get_latest_collection_plan(&root_path, &task.id).unwrap().id,
       old_plan.id
     );
+    assert!(
+      crate::ai::list_task_intents(&root_path, &revised.task.id)
+        .unwrap()
+        .is_empty(),
+      "form tasks must not gain a natural-language intent when copied"
+    );
     std::fs::remove_dir_all(root_path).ok();
   }
+}
+
+#[test]
+fn copied_natural_language_tasks_keep_the_latest_original_request() {
+  let root_path = workspace("copy-natural-language-intent");
+  let task = create_collection_task(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "英国宠物用品账号".to_string(),
+      source_type: "natural_language".to_string(),
+      platforms: vec!["tiktok".to_string()],
+      data_types: vec!["keyword_search".to_string()],
+    },
+  )
+  .expect("natural-language task created");
+  save_collection_plan(&root_path, plan_input(&task.id)).expect("plan saved");
+  let connection = open_workspace_connection(&root_path).expect("database open");
+  for (id, intent_text, ai_run_id, created_at) in [
+    (
+      "intent-old",
+      "查找宠物用品账号",
+      "ai-run-old",
+      "2026-07-20T00:00:00Z",
+    ),
+    (
+      "intent-latest",
+      "用中文查找英国 TikTok 宠物用品账号",
+      "ai-run-latest",
+      "2026-07-20T00:01:00Z",
+    ),
+  ] {
+    connection
+      .execute(
+        "INSERT INTO task_intent (
+          id, task_id, intent_text, language, parse_status, parse_phase,
+          ai_run_id, error_safe_details_json, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, 'zh-CN', 'valid', 'success', ?4, '{}', ?5, ?5)",
+        params![id, task.id, intent_text, ai_run_id, created_at],
+      )
+      .expect("intent inserted");
+  }
+  drop(connection);
+  set_task_status(&root_path, &task.id, "success");
+
+  let revised = revise_collection_task(
+    &root_path,
+    revise_input(&task.id, "成功任务的新版本", 10, 1),
+  )
+  .expect("successful natural-language task should copy and revise");
+
+  let copied_attempts =
+    crate::ai::list_task_intents(&root_path, &revised.task.id).expect("copied intent should load");
+  assert_eq!(copied_attempts.len(), 1);
+  let copied = &copied_attempts[0];
+  assert_ne!(copied.id, "intent-latest");
+  assert_eq!(copied.task_id, revised.task.id);
+  assert_eq!(copied.intent_text, "用中文查找英国 TikTok 宠物用品账号");
+  assert_eq!(copied.language.as_deref(), Some("zh-CN"));
+  assert_eq!(copied.parse_status, "valid");
+  assert_eq!(copied.parse_phase.as_deref(), Some("success"));
+  assert_eq!(copied.ai_run_id, None, "old AI runs must not be reused");
+  assert_eq!(
+    copied.error_safe_details_json,
+    serde_json::json!({
+      "source": "user_edited_copy",
+      "copied_from_task_id": task.id,
+    })
+  );
+
+  let original_attempts = crate::ai::list_task_intents(&root_path, &task.id)
+    .expect("original intents should remain available");
+  assert_eq!(original_attempts.len(), 2);
+  assert_eq!(original_attempts[0].id, "intent-latest");
+  assert_eq!(
+    original_attempts[0].ai_run_id.as_deref(),
+    Some("ai-run-latest")
+  );
+  std::fs::remove_dir_all(root_path).ok();
 }
 
 #[test]

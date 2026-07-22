@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use chrono::Utc;
-use rusqlite::{params, TransactionBehavior};
+use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 use uuid::Uuid;
 
 use super::plans::{latest_plan_for_task, save_collection_plan_in_transaction};
@@ -88,6 +88,12 @@ pub fn revise_collection_task(
     current.id.clone()
   };
 
+  if current.source_type == "natural_language" {
+    if let Some(source_task_id) = copied_from_task_id.as_deref() {
+      copy_latest_natural_language_intent(&transaction, source_task_id, &target_task_id, &now)?;
+    }
+  }
+
   let plan_id = save_collection_plan_in_transaction(
     &transaction,
     SaveCollectionPlanInput {
@@ -117,4 +123,49 @@ pub fn revise_collection_task(
     collection_plan,
     copied_from_task_id,
   })
+}
+
+fn copy_latest_natural_language_intent(
+  transaction: &Transaction<'_>,
+  source_task_id: &str,
+  target_task_id: &str,
+  now: &str,
+) -> AppResult<()> {
+  let latest_intent = transaction
+    .query_row(
+      "SELECT intent_text, language
+       FROM task_intent
+       WHERE task_id = ?1
+       ORDER BY updated_at DESC, created_at DESC, id DESC
+       LIMIT 1",
+      params![source_task_id],
+      |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+    )
+    .optional()
+    .map_err(database_error)?;
+  let Some((intent_text, language)) = latest_intent else {
+    return Ok(());
+  };
+  let safe_details = serde_json::json!({
+    "source": "user_edited_copy",
+    "copied_from_task_id": source_task_id,
+  });
+  transaction
+    .execute(
+      "INSERT INTO task_intent (
+        id, task_id, intent_text, language, parse_status, parse_phase,
+        ai_run_id, error_code, error_message, retryable,
+        error_safe_details_json, created_at, updated_at
+      ) VALUES (?1, ?2, ?3, ?4, 'valid', 'success', NULL, NULL, NULL, NULL, ?5, ?6, ?6)",
+      params![
+        Uuid::new_v4().to_string(),
+        target_task_id,
+        intent_text,
+        language,
+        safe_details.to_string(),
+        now
+      ],
+    )
+    .map(|_| ())
+    .map_err(database_error)
 }
