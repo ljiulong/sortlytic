@@ -450,6 +450,45 @@ fn task_diagnostic_views_return_explicit_unknown_codes_for_legacy_values() {
 }
 
 #[test]
+fn latest_task_runs_include_terminal_error_safe_details_without_n_plus_one_queries() {
+  let root_path = unique_temp_workspace("latest-run-safe-details");
+  create_workspace("运行错误详情测试", &root_path).expect("workspace should be created");
+  let task = create_collection_task(&root_path, create_task_input()).expect("task created");
+  let plan = save_collection_plan(&root_path, plan_input(&task.id)).expect("plan saved");
+  confirm_collection_plan(&root_path, &task.id, &plan.id).expect("plan confirmed");
+  let run = enqueue_task(&root_path, &task.id).expect("task enqueued");
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  connection
+    .execute(
+      "UPDATE task_run
+       SET status = 'failed', ended_at = ?1, current_stage = '执行失败',
+           error_code = 'TIKHUB_RATE_LIMIT', error_message = 'TikHub 暂时触发限流'
+       WHERE id = ?2",
+      params![Utc::now().to_rfc3339(), run.id],
+    )
+    .expect("run should fail");
+  connection
+    .execute(
+      "INSERT INTO task_log (
+         id, task_run_id, stage, level, message, safe_details_json, created_at
+       ) VALUES ('terminal-details-log', ?1, '执行失败', 'error', 'TikHub 暂时触发限流',
+                 '{\"retry_after\":\"17\",\"retry_attempts\":\"3\"}', ?2)",
+      params![run.id, Utc::now().to_rfc3339()],
+    )
+    .expect("terminal log should insert");
+  drop(connection);
+
+  let latest_runs = list_latest_task_runs(&root_path).expect("latest runs should list");
+
+  assert_eq!(latest_runs[0].error_safe_details_json["retry_after"], "17");
+  assert_eq!(
+    latest_runs[0].error_safe_details_json["retry_attempts"],
+    "3"
+  );
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn latest_persisted_plan_can_be_loaded_for_queue_actions() {
   let root_path = unique_temp_workspace("latest-task-plan");
   create_workspace("任务测试", &root_path).expect("workspace should be created");

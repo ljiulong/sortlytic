@@ -91,10 +91,16 @@ pub fn claim_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRunV
   loop {
     let queued = transaction
       .query_row(
-        "SELECT id, task_id, status, started_at, ended_at, current_stage, error_code,
-                error_message, retryable, cost_actual_json, plan_id, attempt_number, claimed_at
-         FROM task_run WHERE status = 'queued'
-         ORDER BY started_at ASC, id ASC
+        "SELECT run.id, run.task_id, run.status, run.started_at, run.ended_at, run.current_stage,
+                run.error_code, run.error_message, run.retryable, run.cost_actual_json,
+                run.plan_id, run.attempt_number, run.claimed_at,
+                COALESCE((
+                  SELECT log.safe_details_json FROM task_log AS log
+                  WHERE log.task_run_id = run.id AND log.level = 'error'
+                  ORDER BY log.created_at DESC, log.id DESC LIMIT 1
+                ), '{}')
+         FROM task_run AS run WHERE run.status = 'queued'
+         ORDER BY run.started_at ASC, run.id ASC
          LIMIT 1",
         [],
         map_task_run,

@@ -123,6 +123,7 @@ pub struct TaskRunView {
   pub error_message: Option<String>,
   pub retryable: bool,
   pub cost_actual_json: Value,
+  pub error_safe_details_json: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -389,7 +390,12 @@ pub fn list_latest_task_runs(root_path: impl AsRef<Path>) -> AppResult<Vec<TaskR
     .prepare(
       "SELECT run.id, run.task_id, run.status, run.started_at, run.ended_at,
               run.current_stage, run.error_code, run.error_message, run.retryable,
-              run.cost_actual_json, run.plan_id, run.attempt_number, run.claimed_at
+              run.cost_actual_json, run.plan_id, run.attempt_number, run.claimed_at,
+              COALESCE((
+                SELECT log.safe_details_json FROM task_log AS log
+                WHERE log.task_run_id = run.id AND log.level = 'error'
+                ORDER BY log.created_at DESC, log.id DESC LIMIT 1
+              ), '{}')
        FROM task_run run
        WHERE NOT EXISTS (
          SELECT 1
@@ -496,10 +502,16 @@ fn get_task_by_id(connection: &Connection, task_id: &str) -> AppResult<Collectio
 fn get_task_run(connection: &Connection, run_id: &str) -> AppResult<TaskRunView> {
   connection
     .query_row(
-      "SELECT id, task_id, status, started_at, ended_at, current_stage, error_code,
-              error_message, retryable, cost_actual_json, plan_id, attempt_number, claimed_at
-       FROM task_run
-       WHERE id = ?1",
+      "SELECT run.id, run.task_id, run.status, run.started_at, run.ended_at, run.current_stage,
+              run.error_code, run.error_message, run.retryable, run.cost_actual_json,
+              run.plan_id, run.attempt_number, run.claimed_at,
+              COALESCE((
+                SELECT log.safe_details_json FROM task_log AS log
+                WHERE log.task_run_id = run.id AND log.level = 'error'
+                ORDER BY log.created_at DESC, log.id DESC LIMIT 1
+              ), '{}')
+       FROM task_run AS run
+       WHERE run.id = ?1",
       params![run_id],
       map_task_run,
     )
@@ -567,6 +579,7 @@ fn map_task_run(row: &Row<'_>) -> rusqlite::Result<TaskRunView> {
     plan_id: row.get(10)?,
     attempt_number: row.get(11)?,
     claimed_at: row.get(12)?,
+    error_safe_details_json: string_to_json(row.get(13)?),
   })
 }
 
