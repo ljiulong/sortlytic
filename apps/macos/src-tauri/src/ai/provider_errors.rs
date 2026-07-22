@@ -1,6 +1,37 @@
 use reqwest::StatusCode;
+use serde_json::Value;
 
-use crate::domain::{AppError, AppErrorCode, AppErrorStage};
+use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
+
+pub(super) fn reject_credential_echo(output: &Value, api_key: Option<&str>) -> AppResult<()> {
+  let echoed = api_key
+    .filter(|secret| !secret.is_empty())
+    .is_some_and(|secret| json_contains_secret(output, secret));
+  if echoed {
+    return Err(
+      model_error(
+        AppErrorCode::ModelProtocolError,
+        "AI 服务响应包含当前配置凭据，已拒绝保存响应；请立即轮换 API Key 并检查服务端点",
+        false,
+      )
+      .with_safe_detail("reason", "provider_credential_echo"),
+    );
+  }
+  Ok(())
+}
+
+fn json_contains_secret(value: &Value, secret: &str) -> bool {
+  match value {
+    Value::String(value) => value.contains(secret),
+    Value::Array(values) => values
+      .iter()
+      .any(|value| json_contains_secret(value, secret)),
+    Value::Object(values) => values
+      .iter()
+      .any(|(key, value)| key.contains(secret) || json_contains_secret(value, secret)),
+    Value::Null | Value::Bool(_) | Value::Number(_) => false,
+  }
+}
 
 pub(super) fn status_error(status: StatusCode, retry_after: Option<&str>) -> AppError {
   let (code, message, retryable) = match status.as_u16() {

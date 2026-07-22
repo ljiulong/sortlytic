@@ -10,7 +10,9 @@ use crate::api_profiles::{AiApiFormat, AiProviderType};
 use crate::domain::{AppErrorCode, AppResult};
 
 use super::collection_intent_schema::collection_intent_schema;
-use super::provider_errors::{model_error, safe_retry_after, status_error, transport_error};
+use super::provider_errors::{
+  model_error, reject_credential_echo, safe_retry_after, status_error, transport_error,
+};
 use super::provider_policy::{model_timeouts, ModelCallPurpose};
 
 const MAX_MODEL_RESPONSE_BYTES: u64 = 2 * 1024 * 1024;
@@ -75,7 +77,9 @@ fn call_model_for_purpose(
     AiApiFormat::Ollama => send_ollama(&client, config, request),
   }?;
   let latency_ms = i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX);
-  parse_response(config.api_format, response, latency_ms)
+  let response = parse_response(config.api_format, response, latency_ms)?;
+  reject_credential_echo(&response.output_json, config.api_key.as_deref())?;
+  Ok(response)
 }
 
 pub(crate) fn collection_intent_request(prompt_content: &str, intent_text: &str) -> ModelRequest {

@@ -677,6 +677,71 @@ fn text_generation_uses_active_prompt_and_real_provider_response() {
 }
 
 #[test]
+fn provider_credential_echo_is_rejected_without_persisting_the_response() {
+  let root_path = unique_temp_workspace("ai-credential-echo");
+  create_workspace("AI 凭据回显测试", &root_path).expect("workspace should be created");
+  let mut intent = valid_collection_intent();
+  intent["source_input"] = serde_json::json!("sk-ai-secret");
+  let response = serde_json::json!({
+    "choices": [{ "message": { "content": intent.to_string() } }]
+  })
+  .to_string();
+  let (base_url, server) = serve_ai_once(200, response, |_| {});
+  configure_active_ai(&root_path, base_url);
+  let task = create_collection_task(
+    &root_path,
+    CreateCollectionTaskInput {
+      name: "拒绝供应商凭据回显".to_string(),
+      source_type: "natural_language".to_string(),
+      platforms: vec![],
+      data_types: vec![],
+    },
+  )
+  .expect("task should be created");
+
+  let error = generate_collection_plan_from_text(
+    &root_path,
+    GenerateCollectionPlanFromTextInput {
+      task_id: task.id.clone(),
+      intent_text: "采集英国 TikTok 宠物用品账号".to_string(),
+      provider_id: None,
+      model_id: None,
+    },
+  )
+  .expect_err("供应商回显当前 API Key 时必须拒绝整个响应");
+  server.join().expect("test server should finish");
+
+  assert_eq!(error.code, AppErrorCode::ModelProtocolError);
+  assert!(!error.message.contains("sk-ai-secret"));
+  let runs = list_ai_runs(
+    &root_path,
+    task.id.clone(),
+    Some("collection_intent_generation".to_string()),
+  )
+  .unwrap();
+  assert_eq!(runs.len(), 1);
+  assert_eq!(runs[0].validation_status, "failed");
+  assert!(runs[0].output_json.is_none());
+  let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
+  let persisted: String = connection
+    .query_row(
+      "SELECT COALESCE(group_concat(value, '\n'), '') FROM (
+         SELECT COALESCE(output_json, '') || COALESCE(error_message, '') AS value
+         FROM ai_run WHERE task_id = ?1
+         UNION ALL
+         SELECT COALESCE(error_message, '') || error_safe_details_json
+         FROM task_intent WHERE task_id = ?1
+       )",
+      [&task.id],
+      |row| row.get(0),
+    )
+    .unwrap();
+  assert!(!persisted.contains("sk-ai-secret"));
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn invalid_model_intent_does_not_change_existing_task_scope_or_create_a_plan() {
   let root_path = unique_temp_workspace("ai-invalid-plan-scope");
   create_workspace("AI 无效计划范围测试", &root_path).expect("workspace should be created");
