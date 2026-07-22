@@ -351,7 +351,7 @@ fn load_accounts(connection: &Connection, task_id: &str) -> AppResult<Vec<Export
          AND run.id = (
            SELECT latest.id FROM task_run AS latest
            WHERE latest.task_id = ?1 AND latest.status IN ('success', 'partial_success')
-           ORDER BY COALESCE(latest.ended_at, latest.started_at) DESC, latest.id DESC LIMIT 1
+           ORDER BY latest.run_sequence DESC LIMIT 1
          )
        ORDER BY account.created_at, account.id",
     )

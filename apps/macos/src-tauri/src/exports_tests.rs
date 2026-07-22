@@ -41,6 +41,49 @@ fn report_exports_xlsx_file() {
 }
 
 #[test]
+fn xlsx_export_uses_monotonic_latest_run_after_clock_rollback() {
+  let (root_path, report) = test_report("xlsx-latest-sequence");
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  for (run_id, started_at) in [
+    ("xlsx-old-run", "2026-07-21T02:00:00Z"),
+    ("xlsx-latest-run", "2026-07-21T01:00:00Z"),
+  ] {
+    connection
+      .execute(
+        "INSERT INTO task_run (id, task_id, status, started_at, ended_at)
+         VALUES (?1, ?2, 'success', ?3, ?3)",
+        params![run_id, report.task_id, started_at],
+      )
+      .unwrap();
+  }
+  for (id, run_id, username) in [
+    ("xlsx-old-account", "xlsx-old-run", "旧运行不应导出"),
+    ("xlsx-latest-account", "xlsx-latest-run", "回拨后最新运行"),
+  ] {
+    connection
+      .execute(
+        "INSERT INTO collected_account (
+           id, task_run_id, platform, identity_key, username, data_source, collected_at,
+           output_included, created_at, updated_at
+         ) VALUES (?1, ?2, 'tiktok', ?1, ?3, 'TikHub API', ?4, 1, ?4, ?4)",
+        params![id, run_id, username, "2026-07-21T03:00:00Z"],
+      )
+      .unwrap();
+  }
+  drop(connection);
+
+  let job = create_export_job(&root_path, &report.id, "xlsx", None).expect("xlsx should export");
+  let strings = unzip_entry(
+    &job.file_path.expect("xlsx path should exist"),
+    "xl/sharedStrings.xml",
+  );
+
+  assert!(strings.contains("回拨后最新运行"));
+  assert!(!strings.contains("旧运行不应导出"));
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn pdf_export_embeds_its_font_and_does_not_copy_raw_accounts() {
   let (root_path, report) = test_report("pdf-results");
   let connection = open_workspace_connection(&root_path).expect("database should open");
