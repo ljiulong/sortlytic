@@ -79,7 +79,7 @@ export default function NaturalParseFeedback({
         <div className="natural-parse-feedback__body">
           <p>
             {state.modelId
-              ? `AI 配置：${state.providerId ?? '当前配置'} · ${state.modelId}`
+              ? `AI 配置：${state.providerName ?? '当前配置'} · ${state.modelId}`
               : '正在读取当前已测试的 AI 配置与模型'}
           </p>
           <p className="natural-parse-feedback__safety">

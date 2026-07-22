@@ -20,7 +20,8 @@ describe('NaturalParseFeedback', () => {
       phase: 'requesting_ai',
       intentText: '查找英国 TikTok 宠物账号',
       startedAt: new Date().toISOString(),
-      providerId: '生产 DeepSeek',
+      providerId: '5fd84e45-2cd0-4cfe-9af9-9e72c950bf55',
+      providerName: '生产 DeepSeek',
       modelId: 'deepseek-v4-flash',
       draftPreserved: true,
     })
@@ -29,6 +30,8 @@ describe('NaturalParseFeedback', () => {
     expect(markup).toContain('aria-live="polite"')
     expect(markup).toContain('等待模型响应')
     expect(markup).toContain('deepseek-v4-flash')
+    expect(markup).toContain('生产 DeepSeek')
+    expect(markup).not.toContain('5fd84e45-2cd0-4cfe-9af9-9e72c950bf55')
     expect(markup).toContain('解析不会自动调用 TikHub')
   })
 
