@@ -182,8 +182,7 @@ fn evaluate_collection_case(
   {
     if plan_valid != expected_valid {
       rule_errors.push(format!(
-        "计划校验结果应为 {expected_valid}，实际为 {}",
-        plan_valid
+        "计划校验结果应为 {expected_valid}，实际为 {plan_valid}"
       ));
     }
   }
@@ -246,8 +245,7 @@ fn compare_string_array_rule(
   let expected = string_array(rules.get(rule_field));
   if actual != expected {
     errors.push(format!(
-      "{output_field} 应为 {:?}，实际为 {:?}",
-      expected, actual
+      "{output_field} 应为 {expected:?}，实际为 {actual:?}"
     ));
   }
 }
@@ -263,8 +261,7 @@ fn compare_nullable_string_rule(
   let expected = rules.get(rule_field).and_then(Value::as_str);
   if actual != expected {
     errors.push(format!(
-      "{output_field} 应为 {:?}，实际为 {:?}",
-      expected, actual
+      "{output_field} 应为 {expected:?}，实际为 {actual:?}"
     ));
   }
 }

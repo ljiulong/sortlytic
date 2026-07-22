@@ -602,8 +602,7 @@ fn validate_workspace_identity_contents(
 
   let registered_root = fs::canonicalize(&registered_root).map_err(|error| {
     workspace_error(format!(
-      "无法解析数据库登记的工作区路径 {}：{}",
-      registered_root, error
+      "无法解析数据库登记的工作区路径 {registered_root}：{error}"
     ))
   })?;
   if registered_root != root_path {

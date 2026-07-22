@@ -24,10 +24,10 @@ pub(super) fn start_task_worker(app: &tauri::AppHandle) {
     .spawn(move || loop {
       if let Some(workspace) = app.state::<AppState>().active_workspace() {
         if let Err(error) = tasks::recover_interrupted_runs(&workspace.root_path) {
-          log::error!("恢复本地任务运行失败：{:?}", error);
+          log::error!("恢复本地任务运行失败：{error:?}");
         }
         if let Err(error) = tasks::execute_next_task(&workspace.root_path) {
-          log::error!("执行本地任务失败：{:?}", error);
+          log::error!("执行本地任务失败：{error:?}");
         }
       }
       thread::sleep(Duration::from_secs(2));
