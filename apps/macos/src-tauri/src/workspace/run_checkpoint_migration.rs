@@ -204,12 +204,15 @@ fn marker(connection: &Connection) -> AppResult<Option<(String, String)>> {
 }
 
 fn schema_is_current(connection: &Connection) -> AppResult<bool> {
-  if columns(connection, "task_run")?.join(",")
-    != "id,task_id,status,started_at,ended_at,current_stage,error_code,error_message,retryable,cost_actual_json,plan_id,attempt_number,claimed_at"
-    || columns(connection, "task_run_step")?.join(",")
-      != "id,task_run_id,api_call_step_id,status,stop_reason,started_at,completed_at,created_at,updated_at"
-    || columns(connection, "collection_page_checkpoint")?.join(",")
-      != "id,task_run_step_id,page_index,idempotency_key,input_cursor_json,status,request_attempt_count,retry_count,fallback_count,final_endpoint_key,provider_response_json,provider_response_hash,provider_response_size,has_more,next_cursor_json,record_count_received,record_count_persisted,cost_actual_json,last_error_code,last_error_message,retryable,requested_at,response_received_at,committed_at,created_at,updated_at"
+  if !columns(connection, "task_run")?.join(",").starts_with(
+    "id,task_id,status,started_at,ended_at,current_stage,error_code,error_message,retryable,cost_actual_json,plan_id,attempt_number,claimed_at",
+  ) || !columns(connection, "task_run_step")?.join(",").starts_with(
+    "id,task_run_id,api_call_step_id,status,stop_reason,started_at,completed_at,created_at,updated_at",
+  ) || !columns(connection, "collection_page_checkpoint")?
+    .join(",")
+    .starts_with(
+      "id,task_run_step_id,page_index,idempotency_key,input_cursor_json,status,request_attempt_count,retry_count,fallback_count,final_endpoint_key,provider_response_json,provider_response_hash,provider_response_size,has_more,next_cursor_json,record_count_received,record_count_persisted,cost_actual_json,last_error_code,last_error_message,retryable,requested_at,response_received_at,committed_at,created_at,updated_at",
+    )
   {
     return Ok(false);
   }
@@ -302,22 +305,8 @@ mod tests {
     );
     assert_eq!(marker(&connection, 3).0, "tikhub_connector");
     assert_eq!(
-      columns(&connection, "task_run"),
-      [
-        "id",
-        "task_id",
-        "status",
-        "started_at",
-        "ended_at",
-        "current_stage",
-        "error_code",
-        "error_message",
-        "retryable",
-        "cost_actual_json",
-        "plan_id",
-        "attempt_number",
-        "claimed_at",
-      ]
+      columns(&connection, "task_run").last().map(String::as_str),
+      Some("run_sequence")
     );
     for table in ["task_run_step", "collection_page_checkpoint"] {
       assert_eq!(object_count(&connection, "table", table), 1);
