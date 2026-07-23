@@ -56,10 +56,11 @@ where
       dependency_data_type: step.dependency_data_type.clone(),
     },
   )?;
-  mark_step_running(&connection, &step.id)?;
+  mark_step_running(&connection, fence, &step.id)?;
   if targets.is_empty() {
     return mark_step_stopped(
       &connection,
+      fence,
       &step.id,
       "provider_exhausted",
       &Utc::now().to_rfc3339(),
@@ -87,6 +88,7 @@ where
       stop_remaining_targets(&connection, &run_id, &step.step_key)?;
       return mark_step_stopped(
         &connection,
+        fence,
         &step.id,
         "record_limit",
         &Utc::now().to_rfc3339(),
@@ -117,9 +119,9 @@ where
 
   let now = Utc::now().to_rfc3339();
   if request_limited {
-    mark_step_stopped(&connection, &step.id, "request_limit", &now)
+    mark_step_stopped(&connection, fence, &step.id, "request_limit", &now)
   } else {
-    mark_step_success(&connection, &step.id, &now)
+    mark_step_success(&connection, fence, &step.id, &now)
   }
 }
 
@@ -148,11 +150,16 @@ where
   guard_request(&request)?;
   let current_cursor = target.cursor.clone();
   update_target(connection, target, "running", current_cursor)?;
-  let (checkpoint_id, idempotency_key) =
-    insert_prepared_checkpoint(connection, &step.id, page_index, target.cursor.as_ref())?;
+  let (checkpoint_id, idempotency_key) = insert_prepared_checkpoint(
+    connection,
+    fence,
+    &step.id,
+    page_index,
+    target.cursor.as_ref(),
+  )?;
   let request = request.with_idempotency_key(idempotency_key)?;
   let requested_at = Utc::now().to_rfc3339();
-  mark_checkpoint_requesting(connection, &checkpoint_id, &requested_at)?;
+  mark_checkpoint_requesting(connection, fence, &checkpoint_id, &requested_at)?;
   let page_result = fetch_page(&request);
   super::ensure_run_accepts_response(root_path, run_id)?;
   let page = match page_result {
@@ -170,7 +177,7 @@ where
       return Ok(());
     }
     Err(error) if response_status_is_uncertain(&error) => {
-      mark_checkpoint_uncertain(connection, &checkpoint_id, &error.message)?;
+      mark_checkpoint_uncertain(connection, fence, &checkpoint_id, &error.message)?;
       return Err(worker_error(
         "UNCERTAIN_REQUEST_AFTER_FAILURE",
         "TikHub 目标请求已发出但响应状态不确定，已禁止自动重试",
@@ -180,6 +187,7 @@ where
     Err(error) => {
       mark_checkpoint_failed_with_retryable(
         connection,
+        fence,
         &checkpoint_id,
         &serialized_error_code(&error.code),
         &error.message,
@@ -203,7 +211,7 @@ where
   ) {
     Ok(persisted) => persisted,
     Err(error) => {
-      mark_checkpoint_uncertain(connection, &checkpoint_id, &error.message)?;
+      mark_checkpoint_uncertain(connection, fence, &checkpoint_id, &error.message)?;
       return Err(worker_error(
         "RECORD_PERSISTENCE_FAILED",
         "TikHub 目标响应已返回但记录落库失败，已禁止自动重试",
@@ -239,7 +247,7 @@ where
     const ERROR_CODE: &str = "ACCOUNT_IDENTITY_CONTRACT_FAILED";
     const ERROR_MESSAGE: &str =
       "TikHub 主来源返回了记录，但所有记录都缺少平台用户 ID 和可用账号标识";
-    mark_checkpoint_failed(connection, &checkpoint_id, ERROR_CODE, ERROR_MESSAGE)?;
+    mark_checkpoint_failed(connection, fence, &checkpoint_id, ERROR_CODE, ERROR_MESSAGE)?;
     target.request_count += 1;
     let cursor = target.cursor.clone();
     update_target(connection, target, "failed", cursor)?;
@@ -254,6 +262,7 @@ where
   let input_cursor_json = target.cursor.as_ref().map(Value::to_string);
   mark_checkpoint_response_received(
     connection,
+    fence,
     &checkpoint_id,
     &raw_response,
     &response_hash,
@@ -266,7 +275,7 @@ where
     &response_received_at,
     next_cursor_json.as_deref(),
   )?;
-  mark_checkpoint_completed(connection, &checkpoint_id, &Utc::now().to_rfc3339())?;
+  mark_checkpoint_completed(connection, fence, &checkpoint_id, &Utc::now().to_rfc3339())?;
 
   target.request_count += 1;
   if page.has_more && target.request_count < step.request_limit {

@@ -326,7 +326,7 @@ where
       |row| row.get::<_, String>(0),
     )
     .map_err(database_error)?;
-  mark_step_running(&connection, &step.id)?;
+  mark_step_running(&connection, fence, &step.id)?;
 
   loop {
     if page_index >= step.request_limit {
@@ -380,7 +380,7 @@ where
         &committed_at,
       )?;
       if !page.has_more {
-        mark_step_success(&connection, &step.id, &committed_at)?;
+        mark_step_success(&connection, fence, &step.id, &committed_at)?;
         return Ok(());
       }
       cursor = page.next_cursor;
@@ -404,18 +404,18 @@ where
       }
       (checkpoint.id, checkpoint.idempotency_key)
     } else {
-      insert_prepared_checkpoint(&connection, &step.id, page_index, cursor.as_ref())?
+      insert_prepared_checkpoint(&connection, fence, &step.id, page_index, cursor.as_ref())?
     };
     let request = request.with_idempotency_key(idempotency_key)?;
     let requested_at = Utc::now().to_rfc3339();
-    mark_checkpoint_requesting(&connection, &checkpoint_id, &requested_at)?;
+    mark_checkpoint_requesting(&connection, fence, &checkpoint_id, &requested_at)?;
 
     let page_result = fetch_page(&request);
     ensure_run_accepts_response(root_path, &run_id)?;
     let page = match page_result {
       Ok(page) => page,
       Err(error) if response_status_is_uncertain(&error) => {
-        mark_checkpoint_uncertain(&connection, &checkpoint_id, &error.message)?;
+        mark_checkpoint_uncertain(&connection, fence, &checkpoint_id, &error.message)?;
         return Err(worker_error(
           "UNCERTAIN_REQUEST_AFTER_FAILURE",
           "TikHub 请求已发出但响应状态不确定，已禁止自动重试",
@@ -425,6 +425,7 @@ where
       Err(error) => {
         mark_checkpoint_failed_with_retryable(
           &connection,
+          fence,
           &checkpoint_id,
           &serialized_error_code(&error.code),
           &error.message,
@@ -441,6 +442,7 @@ where
       if error.safe_details.get("worker_code").map(String::as_str) == Some("RECORD_LIMIT_REACHED") {
         mark_checkpoint_failed(
           &connection,
+          fence,
           &checkpoint_id,
           "RECORD_LIMIT_REACHED",
           "响应记录数将超过已确认的记录上限",
@@ -462,7 +464,7 @@ where
     ) {
       Ok(persisted) => persisted,
       Err(error) => {
-        mark_checkpoint_uncertain(&connection, &checkpoint_id, &error.message)?;
+        mark_checkpoint_uncertain(&connection, fence, &checkpoint_id, &error.message)?;
         return Err(worker_error(
           "RECORD_PERSISTENCE_FAILED",
           "TikHub 响应已返回但记录落库失败，已禁止自动重试",
@@ -489,7 +491,7 @@ where
       &page.records,
       Some(&response_received_at),
     ) {
-      mark_checkpoint_uncertain(&connection, &checkpoint_id, &error.message)?;
+      mark_checkpoint_uncertain(&connection, fence, &checkpoint_id, &error.message)?;
       return Err(worker_error(
         "ACCOUNT_PERSISTENCE_FAILED",
         "TikHub 响应已返回但账号合并落库失败，已禁止自动重试",
@@ -506,6 +508,7 @@ where
     let cost_actual_json = pricing::checkpoint_quote_json(&connection, &run_id, &request)?;
     mark_checkpoint_response_received(
       &connection,
+      fence,
       &checkpoint_id,
       &raw_response,
       &response_hash,
@@ -519,10 +522,10 @@ where
       next_cursor_json.as_deref(),
     )?;
     let committed_at = Utc::now().to_rfc3339();
-    mark_checkpoint_completed(&connection, &checkpoint_id, &committed_at)?;
+    mark_checkpoint_completed(&connection, fence, &checkpoint_id, &committed_at)?;
 
     if !page.has_more {
-      mark_step_success(&connection, &step.id, &committed_at)?;
+      mark_step_success(&connection, fence, &step.id, &committed_at)?;
       return Ok(());
     }
     cursor = page.next_cursor;
