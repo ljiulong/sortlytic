@@ -87,18 +87,28 @@ where
     if step.depends_on_step_key.is_none()
       && output_count(&connection, &run_id)? >= step.record_limit
     {
-      stop_remaining_targets(&connection, fence, &run_id, &step.step_key)?;
-      return mark_step_stopped(
-        &connection,
-        fence,
-        &step.id,
-        "record_limit",
-        &Utc::now().to_rfc3339(),
-      );
+      #[cfg(test)]
+      super::takeover_tests::pause_before_pipeline_limit_terminal(root_path, &step.task_id);
+      return with_task_dispatch_gate(root_path, &step.task_id, fence.is_some(), || {
+        ensure_run_accepts_dispatch(&connection, &step.task_id, &run_id, &step.id)?;
+        stop_remaining_targets(&connection, fence, &run_id, &step.step_key)?;
+        mark_step_stopped(
+          &connection,
+          fence,
+          &step.id,
+          "record_limit",
+          &Utc::now().to_rfc3339(),
+        )
+      });
     }
     if target.request_count >= step.request_limit {
-      let cursor = target.cursor.clone();
-      update_target(&connection, fence, &mut target, "exhausted", cursor)?;
+      #[cfg(test)]
+      super::takeover_tests::pause_before_pipeline_limit_terminal(root_path, &step.task_id);
+      with_task_dispatch_gate(root_path, &step.task_id, fence.is_some(), || {
+        ensure_run_accepts_dispatch(&connection, &step.task_id, &run_id, &step.id)?;
+        let cursor = target.cursor.clone();
+        update_target(&connection, fence, &mut target, "exhausted", cursor)
+      })?;
       request_limited = true;
       continue;
     }

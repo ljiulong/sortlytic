@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 type DispatchGateContentionObserver = (PathBuf, String, mpsc::Sender<bool>);
 type ResponsePersistencePause = (PathBuf, String, mpsc::Sender<()>, mpsc::Receiver<()>);
+type PipelineLimitPause = (PathBuf, String, mpsc::Sender<()>, mpsc::Receiver<()>);
 
 fn dispatch_gate_contention_observers() -> &'static Mutex<Vec<DispatchGateContentionObserver>> {
   static OBSERVERS: OnceLock<Mutex<Vec<DispatchGateContentionObserver>>> = OnceLock::new();
@@ -96,6 +97,48 @@ pub(super) fn pause_after_worker_page_persistence(
     release
       .recv_timeout(Duration::from_secs(3))
       .expect("record persistence pause should be released");
+  }
+}
+
+fn pipeline_limit_pauses() -> &'static Mutex<Vec<PipelineLimitPause>> {
+  static PAUSES: OnceLock<Mutex<Vec<PipelineLimitPause>>> = OnceLock::new();
+  PAUSES.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn pause_next_pipeline_limit_terminal(
+  root_path: &Path,
+  task_id: &str,
+  entered: mpsc::Sender<()>,
+  release: mpsc::Receiver<()>,
+) {
+  pipeline_limit_pauses()
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner())
+    .push((
+      root_path.to_path_buf(),
+      task_id.to_string(),
+      entered,
+      release,
+    ));
+}
+
+pub(super) fn pause_before_pipeline_limit_terminal(root_path: &Path, task_id: &str) {
+  let pause = {
+    let mut pauses = pipeline_limit_pauses()
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
+    pauses
+      .iter()
+      .position(|value| value.0 == root_path && value.1 == task_id)
+      .map(|position| pauses.swap_remove(position))
+  };
+  if let Some((_, _, entered, release)) = pause {
+    entered
+      .send(())
+      .expect("pipeline limit pause should signal");
+    release
+      .recv_timeout(Duration::from_secs(3))
+      .expect("pipeline limit pause should be released");
   }
 }
 
@@ -819,6 +862,174 @@ fn assert_cancellation_waits_for_complete_response_ledger(pipeline: bool) {
   assert_eq!(final_state.7, "cancelled");
   assert_eq!(final_state.8, "cancelled");
   assert_eq!(json_file_count(&root.join("raw/tikhub")), 1);
+
+  drop(connection);
+  std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn cancellation_precedes_pipeline_limit_terminal_mutations() {
+  assert_cancellation_precedes_pipeline_limit_terminal(false);
+  assert_cancellation_precedes_pipeline_limit_terminal(true);
+}
+
+fn assert_cancellation_precedes_pipeline_limit_terminal(request_limit: bool) {
+  let limit = if request_limit { "request" } else { "record" };
+  let root = std::env::temp_dir().join(format!("worker-pipeline-{limit}-limit-{}", Uuid::new_v4()));
+  create_workspace("流水线上限取消线性化测试", &root).expect("workspace should be created");
+  install_successful_tikhub_profile(&root).expect("TikHub profile should install");
+  let task = create_collection_task(
+    &root,
+    CreateCollectionTaskInput {
+      name: format!("{limit} 上限取消任务"),
+      source_type: "form".to_string(),
+      platforms: vec!["tiktok".to_string()],
+      data_types: vec!["comments".to_string()],
+    },
+  )
+  .expect("task should create");
+  let draft = crate::collection::generate_form_collection_plan(
+    crate::collection::FormCollectionPlanRequest {
+      platform: "tiktok".to_string(),
+      data_type: None,
+      data_types: vec!["comments".to_string()],
+      params: json!({ "item_id": format!("video-{limit}-limit") }),
+      age_range: None,
+      request_limit: Some(1),
+      record_limit: Some(1),
+      budget_limit_micros: Some(1_000_000),
+    },
+  )
+  .expect("pipeline plan should generate");
+  let plan = save_collection_plan(
+    &root,
+    SaveCollectionPlanInput {
+      task_id: task.id.clone(),
+      source: draft.source,
+      plan_json: draft.plan_json,
+      validation_status: draft.validation_status,
+      validation_errors_json: Some(draft.validation_errors_json),
+      cost_estimate_json: Some(draft.cost_estimate_json),
+    },
+  )
+  .expect("pipeline plan should save");
+  confirm_collection_plan(&root, &task.id, &plan.id).expect("plan should confirm");
+  enqueue_task(&root, &task.id).expect("task should enqueue");
+  let run = claim_next_task(&root)
+    .expect("task claim should succeed")
+    .expect("queued task should exist");
+  let connection = super::open_workspace_connection(&root).expect("database should open");
+  let now = Utc::now();
+  connection
+    .execute(
+      "INSERT INTO task_worker_lease (
+         id, owner_id, lease_expires_at, created_at, updated_at, generation
+       ) VALUES ('task_worker', 'limit-owner', ?1, ?2, ?2, 1)",
+      params![now.timestamp_millis() + 120_000, now.to_rfc3339()],
+    )
+    .expect("worker lease should install");
+  let fence = WorkerFence::new("limit-owner".to_string(), 1).expect("fence should construct");
+  let steps = super::load_run_steps(&connection, &run).expect("run steps should load");
+  let step = steps.first().expect("pipeline step should exist");
+  assert!(step.depends_on_step_key.is_none());
+  if request_limit {
+    let targets = super::targets::materialize_targets(
+      &connection,
+      &super::targets::TargetStepInput {
+        task_run_id: run.id.clone(),
+        step_key: step.step_key.clone(),
+        platform: step.platform.clone(),
+        data_type: step.data_type.clone(),
+        params: step.params.clone(),
+        target_limit: step.record_limit,
+        output_selected: step.output_selected,
+        depends_on_step_key: step.depends_on_step_key.clone(),
+        input_binding: step.input_binding.clone(),
+        dependency_data_type: step.dependency_data_type.clone(),
+      },
+      Some(&fence),
+    )
+    .expect("request-limit target should materialize");
+    assert_eq!(targets.len(), 1);
+    connection
+      .execute(
+        "UPDATE collection_pipeline_target
+         SET request_count = ?1
+         WHERE id = ?2 AND status = 'pending'",
+        params![step.request_limit, targets[0].id],
+      )
+      .expect("target request count should reach the limit");
+  } else {
+    let now = Utc::now().to_rfc3339();
+    connection
+      .execute(
+        "INSERT INTO collected_account (
+           id, task_run_id, platform, identity_key, data_source, collected_at,
+           merged_record_json, source_priority_json, output_included, created_at, updated_at
+         ) VALUES (?1, ?2, 'tiktok', 'account-record-limit', 'test', ?3,
+                   '{}', '{}', 1, ?3, ?3)",
+        params![Uuid::new_v4().to_string(), run.id, now],
+      )
+      .expect("record-limit output should install");
+  }
+  drop(connection);
+
+  let (entered_tx, entered_rx) = mpsc::channel();
+  let (release_tx, release_rx) = mpsc::channel();
+  pause_next_pipeline_limit_terminal(&root, &task.id, entered_tx, release_rx);
+  let worker_root = root.clone();
+  let worker_run = run.clone();
+  let worker_fence = fence.clone();
+  let worker = thread::spawn(move || {
+    execute_claimed_run_with_guard(
+      &worker_root,
+      &worker_run,
+      Some(&worker_fence),
+      |_| Ok(()),
+      |_request| panic!("pipeline limit terminal must not dispatch a request"),
+    )
+  });
+  entered_rx
+    .recv_timeout(Duration::from_secs(3))
+    .expect("worker should pause before the pipeline limit terminal");
+  cancel_task(&root, &task.id).expect("task should cancel while the limit terminal is paused");
+  release_tx
+    .send(())
+    .expect("pipeline limit terminal should resume");
+  let error = worker
+    .join()
+    .expect("worker thread should finish")
+    .expect_err("cancellation must stop the pipeline limit terminal");
+
+  let connection = super::open_workspace_connection(&root).expect("database should reopen");
+  let states = connection
+    .query_row(
+      "SELECT
+         (SELECT status FROM collection_pipeline_target WHERE task_run_id = ?1),
+         (SELECT status FROM task_run_step WHERE task_run_id = ?1),
+         (SELECT status FROM task_run WHERE id = ?1),
+         (SELECT status FROM collection_task WHERE id = ?2)",
+      params![run.id, task.id],
+      |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, String>(1)?,
+          row.get::<_, String>(2)?,
+          row.get::<_, String>(3)?,
+        ))
+      },
+    )
+    .expect("pipeline limit states should load");
+  assert_eq!(
+    states,
+    (
+      "pending".to_string(),
+      "cancelled".to_string(),
+      "cancelled".to_string(),
+      "cancelled".to_string(),
+    )
+  );
+  assert_eq!(error.code, AppErrorCode::Cancelled);
 
   drop(connection);
   std::fs::remove_dir_all(root).ok();
