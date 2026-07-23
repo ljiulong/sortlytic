@@ -7,7 +7,8 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::accounts::{
-  persist_account_observations, AccountObservationInput, AccountPersistenceResult, AgeRange,
+  persist_account_observations, persist_account_observations_with_fence, AccountObservationInput,
+  AccountPersistenceResult, AgeRange,
 };
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 use crate::records::{
@@ -361,6 +362,7 @@ where
         &connection,
         step,
         &run_id,
+        fence,
         &page.records,
         checkpoint.response_received_at.as_deref(),
       )?;
@@ -477,6 +479,7 @@ where
       &connection,
       step,
       &run_id,
+      fence,
       &page.records,
       Some(&response_received_at),
     ) {
@@ -553,6 +556,7 @@ pub(super) fn persist_step_accounts(
   connection: &rusqlite::Connection,
   step: &RunStep,
   run_id: &str,
+  fence: Option<&WorkerFence>,
   records: &[Value],
   collected_at: Option<&str>,
 ) -> AppResult<AccountPersistenceResult> {
@@ -565,21 +569,22 @@ pub(super) fn persist_step_accounts(
   }
   let record_limit =
     usize::try_from(step.record_limit).map_err(|_| task_error("账号输出上限超出运行平台范围"))?;
-  persist_account_observations(
-    connection,
-    AccountObservationInput {
-      task_run_id: run_id.to_string(),
-      platform: step.platform.clone(),
-      data_type: step.data_type.clone(),
-      records: records.to_vec(),
-      output_selected: step.output_selected,
-      age_range: step.age_range,
-      record_limit,
-      collected_at: collected_at
-        .map(ToString::to_string)
-        .unwrap_or_else(|| Utc::now().to_rfc3339()),
-    },
-  )
+  let input = AccountObservationInput {
+    task_run_id: run_id.to_string(),
+    platform: step.platform.clone(),
+    data_type: step.data_type.clone(),
+    records: records.to_vec(),
+    output_selected: step.output_selected,
+    age_range: step.age_range,
+    record_limit,
+    collected_at: collected_at
+      .map(ToString::to_string)
+      .unwrap_or_else(|| Utc::now().to_rfc3339()),
+  };
+  match fence {
+    Some(fence) => persist_account_observations_with_fence(connection, input, fence),
+    None => persist_account_observations(connection, input),
+  }
 }
 
 pub(super) fn mark_step_running(connection: &rusqlite::Connection, step_id: &str) -> AppResult<()> {

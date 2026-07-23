@@ -226,6 +226,7 @@ where
     connection,
     step,
     run_id,
+    fence,
     &page.records,
     Some(&response_received_at),
   )?;
