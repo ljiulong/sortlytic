@@ -502,6 +502,24 @@ fn active_prompt_version(
 }
 
 fn prepare_task_for_natural_parse(connection: &Connection, task_id: &str) -> AppResult<()> {
+  let status = natural_parse_task_status(connection, task_id)?;
+  match status.as_str() {
+    "draft" | "waiting_confirmation" => Ok(()),
+    "failed" | "cancelled" => connection
+      .execute(
+        "UPDATE collection_task
+         SET status = 'draft', confirmed_at = NULL, completed_at = NULL, cancelled_at = NULL,
+             cost_estimate_json = '{}', actual_cost_json = '{}', updated_at = ?1
+         WHERE id = ?2 AND status IN ('failed', 'cancelled')",
+        params![Utc::now().to_rfc3339(), task_id],
+      )
+      .map(|_| ())
+      .map_err(database_error),
+    _ => unreachable!("natural_parse_task_status rejects unsupported states"),
+  }
+}
+
+fn natural_parse_task_status(connection: &Connection, task_id: &str) -> AppResult<String> {
   let task = connection
     .query_row(
       "SELECT source_type, status FROM collection_task WHERE id = ?1",
@@ -516,17 +534,7 @@ fn prepare_task_for_natural_parse(connection: &Connection, task_id: &str) -> App
     return Err(ai_error("只有自然语言来源的任务可以调用 AI 重新解析"));
   }
   match task.1.as_str() {
-    "draft" | "waiting_confirmation" => Ok(()),
-    "failed" | "cancelled" => connection
-      .execute(
-        "UPDATE collection_task
-         SET status = 'draft', confirmed_at = NULL, completed_at = NULL, cancelled_at = NULL,
-             cost_estimate_json = '{}', actual_cost_json = '{}', updated_at = ?1
-         WHERE id = ?2 AND status IN ('failed', 'cancelled')",
-        params![Utc::now().to_rfc3339(), task_id],
-      )
-      .map(|_| ())
-      .map_err(database_error),
+    "draft" | "waiting_confirmation" | "failed" | "cancelled" => Ok(task.1),
     "queued" | "running" => Err(ai_error(
       "排队或运行中的任务必须先取消，才能重新解析自然语言需求",
     )),

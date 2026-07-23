@@ -123,6 +123,44 @@ fn direct_generation_rejects_oversized_intent_before_attempt_or_provider_request
 }
 
 #[test]
+fn unknown_task_ids_do_not_create_natural_parse_lock_files() {
+  let root_path = unique_temp_workspace("ai-unknown-task-lock");
+  create_workspace("AI 无效任务锁测试", &root_path).expect("workspace should be created");
+
+  for suffix in 0..3 {
+    let error = generate_collection_plan_from_text(
+      &root_path,
+      GenerateCollectionPlanFromTextInput {
+        task_id: format!("missing-task-{suffix}"),
+        intent_text: "不应为不存在的任务创建解析锁".to_string(),
+        provider_id: None,
+        model_id: None,
+      },
+    )
+    .expect_err("unknown tasks must be rejected");
+
+    assert_eq!(error.code, AppErrorCode::ValidationError);
+  }
+
+  let parse_lock_count = std::fs::read_dir(root_path.join("temp"))
+    .unwrap()
+    .filter_map(Result::ok)
+    .filter(|entry| {
+      entry
+        .file_name()
+        .to_string_lossy()
+        .starts_with("natural-parse-")
+    })
+    .count();
+  assert_eq!(
+    parse_lock_count, 0,
+    "invalid task IDs must not consume permanent lock-file inodes"
+  );
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn natural_generation_rejects_ineligible_tasks_before_the_provider_request() {
   let root_path = unique_temp_workspace("ai-task-eligibility");
   create_workspace("AI 任务资格测试", &root_path).expect("workspace should be created");

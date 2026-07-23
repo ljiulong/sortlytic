@@ -30,8 +30,9 @@ pub fn generate_collection_plan_from_text(
   let root_path = root_path.as_ref().to_path_buf();
   let intent_text = normalize_natural_intent_text(&input.intent_text)?;
   let intent_text = intent_text.as_str();
-  let _parse_lock = NaturalParseLock::acquire(&root_path, &input.task_id)?;
   let mut connection = open_workspace_connection(&root_path)?;
+  natural_parse_task_status(&connection, &input.task_id)?;
+  let _parse_lock = NaturalParseLock::acquire(&root_path, &input.task_id)?;
   let now = Utc::now().to_rfc3339();
   let attempt = acquire_task_intent_attempt(&mut connection, &input.task_id, intent_text, &now)?;
   let attempt_id = attempt.id.as_str();
