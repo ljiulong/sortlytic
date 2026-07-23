@@ -172,6 +172,28 @@ fn default_workspace_initialization_preserves_an_explicit_workspace() {
 }
 
 #[test]
+fn debug_and_release_builds_use_isolated_default_workspaces() {
+  let release_app_data =
+    PathBuf::from("/Users/example/Library/Application Support/com.steven.sortlytic");
+
+  let release_root = default_workspace_root_for_mode(&release_app_data, false);
+  let debug_root = default_workspace_root_for_mode(&release_app_data, true);
+
+  assert_eq!(
+    release_root,
+    release_app_data.join("default-workspace"),
+    "release builds must keep reading the existing production workspace"
+  );
+  assert_eq!(
+    debug_root,
+    PathBuf::from("/Users/example/Library/Application Support/com.steven.sortlytic.dev")
+      .join("default-workspace"),
+    "debug builds must not migrate the production workspace ahead of the installed app"
+  );
+  assert_ne!(debug_root, release_root);
+}
+
+#[test]
 fn command_root_must_match_the_active_workspace() {
   let active_root = std::env::temp_dir().join(format!("active-root-{}", uuid::Uuid::new_v4()));
   let other_root = std::env::temp_dir().join(format!("other-root-{}", uuid::Uuid::new_v4()));

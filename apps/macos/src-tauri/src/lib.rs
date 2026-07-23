@@ -20,7 +20,10 @@ pub mod tasks;
 pub mod tikhub;
 pub mod workspace;
 
-use std::{fs, path::PathBuf};
+use std::{
+  fs,
+  path::{Path, PathBuf},
+};
 
 use ai::{
   AiRunView, GenerateCollectionPlanFromTextInput, GeneratedCollectionPlanView,
@@ -83,10 +86,21 @@ fn ensure_default_workspace(
       false,
     )
   })?;
-  let root_path = app_data_dir.join("default-workspace");
+  let root_path = default_workspace_root_for_mode(&app_data_dir, cfg!(debug_assertions));
   let summary = ensure_default_workspace_for_state(root_path, &state)?;
   prompts::seed_builtin_prompts(&summary.root_path)?;
   Ok(summary)
+}
+
+fn default_workspace_root_for_mode(app_data_dir: &Path, debug_build: bool) -> PathBuf {
+  let scoped_app_data_dir = if debug_build {
+    let mut debug_app_data_dir = app_data_dir.as_os_str().to_os_string();
+    debug_app_data_dir.push(".dev");
+    PathBuf::from(debug_app_data_dir)
+  } else {
+    app_data_dir.to_path_buf()
+  };
+  scoped_app_data_dir.join("default-workspace")
 }
 
 fn ensure_default_workspace_for_state(
