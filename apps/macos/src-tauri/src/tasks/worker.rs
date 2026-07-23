@@ -10,7 +10,10 @@ use crate::accounts::{
   persist_account_observations, AccountObservationInput, AccountPersistenceResult, AgeRange,
 };
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
-use crate::records::{persist_collection_page, PersistCollectionPageInput};
+use crate::records::{
+  persist_collection_page, persist_collection_page_with_fence, PersistCollectionPageInput,
+  PersistCollectionPageResult,
+};
 use crate::secrets::read_secret_for_snapshot;
 use crate::tikhub::{
   build_collection_request, send_collection_request, CollectionPage, TikHubCollectionRequest,
@@ -59,7 +62,7 @@ pub fn execute_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRu
   let Some(run) = claim_next_task(root_path)? else {
     return Ok(None);
   };
-  execute_and_finalize_claimed_run(root_path, run, || Ok(()))
+  execute_and_finalize_claimed_run(root_path, run, None, || Ok(()))
 }
 
 pub(super) fn execute_next_task_with_owner<G>(
@@ -75,18 +78,19 @@ where
   let Some(run) = claim_next_task_with_fence(root_path, fence)? else {
     return Ok(None);
   };
-  execute_and_finalize_claimed_run(root_path, run, ensure_owner)
+  execute_and_finalize_claimed_run(root_path, run, Some(fence), ensure_owner)
 }
 
 fn execute_and_finalize_claimed_run<G>(
   root_path: &Path,
   run: TaskRunView,
+  fence: Option<&WorkerFence>,
   ensure_owner: G,
 ) -> AppResult<Option<TaskRunView>>
 where
   G: Fn() -> AppResult<()>,
 {
-  let result = execute_claimed_run(root_path, &run, &ensure_owner);
+  let result = execute_claimed_run(root_path, &run, fence, &ensure_owner);
   ensure_owner()?;
   finalize_claimed_run(root_path, &run, result).map(Some)
 }
@@ -120,7 +124,12 @@ fn finalize_claimed_run(
   }
 }
 
-fn execute_claimed_run<G>(root_path: &Path, run: &TaskRunView, ensure_owner: &G) -> AppResult<()>
+fn execute_claimed_run<G>(
+  root_path: &Path,
+  run: &TaskRunView,
+  fence: Option<&WorkerFence>,
+  ensure_owner: &G,
+) -> AppResult<()>
 where
   G: Fn() -> AppResult<()>,
 {
@@ -129,6 +138,7 @@ where
   execute_claimed_run_with_guard(
     root_path,
     run,
+    fence,
     |request| {
       ensure_owner()?;
       let result = pricing::guard_request(root_path, &run.id, request).map(|_| ());
@@ -163,12 +173,13 @@ fn execute_claimed_run_with_fetcher<F>(
 where
   F: Fn(&TikHubCollectionRequest) -> AppResult<CollectionPage>,
 {
-  execute_claimed_run_with_guard(root_path, run, |_| Ok(()), fetch_page)
+  execute_claimed_run_with_guard(root_path, run, None, |_| Ok(()), fetch_page)
 }
 
 fn execute_claimed_run_with_guard<G, F>(
   root_path: &Path,
   run: &TaskRunView,
+  fence: Option<&WorkerFence>,
   guard_request: G,
   fetch_page: F,
 ) -> AppResult<()>
@@ -183,7 +194,7 @@ where
   }
 
   for step in steps {
-    execute_step(root_path, &step, &guard_request, &fetch_page)?;
+    execute_step(root_path, &step, fence, &guard_request, &fetch_page)?;
   }
   Ok(())
 }
@@ -268,6 +279,7 @@ fn load_run_steps(connection: &rusqlite::Connection, run: &TaskRunView) -> AppRe
 fn execute_step<G, F>(
   root_path: &Path,
   step: &RunStep,
+  fence: Option<&WorkerFence>,
   guard_request: &G,
   fetch_page: &F,
 ) -> AppResult<()>
@@ -276,7 +288,7 @@ where
   F: Fn(&TikHubCollectionRequest) -> AppResult<CollectionPage>,
 {
   if step.schema_version >= 3 {
-    return pipeline::execute_pipeline_step(root_path, step, guard_request, fetch_page);
+    return pipeline::execute_pipeline_step(root_path, step, fence, guard_request, fetch_page);
   }
   let connection = open_workspace_connection(root_path)?;
   let existing = load_checkpoints(&connection, &step.id)?;
@@ -322,7 +334,7 @@ where
       if step.schema_version == 2 {
         ensure_record_limit(&connection, &run_id, step.record_limit, page.records.len())?;
       }
-      let persisted = persist_collection_page(
+      let persisted = persist_worker_page(
         root_path,
         PersistCollectionPageInput {
           task_id: task_id.clone(),
@@ -332,6 +344,7 @@ where
           records: page.records.clone(),
           collected_at: checkpoint.response_received_at.clone(),
         },
+        fence,
       )?;
       let persisted_count = persisted
         .inserted_count
@@ -427,7 +440,7 @@ where
       }
       return Err(error);
     }
-    let persisted = match persist_collection_page(
+    let persisted = match persist_worker_page(
       root_path,
       PersistCollectionPageInput {
         task_id: task_id.clone(),
@@ -437,6 +450,7 @@ where
         records: page.records.clone(),
         collected_at: Some(response_received_at.clone()),
       },
+      fence,
     ) {
       Ok(persisted) => persisted,
       Err(error) => {
@@ -504,6 +518,17 @@ where
     }
     cursor = page.next_cursor;
     page_index += 1;
+  }
+}
+
+pub(super) fn persist_worker_page(
+  root_path: &Path,
+  input: PersistCollectionPageInput,
+  fence: Option<&WorkerFence>,
+) -> AppResult<PersistCollectionPageResult> {
+  match fence {
+    Some(fence) => persist_collection_page_with_fence(root_path, input, fence),
+    None => persist_collection_page(root_path, input),
   }
 }
 

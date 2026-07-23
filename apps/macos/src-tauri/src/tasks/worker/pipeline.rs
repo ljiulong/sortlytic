@@ -14,16 +14,18 @@ use super::{
   mark_checkpoint_failed_with_retryable, mark_checkpoint_requesting,
   mark_checkpoint_response_received, mark_checkpoint_uncertain, mark_step_running,
   mark_step_stopped, mark_step_success, open_workspace_connection, persist_step_accounts,
-  response_status_is_uncertain, serialized_error_code, task_error, worker_error, RunStep,
+  persist_worker_page, response_status_is_uncertain, serialized_error_code, task_error,
+  worker_error, RunStep, WorkerFence,
 };
 use crate::domain::AppResult;
 use crate::domain::{AppError, AppErrorCode};
-use crate::records::{persist_collection_page, PersistCollectionPageInput};
+use crate::records::PersistCollectionPageInput;
 use crate::tikhub::{build_collection_request, CollectionPage, TikHubCollectionRequest};
 
 pub(super) fn execute_pipeline_step<G, F>(
   root_path: &Path,
   step: &RunStep,
+  fence: Option<&WorkerFence>,
   guard_request: &G,
   fetch_page: &F,
 ) -> AppResult<()>
@@ -103,6 +105,7 @@ where
       &run_id,
       page_index,
       &mut target,
+      fence,
       guard_request,
       fetch_page,
     )?;
@@ -128,6 +131,7 @@ fn execute_target_page<G, F>(
   run_id: &str,
   page_index: i64,
   target: &mut PipelineTarget,
+  fence: Option<&WorkerFence>,
   guard_request: &G,
   fetch_page: &F,
 ) -> AppResult<()>
@@ -185,7 +189,7 @@ where
     }
   };
   let response_received_at = Utc::now().to_rfc3339();
-  let persisted = match persist_collection_page(
+  let persisted = match persist_worker_page(
     root_path,
     PersistCollectionPageInput {
       task_id: step.task_id.clone(),
@@ -195,6 +199,7 @@ where
       records: page.records.clone(),
       collected_at: Some(response_received_at.clone()),
     },
+    fence,
   ) {
     Ok(persisted) => persisted,
     Err(error) => {

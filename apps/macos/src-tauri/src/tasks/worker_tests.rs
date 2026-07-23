@@ -623,6 +623,7 @@ fn worker_rejects_cost_before_recording_an_outbound_request() {
   let error = execute_claimed_run_with_guard(
     &root,
     &run,
+    None,
     |_request| {
       Err(AppError::new(
         AppErrorCode::CostLimitError,
