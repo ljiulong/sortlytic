@@ -31,6 +31,21 @@ struct DispatchLockManifest {
   version: u32,
   pool_id: String,
   shard_count: usize,
+  directory: DispatchLockFileIdentity,
+  shards: Vec<DispatchLockFileIdentity>,
+}
+
+#[derive(Debug, Clone)]
+struct DispatchLockPoolSpec {
+  version: u32,
+  pool_id: String,
+  shard_count: usize,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct DispatchLockFileIdentity {
+  device: u64,
+  inode: u64,
 }
 
 pub(super) fn initialize_task_dispatch_lock_pool(
@@ -40,21 +55,19 @@ pub(super) fn initialize_task_dispatch_lock_pool(
   let transaction = connection
     .transaction_with_behavior(TransactionBehavior::Immediate)
     .map_err(database_error)?;
+  let workspace_id = transaction
+    .query_row("SELECT id FROM workspace LIMIT 1", [], |row| {
+      row.get::<_, String>(0)
+    })
+    .map_err(database_error)?;
   let manifest = load_manifest(&transaction)?;
   match manifest {
     Some(manifest) => validate_lock_pool(root_path, &manifest)?,
     None => {
-      let manifest = DispatchLockManifest {
-        version: DISPATCH_LOCK_POOL_VERSION,
-        pool_id: Uuid::new_v4().to_string(),
-        shard_count: DISPATCH_LOCK_SHARDS,
-      };
-      create_lock_pool(root_path, &manifest)?;
-      let workspace_id = transaction
-        .query_row("SELECT id FROM workspace LIMIT 1", [], |row| {
-          row.get::<_, String>(0)
-        })
-        .map_err(database_error)?;
+      let spec = dispatch_lock_pool_spec(&workspace_id);
+      create_lock_pool(root_path, &spec)?;
+      let manifest = capture_lock_pool_manifest(root_path, &spec)?;
+      validate_lock_pool(root_path, &manifest)?;
       transaction
         .execute(
           "INSERT INTO audit_log (
@@ -82,11 +95,13 @@ pub(crate) fn open_task_dispatch_lock(root_path: &Path, task_id: &str) -> AppRes
   let manifest = load_manifest(&connection)?
     .ok_or_else(|| dispatch_lock_error("任务请求分发锁清单不存在", None))?;
   validate_manifest(&manifest)?;
-  validate_lock_pool_directory(root_path)?;
+  validate_lock_pool_directory(root_path, Some(&manifest.directory))?;
+  let spec = manifest.pool_spec();
   open_and_validate_shard(
     &lock_path(root_path, task_id),
-    &manifest,
+    &spec,
     shard_index(task_id),
+    manifest.shards.get(shard_index(task_id)),
   )
 }
 
@@ -116,20 +131,56 @@ fn load_manifest(connection: &Connection) -> AppResult<Option<DispatchLockManife
 }
 
 fn validate_manifest(manifest: &DispatchLockManifest) -> AppResult<()> {
-  if manifest.version != DISPATCH_LOCK_POOL_VERSION
-    || manifest.shard_count != DISPATCH_LOCK_SHARDS
-    || Uuid::parse_str(&manifest.pool_id).is_err()
+  validate_pool_spec(&manifest.pool_spec())?;
+  if manifest.shards.len() != DISPATCH_LOCK_SHARDS {
+    return Err(dispatch_lock_error("任务请求分发锁清单无效", None));
+  }
+  Ok(())
+}
+
+impl DispatchLockManifest {
+  fn pool_spec(&self) -> DispatchLockPoolSpec {
+    DispatchLockPoolSpec {
+      version: self.version,
+      pool_id: self.pool_id.clone(),
+      shard_count: self.shard_count,
+    }
+  }
+}
+
+fn validate_pool_spec(spec: &DispatchLockPoolSpec) -> AppResult<()> {
+  if spec.version != DISPATCH_LOCK_POOL_VERSION
+    || spec.shard_count != DISPATCH_LOCK_SHARDS
+    || Uuid::parse_str(&spec.pool_id).is_err()
   {
     return Err(dispatch_lock_error("任务请求分发锁清单无效", None));
   }
   Ok(())
 }
 
-fn create_lock_pool(root_path: &Path, manifest: &DispatchLockManifest) -> AppResult<()> {
-  validate_manifest(manifest)?;
+fn dispatch_lock_pool_spec(workspace_id: &str) -> DispatchLockPoolSpec {
+  let mut hasher = Sha256::new();
+  hasher.update(b"sortlytic-task-dispatch-pool-v1:");
+  hasher.update(workspace_id.as_bytes());
+  let digest = hasher.finalize();
+  let mut bytes = [0_u8; 16];
+  bytes.copy_from_slice(&digest[..16]);
+  bytes[6] = (bytes[6] & 0x0f) | 0x50;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  DispatchLockPoolSpec {
+    version: DISPATCH_LOCK_POOL_VERSION,
+    pool_id: Uuid::from_bytes(bytes).to_string(),
+    shard_count: DISPATCH_LOCK_SHARDS,
+  }
+}
+
+fn create_lock_pool(root_path: &Path, spec: &DispatchLockPoolSpec) -> AppResult<()> {
+  validate_pool_spec(spec)?;
   let directory = lock_directory(root_path);
   match fs::symlink_metadata(&directory) {
-    Ok(_) => validate_lock_pool_directory(root_path)?,
+    Ok(_) => {
+      validate_lock_pool_directory(root_path, None)?;
+    }
     Err(error) if error.kind() == ErrorKind::NotFound => {
       let mut builder = DirBuilder::new();
       builder.mode(PRIVATE_DIRECTORY_MODE);
@@ -146,40 +197,89 @@ fn create_lock_pool(root_path: &Path, manifest: &DispatchLockManifest) -> AppRes
   }
   for index in 0..DISPATCH_LOCK_SHARDS {
     let path = shard_path(root_path, index);
-    match OpenOptions::new()
-      .read(true)
-      .write(true)
-      .create_new(true)
-      .mode(DISPATCH_LOCK_MODE)
-      .custom_flags(NO_FOLLOW_FLAG)
-      .open(&path)
-    {
-      Ok(mut file) => {
-        file
-          .write_all(shard_identity(manifest, index).as_bytes())
-          .and_then(|()| file.sync_all())
-          .map_err(|error| dispatch_lock_error("无法写入任务请求分发锁身份", Some(&error)))?;
-        validate_opened_shard(&path, &file, manifest, index)?;
-      }
-      Err(error) if error.kind() == ErrorKind::AlreadyExists => {
-        open_and_validate_shard(&path, manifest, index)?;
-      }
-      Err(error) => return Err(dispatch_lock_error("无法创建任务请求分发锁", Some(&error))),
-    }
+    create_or_recover_bootstrap_shard(&path, spec, index)?;
   }
+  sync_directory(&directory)?;
+  sync_directory(&root_path.join("temp"))?;
+  sync_directory(root_path)?;
   Ok(())
+}
+
+fn create_or_recover_bootstrap_shard(
+  path: &Path,
+  spec: &DispatchLockPoolSpec,
+  index: usize,
+) -> AppResult<()> {
+  match create_shard(path, spec, index) {
+    Ok(()) => Ok(()),
+    Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+      if open_and_validate_shard(path, spec, index, None).is_ok() {
+        return Ok(());
+      }
+      fs::remove_file(path)
+        .map_err(|error| dispatch_lock_error("无法清理未登记的任务请求分发锁", Some(&error)))?;
+      create_shard(path, spec, index)
+        .map_err(|error| dispatch_lock_error("无法重建任务请求分发锁", Some(&error)))
+    }
+    Err(error) => Err(dispatch_lock_error("无法创建任务请求分发锁", Some(&error))),
+  }
+}
+
+fn create_shard(path: &Path, spec: &DispatchLockPoolSpec, index: usize) -> std::io::Result<()> {
+  let mut file = OpenOptions::new()
+    .read(true)
+    .write(true)
+    .create_new(true)
+    .mode(DISPATCH_LOCK_MODE)
+    .custom_flags(NO_FOLLOW_FLAG)
+    .open(path)?;
+  file.write_all(shard_identity(spec, index).as_bytes())?;
+  file.sync_all()?;
+  validate_opened_shard(path, &file, spec, index, None)
+    .map_err(|error| std::io::Error::other(error.message))
+}
+
+fn capture_lock_pool_manifest(
+  root_path: &Path,
+  spec: &DispatchLockPoolSpec,
+) -> AppResult<DispatchLockManifest> {
+  let directory = validate_lock_pool_directory(root_path, None)?;
+  let mut shards = Vec::with_capacity(DISPATCH_LOCK_SHARDS);
+  for index in 0..DISPATCH_LOCK_SHARDS {
+    let file = open_and_validate_shard(&shard_path(root_path, index), spec, index, None)?;
+    let metadata = file
+      .metadata()
+      .map_err(|error| dispatch_lock_error("无法登记任务请求分发锁身份", Some(&error)))?;
+    shards.push(file_identity(&metadata));
+  }
+  Ok(DispatchLockManifest {
+    version: spec.version,
+    pool_id: spec.pool_id.clone(),
+    shard_count: spec.shard_count,
+    directory: file_identity(&directory),
+    shards,
+  })
 }
 
 fn validate_lock_pool(root_path: &Path, manifest: &DispatchLockManifest) -> AppResult<()> {
   validate_manifest(manifest)?;
-  validate_lock_pool_directory(root_path)?;
+  validate_lock_pool_directory(root_path, Some(&manifest.directory))?;
+  let spec = manifest.pool_spec();
   for index in 0..DISPATCH_LOCK_SHARDS {
-    open_and_validate_shard(&shard_path(root_path, index), manifest, index)?;
+    open_and_validate_shard(
+      &shard_path(root_path, index),
+      &spec,
+      index,
+      manifest.shards.get(index),
+    )?;
   }
   Ok(())
 }
 
-fn validate_lock_pool_directory(root_path: &Path) -> AppResult<()> {
+fn validate_lock_pool_directory(
+  root_path: &Path,
+  expected: Option<&DispatchLockFileIdentity>,
+) -> AppResult<fs::Metadata> {
   let directory = lock_directory(root_path);
   let metadata = fs::symlink_metadata(&directory)
     .map_err(|error| dispatch_lock_error("无法读取任务请求分发锁池", Some(&error)))?;
@@ -192,13 +292,17 @@ fn validate_lock_pool_directory(root_path: &Path) -> AppResult<()> {
       None,
     ));
   }
-  Ok(())
+  if expected.is_some_and(|expected| !identity_matches(&metadata, expected)) {
+    return Err(dispatch_lock_error("任务请求分发锁池登记身份不匹配", None));
+  }
+  Ok(metadata)
 }
 
 fn open_and_validate_shard(
   path: &Path,
-  manifest: &DispatchLockManifest,
+  spec: &DispatchLockPoolSpec,
   index: usize,
+  expected: Option<&DispatchLockFileIdentity>,
 ) -> AppResult<File> {
   let current = fs::symlink_metadata(path)
     .map_err(|error| dispatch_lock_error("无法检查任务请求分发锁", Some(&error)))?;
@@ -214,15 +318,16 @@ fn open_and_validate_shard(
     .custom_flags(NO_FOLLOW_FLAG)
     .open(path)
     .map_err(|error| dispatch_lock_error("无法打开任务请求分发锁", Some(&error)))?;
-  validate_opened_shard(path, &file, manifest, index)?;
+  validate_opened_shard(path, &file, spec, index, expected)?;
   Ok(file)
 }
 
 fn validate_opened_shard(
   path: &Path,
   file: &File,
-  manifest: &DispatchLockManifest,
+  spec: &DispatchLockPoolSpec,
   index: usize,
+  expected: Option<&DispatchLockFileIdentity>,
 ) -> AppResult<()> {
   let opened = file
     .metadata()
@@ -236,6 +341,7 @@ fn validate_opened_shard(
     || opened.ino() != current.ino()
     || opened.nlink() != 1
     || opened.permissions().mode() & 0o7777 != DISPATCH_LOCK_MODE
+    || expected.is_some_and(|expected| !identity_matches(&opened, expected))
   {
     return Err(dispatch_lock_error(
       "任务请求分发锁身份、链接数或权限校验失败",
@@ -253,10 +359,27 @@ fn validate_opened_shard(
     .take(256)
     .read_to_string(&mut identity)
     .map_err(|error| dispatch_lock_error("无法读取任务请求分发锁身份", Some(&error)))?;
-  if identity != shard_identity(manifest, index) {
+  if identity != shard_identity(spec, index) {
     return Err(dispatch_lock_error("任务请求分发锁身份不匹配", None));
   }
   Ok(())
+}
+
+fn sync_directory(path: &Path) -> AppResult<()> {
+  File::open(path)
+    .and_then(|directory| directory.sync_all())
+    .map_err(|error| dispatch_lock_error("无法同步任务请求分发锁目录", Some(&error)))
+}
+
+fn file_identity(metadata: &fs::Metadata) -> DispatchLockFileIdentity {
+  DispatchLockFileIdentity {
+    device: metadata.dev(),
+    inode: metadata.ino(),
+  }
+}
+
+fn identity_matches(metadata: &fs::Metadata, expected: &DispatchLockFileIdentity) -> bool {
+  metadata.dev() == expected.device && metadata.ino() == expected.inode
 }
 
 fn lock_directory(root_path: &Path) -> PathBuf {
@@ -275,10 +398,10 @@ fn shard_index(task_id: &str) -> usize {
   usize::from(Sha256::digest(task_id.as_bytes())[0]) % DISPATCH_LOCK_SHARDS
 }
 
-fn shard_identity(manifest: &DispatchLockManifest, index: usize) -> String {
+fn shard_identity(spec: &DispatchLockPoolSpec, index: usize) -> String {
   format!(
     "sortlytic-task-dispatch:{}:{}:{index:02x}\n",
-    manifest.version, manifest.pool_id
+    spec.version, spec.pool_id
   )
 }
 
@@ -300,6 +423,7 @@ fn dispatch_lock_error(message: &str, error: Option<&dyn std::fmt::Display>) -> 
 mod tests {
   use super::*;
   use crate::workspace::{create_workspace, open_workspace};
+  use fs4::FileExt;
 
   #[test]
   fn workspace_initializes_a_bounded_dispatch_lock_pool() {
@@ -334,5 +458,123 @@ mod tests {
       Some("task_dispatch_gate")
     );
     std::fs::remove_dir_all(root).ok();
+  }
+
+  #[test]
+  fn opening_workspace_recovers_a_partial_pool_without_a_manifest() {
+    let root = std::env::temp_dir().join(format!("dispatch-lock-recovery-{}", Uuid::new_v4()));
+    create_workspace("分发锁恢复", &root).expect("workspace should be created");
+    let connection =
+      open_workspace_database(root.join(DATABASE_FILE_NAME)).expect("database should open");
+    let deleted = connection
+      .execute(
+        "DELETE FROM audit_log WHERE action = ?1",
+        [DISPATCH_LOCK_ACTION],
+      )
+      .expect("dispatch lock manifest should delete");
+    assert_eq!(deleted, 1);
+    drop(connection);
+    fs::remove_file(shard_path(&root, DISPATCH_LOCK_SHARDS - 1))
+      .expect("one bootstrap shard should be removed");
+    OpenOptions::new()
+      .write(true)
+      .truncate(true)
+      .open(shard_path(&root, DISPATCH_LOCK_SHARDS - 2))
+      .expect("one bootstrap shard should be left partially written");
+
+    open_workspace(&root).expect("partial bootstrap should recover idempotently");
+
+    assert_eq!(pool_lock_count(&root), DISPATCH_LOCK_SHARDS);
+    open_task_dispatch_lock(&root, "recovered-task")
+      .expect("recovered pool should serve task locks");
+    std::fs::remove_dir_all(root).ok();
+  }
+
+  #[test]
+  fn opening_a_task_lock_rejects_a_replaced_registered_shard() {
+    let root = std::env::temp_dir().join(format!("dispatch-lock-replace-{}", Uuid::new_v4()));
+    create_workspace("分发锁文件替换", &root).expect("workspace should be created");
+    let task_id = "replaced-shard-task";
+    let path = lock_path(&root, task_id);
+    let original = open_task_dispatch_lock(&root, task_id).expect("original shard should open");
+    FileExt::lock(&original).expect("original shard should lock");
+    let identity = fs::read_to_string(&path).expect("registered identity should read");
+    fs::remove_file(&path).expect("registered shard path should unlink");
+    let mut replacement = OpenOptions::new()
+      .read(true)
+      .write(true)
+      .create_new(true)
+      .mode(DISPATCH_LOCK_MODE)
+      .open(&path)
+      .expect("replacement shard should create");
+    replacement
+      .write_all(identity.as_bytes())
+      .and_then(|()| replacement.sync_all())
+      .expect("replacement identity should persist");
+    assert_ne!(
+      original.metadata().expect("original metadata").ino(),
+      replacement.metadata().expect("replacement metadata").ino()
+    );
+
+    let second = open_task_dispatch_lock(&root, task_id);
+    if let Ok(file) = &second {
+      assert!(
+        FileExt::try_lock(file).is_err(),
+        "a copied replacement must not create a second lock domain"
+      );
+    }
+    let error = second.expect_err("a replaced registered shard must fail closed");
+    assert_eq!(
+      error.safe_details.get("operation").map(String::as_str),
+      Some("task_dispatch_gate")
+    );
+    std::fs::remove_dir_all(root).ok();
+  }
+
+  #[test]
+  fn opening_a_task_lock_rejects_a_replaced_pool_directory() {
+    let root = std::env::temp_dir().join(format!("dispatch-lock-dir-replace-{}", Uuid::new_v4()));
+    create_workspace("分发锁目录替换", &root).expect("workspace should be created");
+    let task_id = "replaced-directory-task";
+    let original_directory = lock_directory(&root);
+    let displaced_directory = root.join("temp/task-dispatch-gates-v1-displaced");
+    let original = open_task_dispatch_lock(&root, task_id).expect("original shard should open");
+    FileExt::lock(&original).expect("original shard should lock");
+    fs::rename(&original_directory, &displaced_directory)
+      .expect("registered pool should move aside");
+    let mut builder = DirBuilder::new();
+    builder.mode(PRIVATE_DIRECTORY_MODE);
+    builder
+      .create(&original_directory)
+      .expect("replacement pool should create");
+    for index in 0..DISPATCH_LOCK_SHARDS {
+      let source = displaced_directory.join(format!("task-dispatch-{index:02x}.lock"));
+      let destination = shard_path(&root, index);
+      fs::copy(source, &destination).expect("registered identity should copy");
+      fs::set_permissions(&destination, fs::Permissions::from_mode(DISPATCH_LOCK_MODE))
+        .expect("replacement shard permissions should set");
+    }
+
+    let second = open_task_dispatch_lock(&root, task_id);
+    if let Ok(file) = &second {
+      assert!(
+        FileExt::try_lock(file).is_err(),
+        "a copied pool must not create a second lock domain"
+      );
+    }
+    let error = second.expect_err("a replaced registered pool must fail closed");
+    assert_eq!(
+      error.safe_details.get("operation").map(String::as_str),
+      Some("task_dispatch_gate")
+    );
+    std::fs::remove_dir_all(root).ok();
+  }
+
+  fn pool_lock_count(root_path: &Path) -> usize {
+    fs::read_dir(lock_directory(root_path))
+      .expect("lock pool should be readable")
+      .filter_map(Result::ok)
+      .filter(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_file()))
+      .count()
   }
 }
