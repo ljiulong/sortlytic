@@ -4,6 +4,7 @@ import type {
   CollectionTaskView,
   NaturalParseAttemptView,
 } from './backend-api'
+import { isNaturalParseProvenanceOnly } from './natural-parse-state'
 
 type GenderFilter = 'male' | 'female' | 'other'
 
@@ -45,9 +46,10 @@ export function createTaskEditDraft(
   const selectedFields = stringArray(planJson?.selected_fields)
   const planMissingFields = stringArray(planJson?.missing_fields)
   const supersededByUserEdit = attempt?.error_safe_details_json.superseded_by_user_edit === true
-  const currentIntent = supersededByUserEdit ? undefined : intent
+  const provenanceOnly = attempt ? isNaturalParseProvenanceOnly(attempt) : false
+  const currentIntent = supersededByUserEdit || provenanceOnly ? undefined : intent
   const intentMissingFields = currentIntent?.missing_fields ?? []
-  const currentAttempt = supersededByUserEdit ? undefined : attempt
+  const currentAttempt = supersededByUserEdit || provenanceOnly ? undefined : attempt
   const parseFailed = currentAttempt
     && ['failed', 'interrupted'].includes(currentAttempt.parse_status)
   const needsReview = currentAttempt?.parse_status === 'needs_review'

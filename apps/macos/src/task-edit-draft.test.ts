@@ -134,6 +134,29 @@ describe('task edit draft mapping', () => {
     })
   })
 
+  it('keeps user-edited provenance text without inventing a parse problem', () => {
+    const editedIntent = '查找英国 TikTok 宠物用品账号，最多 20 个'
+    const draft = createTaskEditDraft(
+      task({
+        source_type: 'natural_language',
+        status: 'waiting_confirmation',
+      }),
+      plan({ platforms: ['tiktok'], account_source: 'user_search' }),
+      attempt({
+        parse_status: 'needs_review',
+        parse_phase: 'needs_review',
+        intent_text: editedIntent,
+        error_code: 'VALIDATION_ERROR',
+        error_message: '原始自然语言需求已由用户编辑',
+        error_safe_details_json: { source: 'user_edited' },
+      }),
+    )
+
+    expect(draft.editorMode).toBe('form')
+    expect(draft.originalIntent).toBe(editedIntent)
+    expect(draft.parseProblem).toBeUndefined()
+  })
+
   it('keeps a user plan authoritative when a superseded AI candidate arrives later', () => {
     const draft = createTaskEditDraft(
       task({ source_type: 'natural_language', status: 'waiting_confirmation' }),
