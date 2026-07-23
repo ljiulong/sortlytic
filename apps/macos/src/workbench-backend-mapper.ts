@@ -162,17 +162,10 @@ export function mapBackendData(
 }
 
 function currentNaturalParseAttempt(
-  task: CollectionTaskView,
+  _task: CollectionTaskView,
   attempt: NaturalParseAttemptView | undefined,
 ) {
-  if (!attempt || !['failed', 'interrupted', 'needs_review'].includes(attempt.parse_status)) {
-    return attempt
-  }
-  const taskUpdatedAt = Date.parse(task.updated_at)
-  const attemptUpdatedAt = Date.parse(attempt.updated_at)
-  if (Number.isFinite(taskUpdatedAt)
-    && Number.isFinite(attemptUpdatedAt)
-    && taskUpdatedAt > attemptUpdatedAt) {
+  if (attempt?.error_safe_details_json.superseded_by_user_edit === true) {
     return undefined
   }
   return attempt

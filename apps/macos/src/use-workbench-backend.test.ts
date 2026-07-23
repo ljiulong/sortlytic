@@ -1447,9 +1447,9 @@ describe('mapBackendData', () => {
     expect(result.tasks[0]?.naturalParseAttempt).toEqual(attempt)
   })
 
-  it('更晚的有效任务修订不再被旧解析失败覆盖为当前错误', () => {
-    const oldFailure = {
-      id: 'attempt-old-failure',
+  it('只更新任务名称不会按时间戳隐藏仍有效的解析失败', () => {
+    const currentFailure = {
+      id: 'attempt-current-failure',
       task_id: task.id,
       intent_text: '用中文查找英国 TikTok 宠物用品账号',
       parse_status: 'failed' as const,
@@ -1461,26 +1461,26 @@ describe('mapBackendData', () => {
       created_at: '2026-07-20T08:00:00Z',
       updated_at: '2026-07-20T08:01:00Z',
     }
-    const revisedTask = {
+    const renamedTask = {
       ...task,
-      status: 'waiting_confirmation',
+      name: '只修改显示名称',
       updated_at: '2026-07-20T08:02:00Z',
     }
 
     const result = mapBackendData(
       workspace,
-      [revisedTask],
+      [renamedTask],
       tikhubRegistryFixture(),
       1_000,
       [],
       [],
-      [oldFailure],
+      [currentFailure],
     )
 
-    expect(result.naturalParseAttempts).toEqual([oldFailure])
-    expect(result.currentNaturalParseAttempts).toEqual([])
-    expect(result.tasks[0]?.status).toBe('等待确认')
-    expect(result.tasks[0]?.naturalParseAttempt).toBeUndefined()
+    expect(result.naturalParseAttempts).toEqual([currentFailure])
+    expect(result.currentNaturalParseAttempts).toEqual([currentFailure])
+    expect(result.tasks[0]?.name).toBe('只修改显示名称')
+    expect(result.tasks[0]?.naturalParseAttempt).toEqual(currentFailure)
   })
 
   it('把 SQLite 标准化记录数关联到对应任务', () => {
