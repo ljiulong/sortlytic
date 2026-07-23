@@ -32,6 +32,32 @@ pub use plans::{confirm_collection_plan, estimate_task_cost, save_collection_pla
 pub use revisions::revise_collection_task;
 pub use worker_lock::{execute_next_task, recover_interrupted_runs};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TaskWorkerWorkState {
+  pub(crate) has_queued_run: bool,
+  pub(crate) has_running_run: bool,
+}
+
+pub(crate) fn task_worker_work_state(
+  root_path: impl AsRef<Path>,
+) -> AppResult<TaskWorkerWorkState> {
+  let connection = open_workspace_connection(root_path)?;
+  connection
+    .query_row(
+      "SELECT
+         EXISTS(SELECT 1 FROM task_run WHERE status = 'queued'),
+         EXISTS(SELECT 1 FROM task_run WHERE status = 'running')",
+      [],
+      |row| {
+        Ok(TaskWorkerWorkState {
+          has_queued_run: row.get(0)?,
+          has_running_run: row.get(1)?,
+        })
+      },
+    )
+    .map_err(database_error)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CreateCollectionTaskInput {
   pub name: String,
