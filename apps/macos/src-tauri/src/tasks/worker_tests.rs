@@ -699,7 +699,7 @@ fn worker_preserves_definitive_provider_errors_after_request_dispatch() {
         .map(String::as_str),
       retry_after
     );
-    let failed = finalize_claimed_run(&root, &run, Err(execution_error))
+    let failed = finalize_claimed_run(&root, &run, None, Err(execution_error))
       .expect("provider failure should persist as the original terminal error");
     let expected_code = serialized_error_code(&code);
     assert_eq!(failed.status, "failed");
@@ -801,7 +801,7 @@ fn pipeline_worker_preserves_rate_limit_details_after_request_dispatch() {
       .map(String::as_str),
     Some("23")
   );
-  let failed = finalize_claimed_run(&root, &run, Err(execution_error))
+  let failed = finalize_claimed_run(&root, &run, None, Err(execution_error))
     .expect("pipeline failure should preserve provider semantics");
   assert_eq!(failed.error_code.as_deref(), Some("TIKHUB_RATE_LIMIT"));
   assert!(failed.retryable);
@@ -886,7 +886,7 @@ fn worker_persists_sanitized_terminal_error_details() {
   .with_safe_detail("retry_attempts", "3")
   .with_safe_detail("api_token", "provider-secret");
 
-  let failed = finalize_claimed_run(&root, &run, Err(error))
+  let failed = finalize_claimed_run(&root, &run, None, Err(error))
     .expect("worker should atomically persist a partial-success terminal state");
 
   assert_eq!(failed.status, "partial_success");

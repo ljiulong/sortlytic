@@ -48,6 +48,57 @@ fn queued_run_can_be_claimed_and_completed_atomically() {
 }
 
 #[test]
+fn stale_worker_fence_rejects_success_and_failure_terminals() {
+  let (root_path, task, _) = prepared_task_workspace("execution-stale-terminal-fence");
+  enqueue_task(&root_path, &task.id).expect("task should enqueue");
+  let running = claim_next_task(&root_path)
+    .expect("claim should succeed")
+    .expect("queued task should be claimed");
+  let run_step_id = mark_run_steps_success(&root_path, &running.id)
+    .into_iter()
+    .next()
+    .expect("single run step should exist");
+  insert_completed_checkpoint(&root_path, &run_step_id, 0, None, false, None);
+
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  connection
+    .execute(
+      "INSERT INTO task_worker_lease (
+         id, owner_id, lease_expires_at, created_at, updated_at, generation
+       ) VALUES (
+         'task_worker', 'replacement-owner', ?1,
+         '2026-07-24T00:00:00+00:00', '2026-07-24T00:00:00+00:00', 2
+       )",
+      params![i64::MAX],
+    )
+    .expect("replacement worker lease should insert");
+  drop(connection);
+
+  let stale_fence =
+    WorkerFence::new("stale-owner".to_string(), 1).expect("stale fence should construct");
+  super::super::execution::complete_task_run_with_fence(
+    &root_path,
+    &running.id,
+    Value::Null,
+    &stale_fence,
+  )
+  .expect_err("stale worker must not complete the run");
+  super::super::execution::fail_task_run_with_safe_details_with_fence(
+    &root_path,
+    &running.id,
+    "TEST_STALE_FENCE",
+    "stale worker failure",
+    true,
+    &std::collections::BTreeMap::new(),
+    &stale_fence,
+  )
+  .expect_err("stale worker must not fail the run");
+  assert_completion_remains_running(&root_path, &running.id, &task.id);
+
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn complete_accepts_a_valid_multi_page_checkpoint_chain() {
   let (root_path, task, _) =
     prepared_completion_task_workspace("execution-complete-multi-page", 2, 1_200, 35_000_000);

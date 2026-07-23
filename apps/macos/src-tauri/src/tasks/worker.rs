@@ -21,7 +21,10 @@ use crate::tikhub::{
 
 #[cfg(test)]
 use super::claim_next_task;
-use super::execution::fail_task_run_with_safe_details;
+use super::execution::{
+  complete_task_run_with_fence, fail_task_run_with_safe_details,
+  fail_task_run_with_safe_details_with_fence,
+};
 use super::{
   claim_next_task_with_fence, complete_task_run, database_error, get_task_run,
   open_workspace_connection, task_error, TaskRunView, WorkerFence,
@@ -96,16 +99,20 @@ where
 {
   let result = execute_claimed_run(root_path, &run, fence, &ensure_owner);
   ensure_owner()?;
-  finalize_claimed_run(root_path, &run, result).map(Some)
+  finalize_claimed_run(root_path, &run, fence, result).map(Some)
 }
 
 fn finalize_claimed_run(
   root_path: &Path,
   run: &TaskRunView,
+  fence: Option<&WorkerFence>,
   result: AppResult<()>,
 ) -> AppResult<TaskRunView> {
   match result {
-    Ok(()) => complete_task_run(root_path, &run.id, Value::Null),
+    Ok(()) => match fence {
+      Some(fence) => complete_task_run_with_fence(root_path, &run.id, Value::Null, fence),
+      None => complete_task_run(root_path, &run.id, Value::Null),
+    },
     Err(error) if error.code == AppErrorCode::Cancelled => {
       let connection = open_workspace_connection(root_path)?;
       get_task_run(&connection, &run.id)
@@ -116,14 +123,25 @@ fn finalize_claimed_run(
         .get("worker_code")
         .cloned()
         .unwrap_or_else(|| serialized_error_code(&error.code));
-      fail_task_run_with_safe_details(
-        root_path,
-        &run.id,
-        &error_code,
-        &error.message,
-        error.retryable,
-        &error.safe_details,
-      )
+      match fence {
+        Some(fence) => fail_task_run_with_safe_details_with_fence(
+          root_path,
+          &run.id,
+          &error_code,
+          &error.message,
+          error.retryable,
+          &error.safe_details,
+          fence,
+        ),
+        None => fail_task_run_with_safe_details(
+          root_path,
+          &run.id,
+          &error_code,
+          &error.message,
+          error.retryable,
+          &error.safe_details,
+        ),
+      }
     }
   }
 }
