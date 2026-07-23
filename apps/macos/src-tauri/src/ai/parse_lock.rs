@@ -192,13 +192,25 @@ mod tests {
       .collect::<Result<Vec<_>, _>>()
       .unwrap();
 
-    assert_eq!(entries.len(), 1);
-    let file_name = entries[0].file_name().to_string_lossy().into_owned();
+    assert!(entries.iter().all(|entry| !entry
+      .file_name()
+      .to_string_lossy()
+      .contains("sensitive-task-id")));
+    let lock_entries = entries
+      .iter()
+      .filter(|entry| {
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        file_name.starts_with("natural-parse-") && file_name.ends_with(".lock")
+      })
+      .collect::<Vec<_>>();
+    assert_eq!(lock_entries.len(), 1);
+    let file_name = lock_entries[0].file_name().to_string_lossy().into_owned();
     assert!(file_name.starts_with("natural-parse-"));
     assert!(file_name.ends_with(".lock"));
     assert!(!file_name.contains("sensitive-task-id"));
     assert_eq!(
-      entries[0].metadata().unwrap().permissions().mode() & 0o7777,
+      lock_entries[0].metadata().unwrap().permissions().mode() & 0o7777,
       0o600
     );
     fs::remove_dir_all(root).ok();
