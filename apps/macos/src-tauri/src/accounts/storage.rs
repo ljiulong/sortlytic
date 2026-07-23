@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Duration, Utc};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -9,6 +9,7 @@ use super::{
   normalize_account_with_evidence, normalize_country_region, AccountRecord, AgeRange, SourceKind,
 };
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
+use crate::tasks::WorkerFence;
 
 #[derive(Debug, Clone)]
 pub struct AccountObservationInput {
@@ -56,6 +57,22 @@ pub fn persist_account_observations(
   connection: &Connection,
   input: AccountObservationInput,
 ) -> AppResult<AccountPersistenceResult> {
+  persist_account_observations_guarded(connection, input, None)
+}
+
+pub(crate) fn persist_account_observations_with_fence(
+  connection: &Connection,
+  input: AccountObservationInput,
+  fence: &WorkerFence,
+) -> AppResult<AccountPersistenceResult> {
+  persist_account_observations_guarded(connection, input, Some(fence))
+}
+
+fn persist_account_observations_guarded(
+  connection: &Connection,
+  input: AccountObservationInput,
+  fence: Option<&WorkerFence>,
+) -> AppResult<AccountPersistenceResult> {
   if input.task_run_id.trim().is_empty() {
     return Err(validation_error("task_run_id 不能为空"));
   }
@@ -69,8 +86,12 @@ pub fn persist_account_observations(
   }
   i64::try_from(input.record_limit).map_err(|_| validation_error("账号输出上限超出范围"))?;
   let source_kind = source_kind(&input.data_type)?;
-  let filters = active_account_filters(connection, &input.task_run_id, &input.collected_at)?;
-  let transaction = connection.unchecked_transaction().map_err(database_error)?;
+  let transaction = Transaction::new_unchecked(connection, TransactionBehavior::Immediate)
+    .map_err(database_error)?;
+  if let Some(fence) = fence {
+    fence.ensure_current(&transaction)?;
+  }
+  let filters = active_account_filters(&transaction, &input.task_run_id, &input.collected_at)?;
   let mut observed_count = 0;
   let mut skipped_count = 0;
 

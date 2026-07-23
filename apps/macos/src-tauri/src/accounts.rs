@@ -11,6 +11,7 @@ const ISO_COUNTRY_CODES: &str = "AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ
 mod fields;
 mod storage;
 
+pub(crate) use storage::persist_account_observations_with_fence;
 pub use storage::{
   persist_account_observations, AccountObservationInput, AccountPersistenceResult,
 };

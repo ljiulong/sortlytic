@@ -345,6 +345,50 @@ fn persisted_gender_filter_runs_after_account_merge() {
 }
 
 #[test]
+fn stale_worker_fence_rejects_account_mutations() {
+  let connection = account_connection();
+  let now = chrono::Utc::now();
+  connection
+    .execute(
+      "INSERT INTO task_worker_lease (
+         id, owner_id, lease_expires_at, created_at, updated_at, generation
+       ) VALUES ('task_worker', 'replacement-owner', ?1, ?2, ?2, 2)",
+      rusqlite::params![now.timestamp_millis() + 120_000, now.to_rfc3339()],
+    )
+    .expect("replacement lease should be installed");
+  let stale = crate::tasks::WorkerFence::new("stale-owner".to_string(), 1)
+    .expect("stale fence should be valid");
+
+  persist_account_observations_with_fence(
+    &connection,
+    AccountObservationInput {
+      task_run_id: "run-stale".to_string(),
+      platform: "tiktok".to_string(),
+      data_type: "comments".to_string(),
+      records: vec![json!({
+        "user_id": "stale-account",
+        "nickname": "旧代账号"
+      })],
+      output_selected: true,
+      age_range: None,
+      record_limit: 10,
+      collected_at: "2026-07-20T08:00:00+08:00".to_string(),
+    },
+    &stale,
+  )
+  .expect_err("a stale generation must not merge or output accounts");
+
+  assert_eq!(
+    connection
+      .query_row("SELECT COUNT(*) FROM collected_account", [], |row| {
+        row.get::<_, i64>(0)
+      })
+      .expect("account count should query"),
+    0
+  );
+}
+
+#[test]
 fn persisted_region_and_time_filters_require_explicit_merged_evidence() {
   for (days, cutoff) in [
     (1, "2026-07-19T00:00:00Z"),
@@ -809,7 +853,15 @@ fn account_connection() -> Connection {
         UNIQUE (task_run_id, platform, identity_key)
       );
       CREATE TABLE collection_plan (id TEXT PRIMARY KEY, plan_json TEXT NOT NULL);
-      CREATE TABLE task_run (id TEXT PRIMARY KEY, plan_id TEXT);",
+      CREATE TABLE task_run (id TEXT PRIMARY KEY, plan_id TEXT);
+      CREATE TABLE task_worker_lease (
+        id TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL,
+        lease_expires_at INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        generation INTEGER NOT NULL
+      );",
     )
     .expect("账号表应创建");
   connection
