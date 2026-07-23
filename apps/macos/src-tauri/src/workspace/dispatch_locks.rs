@@ -6,9 +6,10 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use super::database_error;
+use super::{database_error, open_workspace_database, DATABASE_FILE_NAME};
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 
 const DISPATCH_LOCK_ACTION: &str = "initialize_task_dispatch_lock_pool";
@@ -72,7 +73,21 @@ pub(super) fn initialize_task_dispatch_lock_pool(
         .map_err(database_error)?;
     }
   }
-  transaction.commit().map_err(database_error)
+  transaction.commit().map_err(database_error)?;
+  open_task_dispatch_lock(root_path, "workspace-lock-pool-self-check").map(drop)
+}
+
+pub(crate) fn open_task_dispatch_lock(root_path: &Path, task_id: &str) -> AppResult<File> {
+  let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME))?;
+  let manifest = load_manifest(&connection)?
+    .ok_or_else(|| dispatch_lock_error("任务请求分发锁清单不存在", None))?;
+  validate_manifest(&manifest)?;
+  validate_lock_pool_directory(root_path)?;
+  open_and_validate_shard(
+    &lock_path(root_path, task_id),
+    &manifest,
+    shard_index(task_id),
+  )
 }
 
 fn load_manifest(connection: &Connection) -> AppResult<Option<DispatchLockManifest>> {
@@ -248,8 +263,16 @@ fn lock_directory(root_path: &Path) -> PathBuf {
   root_path.join("temp").join(DISPATCH_LOCK_DIRECTORY)
 }
 
+fn lock_path(root_path: &Path, task_id: &str) -> PathBuf {
+  shard_path(root_path, shard_index(task_id))
+}
+
 fn shard_path(root_path: &Path, index: usize) -> PathBuf {
   lock_directory(root_path).join(format!("task-dispatch-{index:02x}.lock"))
+}
+
+fn shard_index(task_id: &str) -> usize {
+  usize::from(Sha256::digest(task_id.as_bytes())[0]) % DISPATCH_LOCK_SHARDS
 }
 
 fn shard_identity(manifest: &DispatchLockManifest, index: usize) -> String {
@@ -282,6 +305,11 @@ mod tests {
   fn workspace_initializes_a_bounded_dispatch_lock_pool() {
     let root = std::env::temp_dir().join(format!("dispatch-lock-pool-{}", Uuid::new_v4()));
     create_workspace("固定分发锁池", &root).expect("workspace should be created");
+
+    for index in 0..96 {
+      open_task_dispatch_lock(&root, &format!("task-{index}"))
+        .expect("every task should resolve to a preinitialized shard");
+    }
 
     let pool_locks = fs::read_dir(lock_directory(&root))
       .expect("lock pool should be readable")
