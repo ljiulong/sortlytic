@@ -125,6 +125,9 @@ impl PricingHttpServer {
 
 fn read_http_request(stream: &mut TcpStream) -> String {
   stream
+    .set_nonblocking(false)
+    .expect("accepted pricing stream should block while reading");
+  stream
     .set_read_timeout(Some(Duration::from_secs(2)))
     .expect("pricing request read timeout should set");
   let mut request = Vec::new();
@@ -151,6 +154,49 @@ fn write_json_response(stream: &mut TcpStream, body: &str) {
   stream
     .write_all(response.as_bytes())
     .expect("pricing response should write");
+}
+
+#[test]
+fn accepted_stream_waits_for_delayed_request_bytes() {
+  let listener = TcpListener::bind("127.0.0.1:0").expect("pricing server should bind");
+  listener
+    .set_nonblocking(true)
+    .expect("pricing listener should be nonblocking");
+  let address = listener
+    .local_addr()
+    .expect("pricing server address should resolve");
+  let (connected_tx, connected_rx) = mpsc::channel();
+  let (release_tx, release_rx) = mpsc::channel();
+  let client = thread::spawn(move || {
+    let mut stream = TcpStream::connect(address).expect("pricing client should connect");
+    connected_tx
+      .send(())
+      .expect("pricing client connection should signal");
+    release_rx
+      .recv_timeout(Duration::from_secs(3))
+      .expect("pricing client write should be released");
+    stream
+      .write_all(b"GET /delayed HTTP/1.1\r\nHost: localhost\r\n\r\n")
+      .expect("pricing client request should write");
+  });
+  connected_rx
+    .recv_timeout(Duration::from_secs(3))
+    .expect("pricing client should connect");
+  let (mut stream, _) = listener
+    .accept()
+    .expect("queued pricing connection should accept");
+  let release = thread::spawn(move || {
+    thread::sleep(Duration::from_millis(100));
+    release_tx
+      .send(())
+      .expect("pricing client write release should send");
+  });
+
+  let request = read_http_request(&mut stream);
+
+  assert!(request.starts_with("GET /delayed HTTP/1.1"));
+  release.join().expect("pricing release should finish");
+  client.join().expect("pricing client should finish");
 }
 
 pub(super) fn create_pricing_fixture(
