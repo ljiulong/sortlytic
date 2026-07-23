@@ -82,12 +82,13 @@ describe('task edit draft mapping', () => {
     })
   })
 
-  it('keeps stale failure history without reopening a successfully revised task as failed', () => {
+  it('keeps explicitly superseded failure history without reopening a revised task as failed', () => {
     const staleFailure = attempt({
       parse_status: 'failed',
       intent_text: '查找英国 TikTok 宠物用品账号',
       error_code: 'MODEL_AUTH_ERROR',
       error_message: 'AI 配置鉴权失败',
+      error_safe_details_json: { superseded_by_user_edit: true },
       updated_at: '2026-07-20T00:01:00Z',
     })
     const draft = createTaskEditDraft(
@@ -103,6 +104,34 @@ describe('task edit draft mapping', () => {
     expect(draft.editorMode).toBe('form')
     expect(draft.originalIntent).toBe('查找英国 TikTok 宠物用品账号')
     expect(draft.parseProblem).toBeUndefined()
+  })
+
+  it('keeps a current parse failure visible after only the task name changes', () => {
+    const currentFailure = attempt({
+      parse_status: 'failed',
+      intent_text: '查找英国 TikTok 宠物用品账号',
+      error_code: 'MODEL_TIMEOUT',
+      error_message: 'AI 服务请求超时',
+      updated_at: '2026-07-20T00:01:00Z',
+    })
+    const draft = createTaskEditDraft(
+      task({
+        name: '重命名后的任务',
+        source_type: 'natural_language',
+        status: 'draft',
+        updated_at: '2026-07-20T00:02:00Z',
+      }),
+      plan({ platforms: ['tiktok'], account_source: 'user_search' }),
+      currentFailure,
+    )
+
+    expect(draft.name).toBe('重命名后的任务')
+    expect(draft.editorMode).toBe('natural_language')
+    expect(draft.originalIntent).toBe('查找英国 TikTok 宠物用品账号')
+    expect(draft.parseProblem).toEqual({
+      code: 'MODEL_TIMEOUT',
+      message: 'AI 服务请求超时',
+    })
   })
 
   it('keeps a user plan authoritative when a superseded AI candidate arrives later', () => {

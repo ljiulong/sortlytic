@@ -47,11 +47,7 @@ export function createTaskEditDraft(
   const supersededByUserEdit = attempt?.error_safe_details_json.superseded_by_user_edit === true
   const currentIntent = supersededByUserEdit ? undefined : intent
   const intentMissingFields = currentIntent?.missing_fields ?? []
-  const currentAttempt = attempt
-    && !supersededByUserEdit
-    && !attemptWasSuperseded(task, attempt)
-    ? attempt
-    : undefined
+  const currentAttempt = supersededByUserEdit ? undefined : attempt
   const parseFailed = currentAttempt
     && ['failed', 'interrupted'].includes(currentAttempt.parse_status)
   const needsReview = currentAttempt?.parse_status === 'needs_review'
@@ -130,17 +126,6 @@ export function collectionIntentFromJson(value: unknown): CollectionIntentV1 | u
     return undefined
   }
   return value as CollectionIntentV1
-}
-
-function attemptWasSuperseded(
-  task: CollectionTaskView,
-  attempt: NaturalParseAttemptView,
-) {
-  const taskUpdatedAt = Date.parse(task.updated_at)
-  const attemptUpdatedAt = Date.parse(attempt.updated_at)
-  return Number.isFinite(taskUpdatedAt)
-    && Number.isFinite(attemptUpdatedAt)
-    && taskUpdatedAt > attemptUpdatedAt
 }
 
 function sourceInputFromPlan(planJson?: Record<string, unknown>) {
