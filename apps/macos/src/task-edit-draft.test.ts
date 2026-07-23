@@ -157,6 +157,33 @@ describe('task edit draft mapping', () => {
     expect(draft.parseProblem).toBeUndefined()
   })
 
+  it('keeps a pending generation placeholder out of the task editor problem state', () => {
+    const pendingIntent = '查找英国 TikTok 宠物用品账号'
+    const draft = createTaskEditDraft(
+      task({
+        source_type: 'natural_language',
+        status: 'waiting_confirmation',
+      }),
+      plan({ platforms: ['tiktok'], account_source: 'user_search' }),
+      attempt({
+        parse_status: 'needs_review',
+        parse_phase: 'preparing',
+        intent_text: pendingIntent,
+        error_code: null,
+        error_message: null,
+        error_safe_details_json: {
+          source: 'pending_generation',
+          missing_fields: ['budget_limit_micros'],
+        },
+      }),
+    )
+
+    expect(draft.editorMode).toBe('form')
+    expect(draft.originalIntent).toBe(pendingIntent)
+    expect(draft.missingFields).toEqual([])
+    expect(draft.parseProblem).toBeUndefined()
+  })
+
   it('keeps a user plan authoritative when a superseded AI candidate arrives later', () => {
     const draft = createTaskEditDraft(
       task({ source_type: 'natural_language', status: 'waiting_confirmation' }),

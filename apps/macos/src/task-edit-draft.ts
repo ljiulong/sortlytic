@@ -4,7 +4,10 @@ import type {
   CollectionTaskView,
   NaturalParseAttemptView,
 } from './backend-api'
-import { isNaturalParseProvenanceOnly } from './natural-parse-state'
+import {
+  isNaturalParsePlaceholder,
+  isNaturalParseProvenanceOnly,
+} from './natural-parse-state'
 
 type GenderFilter = 'male' | 'female' | 'other'
 
@@ -47,9 +50,11 @@ export function createTaskEditDraft(
   const planMissingFields = stringArray(planJson?.missing_fields)
   const supersededByUserEdit = attempt?.error_safe_details_json.superseded_by_user_edit === true
   const provenanceOnly = attempt ? isNaturalParseProvenanceOnly(attempt) : false
-  const currentIntent = supersededByUserEdit || provenanceOnly ? undefined : intent
+  const placeholder = attempt ? isNaturalParsePlaceholder(attempt) : false
+  const ignoreAttempt = supersededByUserEdit || provenanceOnly || placeholder
+  const currentIntent = ignoreAttempt ? undefined : intent
   const intentMissingFields = currentIntent?.missing_fields ?? []
-  const currentAttempt = supersededByUserEdit || provenanceOnly ? undefined : attempt
+  const currentAttempt = ignoreAttempt ? undefined : attempt
   const parseFailed = currentAttempt
     && ['failed', 'interrupted'].includes(currentAttempt.parse_status)
   const needsReview = currentAttempt?.parse_status === 'needs_review'
