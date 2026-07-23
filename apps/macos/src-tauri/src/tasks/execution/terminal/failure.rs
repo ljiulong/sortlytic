@@ -227,55 +227,58 @@ fn is_sensitive_detail_key(key: &str) -> bool {
 }
 
 pub fn cancel_task(root_path: impl AsRef<Path>, task_id: &str) -> AppResult<CollectionTaskView> {
-  let mut connection = open_workspace_connection(root_path)?;
-  let transaction = immediate_transaction(&mut connection)?;
-  let task = get_task_by_id(&transaction, task_id)?;
-  if matches!(
-    task.status.as_str(),
-    "success" | "partial_success" | "failed" | "cancelled"
-  ) {
-    return Err(task_error("终态任务不能取消"));
-  }
-  let active_runs = active_run_ids(&transaction, task_id)?;
-  let now = Utc::now().to_rfc3339();
-  let task_changed = transaction
-    .execute(
-      "UPDATE collection_task SET status = 'cancelled', cancelled_at = ?1, updated_at = ?1
+  let root_path = root_path.as_ref();
+  crate::tasks::worker::with_task_dispatch_gate(root_path, task_id, true, || {
+    let mut connection = open_workspace_connection(root_path)?;
+    let transaction = immediate_transaction(&mut connection)?;
+    let task = get_task_by_id(&transaction, task_id)?;
+    if matches!(
+      task.status.as_str(),
+      "success" | "partial_success" | "failed" | "cancelled"
+    ) {
+      return Err(task_error("终态任务不能取消"));
+    }
+    let active_runs = active_run_ids(&transaction, task_id)?;
+    let now = Utc::now().to_rfc3339();
+    let task_changed = transaction
+      .execute(
+        "UPDATE collection_task SET status = 'cancelled', cancelled_at = ?1, updated_at = ?1
        WHERE id = ?2 AND status IN ('draft', 'waiting_confirmation', 'queued', 'running')",
-      params![now, task_id],
-    )
-    .map_err(database_error)?;
-  if task_changed != 1 {
-    return Err(task_error("任务状态已变化，无法取消"));
-  }
-  transaction
-    .execute(
-      "UPDATE task_run SET status = 'cancelled', ended_at = ?1, current_stage = '用户取消'
+        params![now, task_id],
+      )
+      .map_err(database_error)?;
+    if task_changed != 1 {
+      return Err(task_error("任务状态已变化，无法取消"));
+    }
+    transaction
+      .execute(
+        "UPDATE task_run SET status = 'cancelled', ended_at = ?1, current_stage = '用户取消'
        WHERE task_id = ?2 AND status IN ('queued', 'running')",
-      params![now, task_id],
-    )
-    .map_err(database_error)?;
-  for run_id in active_runs {
-    settle_active_children(
-      &transaction,
-      &run_id,
-      "cancelled",
-      "user_cancelled",
-      "UNCERTAIN_REQUEST_AFTER_CANCEL",
-      "RUN_CANCELLED",
-      "任务已由用户取消",
-      &now,
-    )?;
-    append_task_log(
-      &transaction,
-      &run_id,
-      "用户取消",
-      "warning",
-      "任务已由用户取消",
-    )?;
-  }
-  transaction.commit().map_err(database_error)?;
-  get_task_by_id(&connection, task_id)
+        params![now, task_id],
+      )
+      .map_err(database_error)?;
+    for run_id in active_runs {
+      settle_active_children(
+        &transaction,
+        &run_id,
+        "cancelled",
+        "user_cancelled",
+        "UNCERTAIN_REQUEST_AFTER_CANCEL",
+        "RUN_CANCELLED",
+        "任务已由用户取消",
+        &now,
+      )?;
+      append_task_log(
+        &transaction,
+        &run_id,
+        "用户取消",
+        "warning",
+        "任务已由用户取消",
+      )?;
+    }
+    transaction.commit().map_err(database_error)?;
+    get_task_by_id(&connection, task_id)
+  })
 }
 
 fn output_record_count(connection: &Connection, run_id: &str) -> AppResult<i64> {

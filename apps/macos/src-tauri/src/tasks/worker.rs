@@ -1,7 +1,11 @@
+use std::fs::{self, File, OpenOptions};
+use std::io::ErrorKind;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
 use chrono::Utc;
-use rusqlite::params;
+use fs4::FileExt;
+use rusqlite::{params, OptionalExtension};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -44,6 +48,8 @@ use mutations::{
 };
 use recovery::{ensure_record_limit, load_checkpoints, parse_response_checkpoint, resume_position};
 use runtime::load_runtime_snapshot;
+
+const PRIVATE_LOCK_MODE: u32 = 0o600;
 
 pub(super) struct RunStep {
   pub(super) id: String,
@@ -410,23 +416,28 @@ where
       cursor.as_ref(),
     )?;
     guard_request(&request)?;
-    let (checkpoint_id, idempotency_key) = if let Some(checkpoint) = prepared_checkpoint.take() {
-      if checkpoint.page_index != page_index || checkpoint.input_cursor != cursor {
-        return Err(worker_error(
-          "CHECKPOINT_CHAIN_INVALID",
-          "恢复检查点的页码或游标与当前执行位置不一致",
-          false,
-        ));
-      }
-      (checkpoint.id, checkpoint.idempotency_key)
-    } else {
-      insert_prepared_checkpoint(&connection, fence, &step.id, page_index, cursor.as_ref())?
-    };
-    let request = request.with_idempotency_key(idempotency_key)?;
-    let requested_at = Utc::now().to_rfc3339();
-    mark_checkpoint_requesting(&connection, fence, &checkpoint_id, &requested_at)?;
-
-    let page_result = fetch_page(&request);
+    let (checkpoint_id, request, page_result) =
+      with_task_dispatch_gate(root_path, &task_id, fence.is_some(), || {
+        ensure_run_accepts_dispatch(&connection, &task_id, &run_id, &step.id)?;
+        let (checkpoint_id, idempotency_key) = if let Some(checkpoint) = prepared_checkpoint.take()
+        {
+          if checkpoint.page_index != page_index || checkpoint.input_cursor != cursor {
+            return Err(worker_error(
+              "CHECKPOINT_CHAIN_INVALID",
+              "恢复检查点的页码或游标与当前执行位置不一致",
+              false,
+            ));
+          }
+          (checkpoint.id, checkpoint.idempotency_key)
+        } else {
+          insert_prepared_checkpoint(&connection, fence, &step.id, page_index, cursor.as_ref())?
+        };
+        let request = request.with_idempotency_key(idempotency_key)?;
+        let requested_at = Utc::now().to_rfc3339();
+        mark_checkpoint_requesting(&connection, fence, &checkpoint_id, &requested_at)?;
+        let page_result = fetch_page(&request);
+        Ok((checkpoint_id, request, page_result))
+      })?;
     ensure_run_accepts_response(root_path, &run_id)?;
     let page = match page_result {
       Ok(page) => page,
@@ -558,6 +569,141 @@ pub(super) fn persist_worker_page(
     Some(fence) => persist_collection_page_with_fence(root_path, input, fence),
     None => persist_collection_page(root_path, input),
   }
+}
+
+pub(super) fn with_task_dispatch_gate<T>(
+  root_path: &Path,
+  task_id: &str,
+  enabled: bool,
+  operation: impl FnOnce() -> AppResult<T>,
+) -> AppResult<T> {
+  if !enabled {
+    return operation();
+  }
+  let file = open_task_dispatch_lock(root_path, task_id)?;
+  FileExt::lock(&file)
+    .map_err(|error| dispatch_lock_error("无法取得任务请求分发锁", Some(&error)))?;
+  operation()
+}
+
+pub(super) fn ensure_run_accepts_dispatch(
+  connection: &rusqlite::Connection,
+  task_id: &str,
+  run_id: &str,
+  step_id: &str,
+) -> AppResult<()> {
+  let state = connection
+    .query_row(
+      "SELECT task.status = 'running' AND run.status = 'running'
+                AND run_step.status = 'running',
+              task.status = 'cancelled' OR run.status = 'cancelled'
+       FROM collection_task AS task
+       JOIN task_run AS run ON run.task_id = task.id
+       JOIN task_run_step AS run_step ON run_step.task_run_id = run.id
+       WHERE task.id = ?1 AND run.id = ?2 AND run_step.id = ?3",
+      params![task_id, run_id, step_id],
+      |row| Ok((row.get::<_, bool>(0)?, row.get::<_, bool>(1)?)),
+    )
+    .optional()
+    .map_err(database_error)?
+    .ok_or_else(|| task_error("任务、运行或步骤不属于当前请求分发范围"))?;
+  if state.1 {
+    return Err(AppError::new(
+      AppErrorCode::Cancelled,
+      "任务已取消，不会发送新的远端请求",
+      AppErrorStage::Collection,
+      false,
+    ));
+  }
+  if !state.0 {
+    return Err(task_error(
+      "任务、运行或步骤状态已变化，禁止发送新的远端请求",
+    ));
+  }
+  Ok(())
+}
+
+fn open_task_dispatch_lock(root_path: &Path, task_id: &str) -> AppResult<File> {
+  let directory = root_path.join("temp");
+  let metadata = fs::symlink_metadata(&directory)
+    .map_err(|error| dispatch_lock_error("无法读取任务请求分发锁目录", Some(&error)))?;
+  if metadata.file_type().is_symlink() || !metadata.is_dir() {
+    return Err(dispatch_lock_error(
+      "任务请求分发锁目录必须是工作区内的真实目录",
+      None,
+    ));
+  }
+  let task_hash = format!("{:x}", Sha256::digest(task_id.as_bytes()));
+  let path = directory.join(format!("task-dispatch-{task_hash}.lock"));
+  let file = match OpenOptions::new()
+    .read(true)
+    .write(true)
+    .create_new(true)
+    .mode(PRIVATE_LOCK_MODE)
+    .open(&path)
+  {
+    Ok(file) => file,
+    Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+      let metadata = fs::symlink_metadata(&path)
+        .map_err(|error| dispatch_lock_error("无法检查任务请求分发锁", Some(&error)))?;
+      if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(dispatch_lock_error(
+          "任务请求分发锁必须是工作区内的普通文件",
+          None,
+        ));
+      }
+      OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .map_err(|error| dispatch_lock_error("无法打开任务请求分发锁", Some(&error)))?
+    }
+    Err(error) => return Err(dispatch_lock_error("无法创建任务请求分发锁", Some(&error))),
+  };
+  file
+    .set_permissions(fs::Permissions::from_mode(PRIVATE_LOCK_MODE))
+    .map_err(|error| dispatch_lock_error("无法收紧任务请求分发锁权限", Some(&error)))?;
+  validate_task_dispatch_lock(&path, &file)?;
+  Ok(file)
+}
+
+fn validate_task_dispatch_lock(path: &Path, file: &File) -> AppResult<()> {
+  let opened = file
+    .metadata()
+    .map_err(|error| dispatch_lock_error("无法验证任务请求分发锁", Some(&error)))?;
+  let current = fs::symlink_metadata(path)
+    .map_err(|error| dispatch_lock_error("无法复核任务请求分发锁", Some(&error)))?;
+  if current.file_type().is_symlink()
+    || !opened.is_file()
+    || !current.is_file()
+    || opened.dev() != current.dev()
+    || opened.ino() != current.ino()
+    || opened.permissions().mode() & 0o7777 != PRIVATE_LOCK_MODE
+  {
+    return Err(dispatch_lock_error(
+      "任务请求分发锁身份或权限校验失败",
+      None,
+    ));
+  }
+  Ok(())
+}
+
+fn dispatch_lock_error(message: &str, error: Option<&std::io::Error>) -> AppError {
+  let kind = error.map(std::io::Error::kind);
+  AppError::new(
+    if kind.is_none() || kind == Some(ErrorKind::PermissionDenied) {
+      AppErrorCode::PermissionError
+    } else {
+      AppErrorCode::WorkspaceError
+    },
+    error.map_or(message.to_string(), |error| format!("{message}：{error}")),
+    AppErrorStage::Workspace,
+    matches!(
+      kind,
+      Some(ErrorKind::Interrupted | ErrorKind::WouldBlock | ErrorKind::TimedOut)
+    ),
+  )
+  .with_safe_detail("operation", "task_dispatch_gate")
 }
 
 pub(super) fn ensure_run_accepts_response(root_path: &Path, run_id: &str) -> AppResult<()> {
