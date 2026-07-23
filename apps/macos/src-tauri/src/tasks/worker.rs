@@ -145,7 +145,7 @@ where
     fence,
     |request| {
       ensure_owner()?;
-      let result = pricing::guard_request(root_path, &run.id, request).map(|_| ());
+      let result = pricing::guard_request(root_path, &run.id, request, fence).map(|_| ());
       ensure_owner()?;
       result
     },

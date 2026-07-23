@@ -5,7 +5,7 @@ use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde_json::Value;
 use uuid::Uuid;
 
-use super::{database_error, open_workspace_connection};
+use super::{database_error, open_workspace_connection, WorkerFence};
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 use crate::tikhub::{
   get_tikhub_account_quota, quote_tikhub_connector_price, TikHubCollectionRequest,
@@ -16,6 +16,7 @@ pub(super) fn guard_request(
   root_path: &Path,
   run_id: &str,
   request: &TikHubCollectionRequest,
+  fence: Option<&WorkerFence>,
 ) -> AppResult<i64> {
   let quota = get_tikhub_account_quota(root_path)?;
   let quotes = request
@@ -23,7 +24,7 @@ pub(super) fn guard_request(
     .iter()
     .map(|endpoint| quote_tikhub_connector_price(root_path, endpoint, 1))
     .collect::<AppResult<Vec<_>>>()?;
-  persist_guarded_quotes(root_path, run_id, quota, quotes)
+  persist_guarded_quotes(root_path, run_id, quota, quotes, fence)
 }
 
 pub(super) fn checkpoint_quote_json(
@@ -82,6 +83,7 @@ fn persist_guarded_quotes(
   run_id: &str,
   quota: TikhubAccountQuota,
   quotes: Vec<TikhubPriceQuote>,
+  fence: Option<&WorkerFence>,
 ) -> AppResult<i64> {
   if quotes.is_empty() {
     return Err(cost_error("采集请求缺少可计价 endpoint"));
@@ -105,6 +107,9 @@ fn persist_guarded_quotes(
   let transaction = connection
     .transaction_with_behavior(TransactionBehavior::Immediate)
     .map_err(database_error)?;
+  if let Some(fence) = fence {
+    fence.ensure_current(&transaction)?;
+  }
   let (budget_micros, accumulated_before) = load_budget_state(&transaction, run_id)?;
   let decision = evaluate_gate(
     budget_micros,
@@ -226,6 +231,7 @@ fn cost_error(message: impl Into<String>) -> AppError {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::workspace::{create_workspace, open_workspace_database, DATABASE_FILE_NAME};
 
   #[test]
   fn gate_requires_both_budget_and_live_available_credit() {
@@ -298,5 +304,95 @@ mod tests {
   fn usd_values_convert_to_exact_micros() {
     assert_eq!(usd_to_micros(0.05, "额度").expect("金额应转换"), 50_000);
     assert!(usd_to_micros(f64::NAN, "额度").is_err());
+  }
+
+  #[test]
+  fn stale_worker_fence_rejects_quote_ledger_writes() {
+    let root = std::env::temp_dir().join(format!("worker-pricing-fence-{}", Uuid::new_v4()));
+    create_workspace("计价栅栏测试", &root).expect("workspace should be created");
+    let connection =
+      open_workspace_database(root.join(DATABASE_FILE_NAME)).expect("database should open");
+    let now = Utc::now().to_rfc3339();
+    connection
+      .execute(
+        "INSERT INTO collection_task (
+           id, name, source_type, status, created_at, updated_at
+         ) VALUES ('task-pricing', '计价任务', 'form', 'running', ?1, ?1)",
+        [&now],
+      )
+      .expect("task should insert");
+    connection
+      .execute(
+        "INSERT INTO collection_plan (
+           id, task_id, source, schema_version, plan_json, validation_status,
+           confirmed_by_user, created_at, updated_at
+         ) VALUES (
+           'plan-pricing', 'task-pricing', 'form', 4, ?1, 'valid', 1, ?2, ?2
+         )",
+        params![
+          serde_json::json!({
+            "budget_limit": {
+              "currency": "USD",
+              "amount_micros": 1_000_000
+            }
+          })
+          .to_string(),
+          now
+        ],
+      )
+      .expect("plan should insert");
+    connection
+      .execute(
+        "INSERT INTO task_run (
+           id, task_id, plan_id, status, started_at
+         ) VALUES ('run-pricing', 'task-pricing', 'plan-pricing', 'running', ?1)",
+        [&now],
+      )
+      .expect("run should insert");
+    connection
+      .execute(
+        "INSERT INTO task_worker_lease (
+           id, owner_id, lease_expires_at, created_at, updated_at, generation
+         ) VALUES (
+           'task_worker', 'replacement-owner', 9223372036854775807, ?1, ?1, 2
+         )",
+        [&now],
+      )
+      .expect("replacement lease should insert");
+    let stale = crate::tasks::WorkerFence::new("stale-owner".to_string(), 1)
+      .expect("stale fence should be valid");
+
+    persist_guarded_quotes(
+      &root,
+      "run-pricing",
+      TikhubAccountQuota {
+        balance: 1.0,
+        free_credit: 0.0,
+        available_credit: 1.0,
+      },
+      vec![TikhubPriceQuote {
+        endpoint: "tiktok.item_detail".to_string(),
+        request_per_day: 1,
+        base_unit_price: Some(0.01),
+        total_price: 0.01,
+        currency: "USD".to_string(),
+        quote_json: serde_json::json!({"price": 0.01}),
+      }],
+      Some(&stale),
+    )
+    .expect_err("a stale generation must not append pricing snapshots");
+
+    assert_eq!(
+      connection
+        .query_row(
+          "SELECT COUNT(*) FROM pricing_quote_snapshot WHERE task_run_id = 'run-pricing'",
+          [],
+          |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+      0
+    );
+    drop(connection);
+    std::fs::remove_dir_all(root).ok();
   }
 }
