@@ -243,6 +243,35 @@ describe('TaskQueue', () => {
     expect(markup).toContain('解析完成，需要补充信息')
   })
 
+  it('有效用户修订的溯源记录不再伪装成待修正问题', () => {
+    const markup = renderQueue([{
+      ...waitingTask,
+      id: 'task-natural-user-edited',
+      name: '已保存的新计划',
+      source: '自然语言',
+      sourceType: 'natural_language',
+      status: '等待确认',
+      naturalParseAttempt: {
+        id: 'attempt-user-edited',
+        task_id: 'task-natural-user-edited',
+        intent_text: '查找英国 TikTok 宠物用品账号，最多 20 个',
+        parse_status: 'needs_review',
+        parse_phase: 'needs_review',
+        error_code: 'VALIDATION_ERROR',
+        error_message: '原始自然语言需求已由用户编辑',
+        retryable: false,
+        error_safe_details_json: { source: 'user_edited' },
+        created_at: '2026-07-20T08:00:00Z',
+        updated_at: '2026-07-20T08:00:17Z',
+      },
+    }])
+
+    expect(markup).toContain('<h3 id="task-title-task-natural-user-edited">已保存的新计划</h3>')
+    expect(markup).toContain('>等待确认</span>')
+    expect(markup).not.toContain('>待修正</span>')
+    expect(markup).not.toContain('原始自然语言需求已由用户编辑')
+  })
+
   it('查看解析记录打开当前持久任务编辑器', () => {
     const onEditTask = vi.fn()
     const mounted = mountQueue(

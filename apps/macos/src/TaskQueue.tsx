@@ -19,6 +19,7 @@ import {
 import TaskResultsPanel from './TaskResultsPanel'
 import TaskProblemPanel from './TaskProblemPanel'
 import TaskRunDetails from './TaskRunDetails'
+import { isNaturalParseProvenanceOnly } from './natural-parse-state'
 import type { TaskRemediationAction } from './task-remediation'
 import type { TaskExportInput, WorkbenchRuntimeData } from './use-workbench-backend'
 import type { TaskStatus } from './workbench-data'
@@ -457,10 +458,12 @@ function TaskQueue({
               : task.cost
             const parseAttempt = task.naturalParseAttempt
             const parseNeedsAttention = parseAttempt
+              && !isNaturalParseProvenanceOnly(parseAttempt)
               && ['failed', 'interrupted', 'needs_review'].includes(parseAttempt.parse_status)
-            const parseFailed = parseAttempt
+            const parseFailed = parseNeedsAttention && parseAttempt
               && ['failed', 'interrupted'].includes(parseAttempt.parse_status)
-            const parseNeedsReview = parseAttempt?.parse_status === 'needs_review'
+            const parseNeedsReview = parseNeedsAttention
+              && parseAttempt.parse_status === 'needs_review'
             const displayTaskName = parseNeedsAttention && parseAttempt
               ? parseAttempt.intent_text
               : task.name
