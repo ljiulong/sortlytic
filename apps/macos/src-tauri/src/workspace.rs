@@ -41,6 +41,9 @@ use task_intent_migration::{apply_task_intent_migration, validate_existing_task_
 use task_run_sequence_migration::{
   apply_task_run_sequence_migration, validate_existing_task_run_sequence_migration,
 };
+use worker_fence_migration::{
+  apply_worker_fence_migration, validate_existing_worker_fence_migration,
+};
 use worker_lease_migration::{
   apply_worker_lease_migration, validate_existing_worker_lease_migration,
 };
@@ -56,9 +59,10 @@ mod schema;
 mod security;
 mod task_intent_migration;
 mod task_run_sequence_migration;
+mod worker_fence_migration;
 mod worker_lease_migration;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 13;
+pub const CURRENT_SCHEMA_VERSION: i64 = 14;
 pub const DATABASE_FILE_NAME: &str = "app.sqlite";
 
 const WORKSPACE_DIRS: &[&str] = &[
@@ -328,6 +332,7 @@ fn apply_schema(connection: &mut Connection) -> AppResult<()> {
   validate_existing_task_intent_migration(connection)?;
   validate_existing_task_run_sequence_migration(connection)?;
   validate_existing_worker_lease_migration(connection)?;
+  validate_existing_worker_fence_migration(connection)?;
   connection
     .execute_batch(SCHEMA_SQL)
     .map_err(database_error)?;
@@ -351,7 +356,8 @@ fn apply_schema(connection: &mut Connection) -> AppResult<()> {
   apply_account_fields_migration(connection)?;
   apply_task_intent_migration(connection)?;
   apply_task_run_sequence_migration(connection)?;
-  apply_worker_lease_migration(connection)
+  apply_worker_lease_migration(connection)?;
+  apply_worker_fence_migration(connection)
 }
 
 fn apply_record_observation_migration(connection: &mut Connection) -> AppResult<()> {
