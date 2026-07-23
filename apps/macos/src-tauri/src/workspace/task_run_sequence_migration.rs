@@ -11,7 +11,7 @@ use super::{
 const MIGRATION_VERSION: i64 = 12;
 const MIGRATION_NAME: &str = "task_run_monotonic_sequence";
 const ADD_RUN_SEQUENCE_SQL: &str = "ALTER TABLE task_run ADD COLUMN run_sequence INTEGER CHECK (run_sequence IS NULL OR run_sequence > 0);";
-const BACKFILL_SQL: &str = r#"
+const LEGACY_BACKFILL_SQL_FOR_CHECKSUM: &str = r#"
 UPDATE task_run AS run
 SET run_sequence = (
   SELECT COUNT(*)
@@ -22,6 +22,21 @@ SET run_sequence = (
       OR (candidate.started_at = run.started_at AND candidate.id <= run.id)
     )
 );
+"#;
+const BACKFILL_SQL: &str = r#"
+WITH ranked AS (
+  SELECT
+    id,
+    ROW_NUMBER() OVER (
+      PARTITION BY task_id
+      ORDER BY started_at, id
+    ) AS run_sequence
+  FROM task_run
+)
+UPDATE task_run AS run
+SET run_sequence = ranked.run_sequence
+FROM ranked
+WHERE ranked.id = run.id;
 "#;
 const INDEX_SQL: &str = r#"
 CREATE UNIQUE INDEX IF NOT EXISTS idx_task_run_task_sequence
@@ -165,7 +180,7 @@ fn migration_checksum() -> String {
   let mut hasher = Sha256::new();
   for sql in [
     ADD_RUN_SEQUENCE_SQL,
-    BACKFILL_SQL,
+    LEGACY_BACKFILL_SQL_FOR_CHECKSUM,
     INDEX_SQL,
     ASSIGN_TRIGGER_SQL,
     GUARD_TRIGGER_SQL,
@@ -391,6 +406,32 @@ mod tests {
       "matching object names must not conceal a broken sequence trigger contract"
     );
     assert!(validate_existing_task_run_sequence_migration(&connection).is_err());
+    drop(connection);
+    fs::remove_dir_all(root).ok();
+  }
+
+  #[test]
+  fn backfill_query_plan_avoids_a_correlated_scan_for_every_run() {
+    let root = std::env::temp_dir().join(format!("task-run-sequence-plan-{}", Uuid::new_v4()));
+    create_workspace("运行序号回填计划", &root).expect("workspace should create");
+    let connection =
+      open_workspace_database(root.join(DATABASE_FILE_NAME)).expect("database should open");
+    let mut statement = connection
+      .prepare(&format!("EXPLAIN QUERY PLAN {BACKFILL_SQL}"))
+      .expect("backfill query plan should compile");
+    let details = statement
+      .query_map([], |row| row.get::<_, String>(3))
+      .unwrap()
+      .collect::<rusqlite::Result<Vec<_>>>()
+      .unwrap();
+
+    assert!(
+      details
+        .iter()
+        .all(|detail| !detail.to_ascii_lowercase().contains("correlated")),
+      "run-sequence backfill must not execute a correlated history scan for every row: {details:?}"
+    );
+    drop(statement);
     drop(connection);
     fs::remove_dir_all(root).ok();
   }
