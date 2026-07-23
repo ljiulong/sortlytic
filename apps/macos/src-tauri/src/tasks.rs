@@ -387,37 +387,88 @@ pub fn list_task_logs(
   collect_rows(rows)
 }
 
+const LIST_LATEST_TASK_RUNS_SQL: &str = "
+  WITH ranked_plans AS (
+    SELECT
+      plan.id,
+      plan.task_id,
+      ROW_NUMBER() OVER (
+        PARTITION BY plan.task_id
+        ORDER BY plan.created_at DESC, plan.id DESC
+      ) AS plan_rank
+    FROM collection_plan AS plan
+  ),
+  current_plans AS (
+    SELECT id, task_id
+    FROM ranked_plans
+    WHERE plan_rank = 1
+  ),
+  ranked_runs AS (
+    SELECT
+      run.id,
+      run.task_id,
+      run.status,
+      run.started_at,
+      run.ended_at,
+      run.current_stage,
+      run.error_code,
+      run.error_message,
+      run.retryable,
+      run.cost_actual_json,
+      run.plan_id,
+      run.attempt_number,
+      run.claimed_at,
+      run.run_sequence,
+      ROW_NUMBER() OVER (
+        PARTITION BY run.task_id
+        ORDER BY run.run_sequence DESC
+      ) AS run_rank
+    FROM task_run AS run
+    JOIN current_plans AS plan
+      ON plan.task_id = run.task_id AND plan.id = run.plan_id
+  ),
+  ranked_logs AS (
+    SELECT
+      log.task_run_id,
+      log.level,
+      log.safe_details_json,
+      ROW_NUMBER() OVER (
+        PARTITION BY log.task_run_id, log.level
+        ORDER BY log.created_at DESC, log.id DESC
+      ) AS log_rank
+    FROM task_log AS log
+    WHERE log.level IN ('error', 'warning')
+  )
+  SELECT
+    run.id,
+    run.task_id,
+    run.status,
+    run.started_at,
+    run.ended_at,
+    run.current_stage,
+    run.error_code,
+    run.error_message,
+    run.retryable,
+    run.cost_actual_json,
+    run.plan_id,
+    run.attempt_number,
+    run.claimed_at,
+    COALESCE(log.safe_details_json, '{}')
+  FROM ranked_runs AS run
+  LEFT JOIN ranked_logs AS log
+    ON log.task_run_id = run.id
+   AND log.log_rank = 1
+   AND (
+     (run.status = 'failed' AND log.level = 'error')
+     OR (run.status = 'partial_success' AND log.level = 'warning')
+   )
+  WHERE run.run_rank = 1
+  ORDER BY run.run_sequence DESC";
+
 pub fn list_latest_task_runs(root_path: impl AsRef<Path>) -> AppResult<Vec<TaskRunView>> {
   let connection = open_workspace_connection(root_path)?;
   let mut statement = connection
-    .prepare(
-      "SELECT run.id, run.task_id, run.status, run.started_at, run.ended_at,
-              run.current_stage, run.error_code, run.error_message, run.retryable,
-              run.cost_actual_json, run.plan_id, run.attempt_number, run.claimed_at,
-              COALESCE((
-                SELECT log.safe_details_json FROM task_log AS log
-                WHERE log.task_run_id = run.id
-                  AND ((run.status = 'failed' AND log.level = 'error')
-                    OR (run.status = 'partial_success' AND log.level = 'warning'))
-                ORDER BY log.created_at DESC, log.id DESC LIMIT 1
-              ), '{}')
-       FROM task_run run
-       WHERE run.plan_id = (
-         SELECT plan.id
-         FROM collection_plan AS plan
-         WHERE plan.task_id = run.task_id
-         ORDER BY plan.created_at DESC, plan.id DESC
-         LIMIT 1
-       )
-       AND NOT EXISTS (
-         SELECT 1
-         FROM task_run candidate
-         WHERE candidate.task_id = run.task_id
-           AND candidate.plan_id = run.plan_id
-           AND candidate.run_sequence > run.run_sequence
-       )
-       ORDER BY run.run_sequence DESC",
-    )
+    .prepare(LIST_LATEST_TASK_RUNS_SQL)
     .map_err(database_error)?;
   let rows = statement
     .query_map([], map_task_run)

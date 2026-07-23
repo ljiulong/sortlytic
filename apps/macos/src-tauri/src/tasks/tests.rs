@@ -519,6 +519,31 @@ fn latest_task_runs_follow_monotonic_sequence_when_the_clock_moves_backwards() {
 }
 
 #[test]
+fn latest_task_runs_query_plan_has_no_per_row_correlated_subqueries() {
+  let root_path = unique_temp_workspace("latest-run-query-plan");
+  create_workspace("最近运行查询计划", &root_path).expect("workspace should be created");
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  let mut statement = connection
+    .prepare(&format!("EXPLAIN QUERY PLAN {LIST_LATEST_TASK_RUNS_SQL}"))
+    .expect("latest-run query plan should compile");
+  let details = statement
+    .query_map([], |row| row.get::<_, String>(3))
+    .unwrap()
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .unwrap();
+
+  assert!(
+    details
+      .iter()
+      .all(|detail| !detail.to_ascii_lowercase().contains("correlated")),
+    "periodic latest-run reads must not repeat correlated scans per history row: {details:?}"
+  );
+  drop(statement);
+  drop(connection);
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn enqueue_and_retry_persist_monotonic_run_sequences() {
   let root_path = unique_temp_workspace("persist-monotonic-run-sequence");
   create_workspace("运行序号写入测试", &root_path).expect("workspace should be created");
