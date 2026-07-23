@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -40,6 +40,9 @@ pub(super) fn materialize_targets(
   fence: Option<&WorkerFence>,
 ) -> AppResult<Vec<PipelineTarget>> {
   with_fenced_write(connection, fence, |connection| {
+    if fence.is_some() {
+      validate_running_scope(connection, &input.task_run_id)?;
+    }
     let target_field = target_field(&input.data_type)?;
     let target_values = if input.depends_on_step_key.is_some() {
       dependency_values(connection, input, target_field)?
@@ -84,6 +87,25 @@ pub(super) fn materialize_targets(
     validate_materialized_targets(&targets)?;
     Ok(targets)
   })
+}
+
+fn validate_running_scope(connection: &Connection, task_run_id: &str) -> AppResult<()> {
+  let running = connection
+    .query_row(
+      "SELECT task.status = 'running' AND run.status = 'running'
+       FROM task_run AS run
+       JOIN collection_task AS task ON task.id = run.task_id
+       WHERE run.id = ?1 AND run.task_id = task.id",
+      params![task_run_id],
+      |row| row.get::<_, bool>(0),
+    )
+    .optional()
+    .map_err(database_error)?
+    .ok_or_else(|| validation_error("任务运行记录不存在或不属于任何任务"))?;
+  if !running {
+    return Err(validation_error("只允许为运行中的任务物化采集目标"));
+  }
+  Ok(())
 }
 
 pub(super) fn load_targets(
@@ -393,6 +415,65 @@ mod tests {
           |row| row.get::<_, i64>(0),
         )
         .unwrap(),
+      0
+    );
+  }
+
+  #[test]
+  fn cancelled_run_rejects_target_materialization_with_a_current_fence() {
+    let connection = target_connection();
+    connection
+      .execute_batch(
+        "CREATE TABLE collection_task (
+           id TEXT PRIMARY KEY,
+           status TEXT NOT NULL
+         );
+         CREATE TABLE task_run (
+           id TEXT PRIMARY KEY,
+           task_id TEXT NOT NULL,
+           status TEXT NOT NULL
+         );
+         INSERT INTO collection_task (id, status)
+           VALUES ('task-cancelled-target', 'cancelled');
+         INSERT INTO task_run (id, task_id, status)
+           VALUES ('run-cancelled-target', 'task-cancelled-target', 'cancelled');
+         INSERT INTO task_worker_lease (
+           id, owner_id, lease_expires_at, created_at, updated_at, generation
+         ) VALUES (
+           'task_worker', 'current-owner', 9223372036854775807, 'now', 'now', 1
+         );",
+      )
+      .expect("cancelled target scope should install");
+    let current =
+      WorkerFence::new("current-owner".to_string(), 1).expect("current fence should be valid");
+
+    materialize_targets(
+      &connection,
+      &TargetStepInput {
+        task_run_id: "run-cancelled-target".to_string(),
+        step_key: "item_detail".to_string(),
+        platform: "tiktok".to_string(),
+        data_type: "item_detail".to_string(),
+        params: json!({ "item_id": "cancelled-video" }),
+        target_limit: 1,
+        output_selected: true,
+        depends_on_step_key: None,
+        input_binding: None,
+        dependency_data_type: None,
+      },
+      Some(&current),
+    )
+    .expect_err("a cancelled run must not materialize pipeline targets");
+
+    assert_eq!(
+      connection
+        .query_row(
+          "SELECT COUNT(*) FROM collection_pipeline_target
+           WHERE task_run_id = 'run-cancelled-target'",
+          [],
+          |row| row.get::<_, i64>(0),
+        )
+        .expect("target count should query"),
       0
     );
   }
