@@ -149,4 +149,19 @@ describe('NaturalParseState', () => {
 
     expect(state).toEqual(createIdleNaturalParseState())
   })
+
+  it('应用启动时不把尚未认领的生成占位恢复为运行或错误', () => {
+    const state = resolveNaturalParseState(createIdleNaturalParseState(), [{
+      ...attempt,
+      parse_status: 'needs_review',
+      parse_phase: 'preparing',
+      provider_id: null,
+      provider_name: null,
+      model_id: null,
+      prompt_version_id: null,
+      error_safe_details_json: { source: 'pending_generation' },
+    }])
+
+    expect(state).toEqual(createIdleNaturalParseState())
+  })
 })

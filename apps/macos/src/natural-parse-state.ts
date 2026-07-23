@@ -69,7 +69,10 @@ export function resolveNaturalParseState(
   attempts: NaturalParseAttemptView[],
 ): NaturalParseState {
   const latestAttempts = attempts
-    .filter((attempt) => !isNaturalParseProvenanceOnly(attempt))
+    .filter(
+      (attempt) => !isNaturalParseProvenanceOnly(attempt)
+        && !isNaturalParsePlaceholder(attempt),
+    )
     .sort(
     (left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at),
     )
@@ -91,6 +94,10 @@ export function resolveNaturalParseState(
 export function isNaturalParseProvenanceOnly(attempt: NaturalParseAttemptView) {
   const source = attempt.error_safe_details_json.source
   return source === 'user_edited' || source === 'user_edited_copy'
+}
+
+export function isNaturalParsePlaceholder(attempt: NaturalParseAttemptView) {
+  return attempt.error_safe_details_json.source === 'pending_generation'
 }
 
 function phaseFromAttempt(attempt: NaturalParseAttemptView): NaturalParsePhase {
