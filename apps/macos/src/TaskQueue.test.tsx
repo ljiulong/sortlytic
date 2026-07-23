@@ -272,6 +272,35 @@ describe('TaskQueue', () => {
     expect(markup).not.toContain('原始自然语言需求已由用户编辑')
   })
 
+  it('尚未认领的生成占位使用任务真实状态且不显示解析问题', () => {
+    const markup = renderQueue([{
+      ...waitingTask,
+      id: 'task-pending-generation',
+      name: '等待生成的采集任务',
+      source: '自然语言',
+      sourceType: 'natural_language',
+      status: '等待确认',
+      naturalParseAttempt: {
+        id: 'attempt-pending-generation',
+        task_id: 'task-pending-generation',
+        intent_text: '查找英国 TikTok 宠物用品账号',
+        parse_status: 'needs_review',
+        parse_phase: 'preparing',
+        error_code: null,
+        error_message: null,
+        retryable: false,
+        error_safe_details_json: { source: 'pending_generation' },
+        created_at: '2026-07-20T08:00:00Z',
+        updated_at: '2026-07-20T08:00:00Z',
+      },
+    }])
+
+    expect(markup).toContain('<h3 id="task-title-task-pending-generation">等待生成的采集任务</h3>')
+    expect(markup).toContain('>等待确认</span>')
+    expect(markup).not.toContain('>待修正</span>')
+    expect(markup).not.toContain('解析完成，需要补充信息')
+  })
+
   it('查看解析记录打开当前持久任务编辑器', () => {
     const onEditTask = vi.fn()
     const mounted = mountQueue(
