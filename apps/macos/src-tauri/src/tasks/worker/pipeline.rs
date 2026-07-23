@@ -119,12 +119,15 @@ where
     }
   }
 
-  let now = Utc::now().to_rfc3339();
-  if request_limited {
-    mark_step_stopped(&connection, fence, &step.id, "request_limit", &now)
-  } else {
-    mark_step_success(&connection, fence, &step.id, &now)
-  }
+  with_task_dispatch_gate(root_path, &step.task_id, fence.is_some(), || {
+    ensure_run_accepts_dispatch(&connection, &step.task_id, &run_id, &step.id)?;
+    let now = Utc::now().to_rfc3339();
+    if request_limited {
+      mark_step_stopped(&connection, fence, &step.id, "request_limit", &now)
+    } else {
+      mark_step_success(&connection, fence, &step.id, &now)
+    }
+  })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -150,152 +153,150 @@ where
     target.cursor.as_ref(),
   )?;
   guard_request(&request)?;
-  let (checkpoint_id, request, page_result) =
-    with_task_dispatch_gate(root_path, &step.task_id, fence.is_some(), || {
-      ensure_run_accepts_dispatch(connection, &step.task_id, run_id, &step.id)?;
-      let current_cursor = target.cursor.clone();
-      update_target(connection, fence, target, "running", current_cursor)?;
-      let (checkpoint_id, idempotency_key) = insert_prepared_checkpoint(
-        connection,
-        fence,
-        &step.id,
-        page_index,
-        target.cursor.as_ref(),
-      )?;
-      let request = request.with_idempotency_key(idempotency_key)?;
-      let requested_at = Utc::now().to_rfc3339();
-      mark_checkpoint_requesting(connection, fence, &checkpoint_id, &requested_at)?;
-      let page_result = fetch_page(&request);
-      Ok((checkpoint_id, request, page_result))
-    })?;
-  super::ensure_run_accepts_response(root_path, run_id)?;
-  let page = match page_result {
-    Ok(page) => page,
-    Err(error) if is_isolated_target_failure(&error) => {
-      persist_target_failure(
-        connection,
-        fence,
-        target,
-        TargetFailureContext {
-          step,
-          run_id,
-          checkpoint_id: &checkpoint_id,
-          request: &request,
-          error: &error,
-        },
-      )?;
-      return Ok(());
-    }
-    Err(error) if response_status_is_uncertain(&error) => {
-      mark_checkpoint_uncertain(connection, fence, &checkpoint_id, &error.message)?;
+  with_task_dispatch_gate(root_path, &step.task_id, fence.is_some(), || {
+    ensure_run_accepts_dispatch(connection, &step.task_id, run_id, &step.id)?;
+    let current_cursor = target.cursor.clone();
+    update_target(connection, fence, target, "running", current_cursor)?;
+    let (checkpoint_id, idempotency_key) = insert_prepared_checkpoint(
+      connection,
+      fence,
+      &step.id,
+      page_index,
+      target.cursor.as_ref(),
+    )?;
+    let request = request.with_idempotency_key(idempotency_key)?;
+    let requested_at = Utc::now().to_rfc3339();
+    mark_checkpoint_requesting(connection, fence, &checkpoint_id, &requested_at)?;
+    let page_result = fetch_page(&request);
+    super::ensure_run_accepts_response(root_path, run_id)?;
+    let page = match page_result {
+      Ok(page) => page,
+      Err(error) if is_isolated_target_failure(&error) => {
+        persist_target_failure(
+          connection,
+          fence,
+          target,
+          TargetFailureContext {
+            step,
+            run_id,
+            checkpoint_id: &checkpoint_id,
+            request: &request,
+            error: &error,
+          },
+        )?;
+        return Ok(());
+      }
+      Err(error) if response_status_is_uncertain(&error) => {
+        mark_checkpoint_uncertain(connection, fence, &checkpoint_id, &error.message)?;
+        return Err(worker_error(
+          "UNCERTAIN_REQUEST_AFTER_FAILURE",
+          "TikHub 目标请求已发出但响应状态不确定，已禁止自动重试",
+          false,
+        ));
+      }
+      Err(error) => {
+        mark_checkpoint_failed_with_retryable(
+          connection,
+          fence,
+          &checkpoint_id,
+          &serialized_error_code(&error.code),
+          &error.message,
+          error.retryable,
+        )?;
+        return Err(error);
+      }
+    };
+    let response_received_at = Utc::now().to_rfc3339();
+    let persisted = match persist_worker_page(
+      root_path,
+      PersistCollectionPageInput {
+        task_id: step.task_id.clone(),
+        task_run_id: run_id.to_string(),
+        platform: step.platform.clone(),
+        data_type: step.data_type.clone(),
+        records: page.records.clone(),
+        collected_at: Some(response_received_at.clone()),
+      },
+      fence,
+    ) {
+      Ok(persisted) => persisted,
+      Err(error) => {
+        mark_checkpoint_uncertain(connection, fence, &checkpoint_id, &error.message)?;
+        return Err(worker_error(
+          "RECORD_PERSISTENCE_FAILED",
+          "TikHub 目标响应已返回但记录落库失败，已禁止自动重试",
+          false,
+        ));
+      }
+    };
+    let persisted_count = persisted
+      .inserted_count
+      .checked_add(persisted.existing_count)
+      .ok_or_else(|| task_error("已持久化记录数溢出"))?;
+    if persisted_count != page.records.len() {
       return Err(worker_error(
-        "UNCERTAIN_REQUEST_AFTER_FAILURE",
-        "TikHub 目标请求已发出但响应状态不确定，已禁止自动重试",
+        "RECORD_PERSISTENCE_INCOMPLETE",
+        "TikHub 目标响应记录未能全部写入本地存储",
         false,
       ));
     }
-    Err(error) => {
-      mark_checkpoint_failed_with_retryable(
-        connection,
-        fence,
-        &checkpoint_id,
-        &serialized_error_code(&error.code),
-        &error.message,
-        error.retryable,
-      )?;
-      return Err(error);
+    let account_result = persist_step_accounts(
+      connection,
+      step,
+      run_id,
+      fence,
+      &page.records,
+      Some(&response_received_at),
+    )?;
+    if step.schema_version >= 4
+      && step.depends_on_step_key.is_none()
+      && !page.records.is_empty()
+      && account_result.observed_count == 0
+      && account_result.skipped_count == page.records.len()
+    {
+      const ERROR_CODE: &str = "ACCOUNT_IDENTITY_CONTRACT_FAILED";
+      const ERROR_MESSAGE: &str =
+        "TikHub 主来源返回了记录，但所有记录都缺少平台用户 ID 和可用账号标识";
+      mark_checkpoint_failed(connection, fence, &checkpoint_id, ERROR_CODE, ERROR_MESSAGE)?;
+      target.request_count += 1;
+      let cursor = target.cursor.clone();
+      update_target(connection, fence, target, "failed", cursor)?;
+      return Err(worker_error(ERROR_CODE, ERROR_MESSAGE, false));
     }
-  };
-  let response_received_at = Utc::now().to_rfc3339();
-  let persisted = match persist_worker_page(
-    root_path,
-    PersistCollectionPageInput {
-      task_id: step.task_id.clone(),
-      task_run_id: run_id.to_string(),
-      platform: step.platform.clone(),
-      data_type: step.data_type.clone(),
-      records: page.records.clone(),
-      collected_at: Some(response_received_at.clone()),
-    },
-    fence,
-  ) {
-    Ok(persisted) => persisted,
-    Err(error) => {
-      mark_checkpoint_uncertain(connection, fence, &checkpoint_id, &error.message)?;
-      return Err(worker_error(
-        "RECORD_PERSISTENCE_FAILED",
-        "TikHub 目标响应已返回但记录落库失败，已禁止自动重试",
-        false,
-      ));
-    }
-  };
-  let persisted_count = persisted
-    .inserted_count
-    .checked_add(persisted.existing_count)
-    .ok_or_else(|| task_error("已持久化记录数溢出"))?;
-  if persisted_count != page.records.len() {
-    return Err(worker_error(
-      "RECORD_PERSISTENCE_INCOMPLETE",
-      "TikHub 目标响应记录未能全部写入本地存储",
-      false,
-    ));
-  }
-  let account_result = persist_step_accounts(
-    connection,
-    step,
-    run_id,
-    fence,
-    &page.records,
-    Some(&response_received_at),
-  )?;
-  if step.schema_version >= 4
-    && step.depends_on_step_key.is_none()
-    && !page.records.is_empty()
-    && account_result.observed_count == 0
-    && account_result.skipped_count == page.records.len()
-  {
-    const ERROR_CODE: &str = "ACCOUNT_IDENTITY_CONTRACT_FAILED";
-    const ERROR_MESSAGE: &str =
-      "TikHub 主来源返回了记录，但所有记录都缺少平台用户 ID 和可用账号标识";
-    mark_checkpoint_failed(connection, fence, &checkpoint_id, ERROR_CODE, ERROR_MESSAGE)?;
+
+    let raw_response = page.raw_response.to_string();
+    let response_hash = format!("{:x}", Sha256::digest(raw_response.as_bytes()));
+    let response_size = i64::try_from(raw_response.len())
+      .map_err(|_| task_error("TikHub 响应体大小超出数据库范围"))?;
+    let next_cursor_json = page.next_cursor.as_ref().map(Value::to_string);
+    let input_cursor_json = target.cursor.as_ref().map(Value::to_string);
+    mark_checkpoint_response_received(
+      connection,
+      fence,
+      &checkpoint_id,
+      &raw_response,
+      &response_hash,
+      response_size,
+      &request,
+      input_cursor_json.as_deref(),
+      &page,
+      persisted_count,
+      &checkpoint_quote_json(connection, run_id, &request)?,
+      &response_received_at,
+      next_cursor_json.as_deref(),
+    )?;
+    mark_checkpoint_completed(connection, fence, &checkpoint_id, &Utc::now().to_rfc3339())?;
+
     target.request_count += 1;
-    let cursor = target.cursor.clone();
-    update_target(connection, fence, target, "failed", cursor)?;
-    return Err(worker_error(ERROR_CODE, ERROR_MESSAGE, false));
-  }
-
-  let raw_response = page.raw_response.to_string();
-  let response_hash = format!("{:x}", Sha256::digest(raw_response.as_bytes()));
-  let response_size =
-    i64::try_from(raw_response.len()).map_err(|_| task_error("TikHub 响应体大小超出数据库范围"))?;
-  let next_cursor_json = page.next_cursor.as_ref().map(Value::to_string);
-  let input_cursor_json = target.cursor.as_ref().map(Value::to_string);
-  mark_checkpoint_response_received(
-    connection,
-    fence,
-    &checkpoint_id,
-    &raw_response,
-    &response_hash,
-    response_size,
-    &request,
-    input_cursor_json.as_deref(),
-    &page,
-    persisted_count,
-    &checkpoint_quote_json(connection, run_id, &request)?,
-    &response_received_at,
-    next_cursor_json.as_deref(),
-  )?;
-  mark_checkpoint_completed(connection, fence, &checkpoint_id, &Utc::now().to_rfc3339())?;
-
-  target.request_count += 1;
-  if page.has_more && target.request_count < step.request_limit {
-    update_target(connection, fence, target, "pending", page.next_cursor)?;
-  } else if page.has_more {
-    update_target(connection, fence, target, "exhausted", page.next_cursor)?;
-  } else {
-    update_target(connection, fence, target, "success", None)?;
-  }
-  Ok(())
+    if page.has_more && target.request_count < step.request_limit {
+      update_target(connection, fence, target, "pending", page.next_cursor)?;
+    } else if page.has_more {
+      update_target(connection, fence, target, "exhausted", page.next_cursor)?;
+    } else {
+      update_target(connection, fence, target, "success", None)?;
+    }
+    Ok(())
+  })
 }
 
 fn is_isolated_target_failure(error: &AppError) -> bool {

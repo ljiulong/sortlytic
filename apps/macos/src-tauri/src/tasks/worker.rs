@@ -355,55 +355,62 @@ where
       ));
     }
     if let Some(checkpoint) = response_checkpoint.take() {
-      let page = parse_response_checkpoint(step, &checkpoint)?;
-      if step.schema_version == 2 {
-        ensure_record_limit(&connection, &run_id, step.record_limit, page.records.len())?;
-      }
-      let persisted = persist_worker_page(
-        root_path,
-        PersistCollectionPageInput {
-          task_id: task_id.clone(),
-          task_run_id: run_id.clone(),
-          platform: step.platform.clone(),
-          data_type: step.data_type.clone(),
-          records: page.records.clone(),
-          collected_at: checkpoint.response_received_at.clone(),
-        },
-        fence,
-      )?;
-      let persisted_count = persisted
-        .inserted_count
-        .checked_add(persisted.existing_count)
-        .ok_or_else(|| task_error("已持久化记录数溢出"))?;
-      if persisted_count != page.records.len() {
-        return Err(worker_error(
-          "RECORD_PERSISTENCE_INCOMPLETE",
-          "TikHub 响应未能全部写入本地存储",
-          false,
-        ));
-      }
-      persist_step_accounts(
-        &connection,
-        step,
-        &run_id,
-        fence,
-        &page.records,
-        checkpoint.response_received_at.as_deref(),
-      )?;
-      let committed_at = Utc::now().to_rfc3339();
-      mark_response_checkpoint_completed(
-        &connection,
-        fence,
-        &checkpoint.id,
-        i64::try_from(persisted_count).map_err(|_| task_error("持久化记录数超出数据库范围"))?,
-        &committed_at,
-      )?;
-      if !page.has_more {
-        mark_step_success(&connection, fence, &step.id, &committed_at)?;
+      let step_completed = with_task_dispatch_gate(root_path, &task_id, fence.is_some(), || {
+        ensure_run_accepts_dispatch(&connection, &task_id, &run_id, &step.id)?;
+        let page = parse_response_checkpoint(step, &checkpoint)?;
+        if step.schema_version == 2 {
+          ensure_record_limit(&connection, &run_id, step.record_limit, page.records.len())?;
+        }
+        let persisted = persist_worker_page(
+          root_path,
+          PersistCollectionPageInput {
+            task_id: task_id.clone(),
+            task_run_id: run_id.clone(),
+            platform: step.platform.clone(),
+            data_type: step.data_type.clone(),
+            records: page.records.clone(),
+            collected_at: checkpoint.response_received_at.clone(),
+          },
+          fence,
+        )?;
+        let persisted_count = persisted
+          .inserted_count
+          .checked_add(persisted.existing_count)
+          .ok_or_else(|| task_error("已持久化记录数溢出"))?;
+        if persisted_count != page.records.len() {
+          return Err(worker_error(
+            "RECORD_PERSISTENCE_INCOMPLETE",
+            "TikHub 响应未能全部写入本地存储",
+            false,
+          ));
+        }
+        persist_step_accounts(
+          &connection,
+          step,
+          &run_id,
+          fence,
+          &page.records,
+          checkpoint.response_received_at.as_deref(),
+        )?;
+        let committed_at = Utc::now().to_rfc3339();
+        mark_response_checkpoint_completed(
+          &connection,
+          fence,
+          &checkpoint.id,
+          i64::try_from(persisted_count).map_err(|_| task_error("持久化记录数超出数据库范围"))?,
+          &committed_at,
+        )?;
+        if !page.has_more {
+          mark_step_success(&connection, fence, &step.id, &committed_at)?;
+          return Ok(true);
+        }
+        cursor = page.next_cursor;
+        page_index += 1;
+        Ok(false)
+      })?;
+      if step_completed {
         return Ok(());
       }
-      cursor = page.next_cursor;
-      page_index += 1;
       continue;
     }
     let request = build_collection_request(
@@ -413,147 +420,149 @@ where
       cursor.as_ref(),
     )?;
     guard_request(&request)?;
-    let (checkpoint_id, request, page_result) =
-      with_task_dispatch_gate(root_path, &task_id, fence.is_some(), || {
-        ensure_run_accepts_dispatch(&connection, &task_id, &run_id, &step.id)?;
-        let (checkpoint_id, idempotency_key) = if let Some(checkpoint) = prepared_checkpoint.take()
+    let step_completed = with_task_dispatch_gate(root_path, &task_id, fence.is_some(), || {
+      ensure_run_accepts_dispatch(&connection, &task_id, &run_id, &step.id)?;
+      let (checkpoint_id, idempotency_key) = if let Some(checkpoint) = prepared_checkpoint.take() {
+        if checkpoint.page_index != page_index || checkpoint.input_cursor != cursor {
+          return Err(worker_error(
+            "CHECKPOINT_CHAIN_INVALID",
+            "恢复检查点的页码或游标与当前执行位置不一致",
+            false,
+          ));
+        }
+        (checkpoint.id, checkpoint.idempotency_key)
+      } else {
+        insert_prepared_checkpoint(&connection, fence, &step.id, page_index, cursor.as_ref())?
+      };
+      let request = request.with_idempotency_key(idempotency_key)?;
+      let requested_at = Utc::now().to_rfc3339();
+      mark_checkpoint_requesting(&connection, fence, &checkpoint_id, &requested_at)?;
+      let page_result = fetch_page(&request);
+      ensure_run_accepts_response(root_path, &run_id)?;
+      let page = match page_result {
+        Ok(page) => page,
+        Err(error) if response_status_is_uncertain(&error) => {
+          mark_checkpoint_uncertain(&connection, fence, &checkpoint_id, &error.message)?;
+          return Err(worker_error(
+            "UNCERTAIN_REQUEST_AFTER_FAILURE",
+            "TikHub 请求已发出但响应状态不确定，已禁止自动重试",
+            false,
+          ));
+        }
+        Err(error) => {
+          mark_checkpoint_failed_with_retryable(
+            &connection,
+            fence,
+            &checkpoint_id,
+            &serialized_error_code(&error.code),
+            &error.message,
+            error.retryable,
+          )?;
+          return Err(error);
+        }
+      };
+      let response_received_at = Utc::now().to_rfc3339();
+      if let Err(error) = (step.schema_version == 2)
+        .then(|| ensure_record_limit(&connection, &run_id, step.record_limit, page.records.len()))
+        .transpose()
+      {
+        if error.safe_details.get("worker_code").map(String::as_str) == Some("RECORD_LIMIT_REACHED")
         {
-          if checkpoint.page_index != page_index || checkpoint.input_cursor != cursor {
-            return Err(worker_error(
-              "CHECKPOINT_CHAIN_INVALID",
-              "恢复检查点的页码或游标与当前执行位置不一致",
-              false,
-            ));
-          }
-          (checkpoint.id, checkpoint.idempotency_key)
-        } else {
-          insert_prepared_checkpoint(&connection, fence, &step.id, page_index, cursor.as_ref())?
-        };
-        let request = request.with_idempotency_key(idempotency_key)?;
-        let requested_at = Utc::now().to_rfc3339();
-        mark_checkpoint_requesting(&connection, fence, &checkpoint_id, &requested_at)?;
-        let page_result = fetch_page(&request);
-        Ok((checkpoint_id, request, page_result))
-      })?;
-    ensure_run_accepts_response(root_path, &run_id)?;
-    let page = match page_result {
-      Ok(page) => page,
-      Err(error) if response_status_is_uncertain(&error) => {
-        mark_checkpoint_uncertain(&connection, fence, &checkpoint_id, &error.message)?;
-        return Err(worker_error(
-          "UNCERTAIN_REQUEST_AFTER_FAILURE",
-          "TikHub 请求已发出但响应状态不确定，已禁止自动重试",
-          false,
-        ));
-      }
-      Err(error) => {
-        mark_checkpoint_failed_with_retryable(
-          &connection,
-          fence,
-          &checkpoint_id,
-          &serialized_error_code(&error.code),
-          &error.message,
-          error.retryable,
-        )?;
+          mark_checkpoint_failed(
+            &connection,
+            fence,
+            &checkpoint_id,
+            "RECORD_LIMIT_REACHED",
+            "响应记录数将超过已确认的记录上限",
+          )?;
+        }
         return Err(error);
       }
-    };
-    let response_received_at = Utc::now().to_rfc3339();
-    if let Err(error) = (step.schema_version == 2)
-      .then(|| ensure_record_limit(&connection, &run_id, step.record_limit, page.records.len()))
-      .transpose()
-    {
-      if error.safe_details.get("worker_code").map(String::as_str) == Some("RECORD_LIMIT_REACHED") {
-        mark_checkpoint_failed(
-          &connection,
-          fence,
-          &checkpoint_id,
-          "RECORD_LIMIT_REACHED",
-          "响应记录数将超过已确认的记录上限",
-        )?;
-      }
-      return Err(error);
-    }
-    let persisted = match persist_worker_page(
-      root_path,
-      PersistCollectionPageInput {
-        task_id: task_id.clone(),
-        task_run_id: run_id.clone(),
-        platform: step.platform.clone(),
-        data_type: step.data_type.clone(),
-        records: page.records.clone(),
-        collected_at: Some(response_received_at.clone()),
-      },
-      fence,
-    ) {
-      Ok(persisted) => persisted,
-      Err(error) => {
-        mark_checkpoint_uncertain(&connection, fence, &checkpoint_id, &error.message)?;
+      let persisted = match persist_worker_page(
+        root_path,
+        PersistCollectionPageInput {
+          task_id: task_id.clone(),
+          task_run_id: run_id.clone(),
+          platform: step.platform.clone(),
+          data_type: step.data_type.clone(),
+          records: page.records.clone(),
+          collected_at: Some(response_received_at.clone()),
+        },
+        fence,
+      ) {
+        Ok(persisted) => persisted,
+        Err(error) => {
+          mark_checkpoint_uncertain(&connection, fence, &checkpoint_id, &error.message)?;
+          return Err(worker_error(
+            "RECORD_PERSISTENCE_FAILED",
+            "TikHub 响应已返回但记录落库失败，已禁止自动重试",
+            false,
+          ));
+        }
+      };
+      let persisted_count = persisted
+        .inserted_count
+        .checked_add(persisted.existing_count)
+        .ok_or_else(|| task_error("已持久化记录数溢出"))?;
+      if persisted_count != page.records.len() {
         return Err(worker_error(
-          "RECORD_PERSISTENCE_FAILED",
-          "TikHub 响应已返回但记录落库失败，已禁止自动重试",
+          "RECORD_PERSISTENCE_INCOMPLETE",
+          "TikHub 响应记录未全部写入本地存储",
           false,
         ));
       }
-    };
-    let persisted_count = persisted
-      .inserted_count
-      .checked_add(persisted.existing_count)
-      .ok_or_else(|| task_error("已持久化记录数溢出"))?;
-    if persisted_count != page.records.len() {
-      return Err(worker_error(
-        "RECORD_PERSISTENCE_INCOMPLETE",
-        "TikHub 响应记录未全部写入本地存储",
-        false,
-      ));
-    }
-    if let Err(error) = persist_step_accounts(
-      &connection,
-      step,
-      &run_id,
-      fence,
-      &page.records,
-      Some(&response_received_at),
-    ) {
-      mark_checkpoint_uncertain(&connection, fence, &checkpoint_id, &error.message)?;
-      return Err(worker_error(
-        "ACCOUNT_PERSISTENCE_FAILED",
-        "TikHub 响应已返回但账号合并落库失败，已禁止自动重试",
-        false,
-      ));
-    }
+      if let Err(error) = persist_step_accounts(
+        &connection,
+        step,
+        &run_id,
+        fence,
+        &page.records,
+        Some(&response_received_at),
+      ) {
+        mark_checkpoint_uncertain(&connection, fence, &checkpoint_id, &error.message)?;
+        return Err(worker_error(
+          "ACCOUNT_PERSISTENCE_FAILED",
+          "TikHub 响应已返回但账号合并落库失败，已禁止自动重试",
+          false,
+        ));
+      }
 
-    let raw_response = page.raw_response.to_string();
-    let response_hash = format!("{:x}", Sha256::digest(raw_response.as_bytes()));
-    let response_size = i64::try_from(raw_response.len())
-      .map_err(|_| task_error("TikHub 响应体大小超出数据库范围"))?;
-    let next_cursor_json = page.next_cursor.as_ref().map(Value::to_string);
-    let input_cursor_json = cursor.as_ref().map(Value::to_string);
-    let cost_actual_json = pricing::checkpoint_quote_json(&connection, &run_id, &request)?;
-    mark_checkpoint_response_received(
-      &connection,
-      fence,
-      &checkpoint_id,
-      &raw_response,
-      &response_hash,
-      response_size,
-      &request,
-      input_cursor_json.as_deref(),
-      &page,
-      persisted_count,
-      &cost_actual_json,
-      &response_received_at,
-      next_cursor_json.as_deref(),
-    )?;
-    let committed_at = Utc::now().to_rfc3339();
-    mark_checkpoint_completed(&connection, fence, &checkpoint_id, &committed_at)?;
+      let raw_response = page.raw_response.to_string();
+      let response_hash = format!("{:x}", Sha256::digest(raw_response.as_bytes()));
+      let response_size = i64::try_from(raw_response.len())
+        .map_err(|_| task_error("TikHub 响应体大小超出数据库范围"))?;
+      let next_cursor_json = page.next_cursor.as_ref().map(Value::to_string);
+      let input_cursor_json = cursor.as_ref().map(Value::to_string);
+      let cost_actual_json = pricing::checkpoint_quote_json(&connection, &run_id, &request)?;
+      mark_checkpoint_response_received(
+        &connection,
+        fence,
+        &checkpoint_id,
+        &raw_response,
+        &response_hash,
+        response_size,
+        &request,
+        input_cursor_json.as_deref(),
+        &page,
+        persisted_count,
+        &cost_actual_json,
+        &response_received_at,
+        next_cursor_json.as_deref(),
+      )?;
+      let committed_at = Utc::now().to_rfc3339();
+      mark_checkpoint_completed(&connection, fence, &checkpoint_id, &committed_at)?;
 
-    if !page.has_more {
-      mark_step_success(&connection, fence, &step.id, &committed_at)?;
+      if !page.has_more {
+        mark_step_success(&connection, fence, &step.id, &committed_at)?;
+        return Ok(true);
+      }
+      cursor = page.next_cursor;
+      page_index += 1;
+      Ok(false)
+    })?;
+    if step_completed {
       return Ok(());
     }
-    cursor = page.next_cursor;
-    page_index += 1;
   }
 }
 
@@ -562,10 +571,13 @@ pub(super) fn persist_worker_page(
   input: PersistCollectionPageInput,
   fence: Option<&WorkerFence>,
 ) -> AppResult<PersistCollectionPageResult> {
-  match fence {
+  let persisted = match fence {
     Some(fence) => persist_collection_page_with_fence(root_path, input, fence),
     None => persist_collection_page(root_path, input),
-  }
+  };
+  #[cfg(test)]
+  takeover_tests::pause_after_worker_page_persistence(root_path, &persisted);
+  persisted
 }
 
 pub(super) fn with_task_dispatch_gate<T>(
@@ -582,36 +594,15 @@ pub(super) fn with_task_dispatch_gate<T>(
   operation()
 }
 
-#[cfg(test)]
-type DispatchGateContentionObserver = (std::path::PathBuf, String, std::sync::mpsc::Sender<bool>);
-
-#[cfg(test)]
-fn dispatch_gate_contention_observer(
-) -> &'static std::sync::Mutex<Option<DispatchGateContentionObserver>> {
-  static OBSERVER: std::sync::OnceLock<std::sync::Mutex<Option<DispatchGateContentionObserver>>> =
-    std::sync::OnceLock::new();
-  OBSERVER.get_or_init(|| std::sync::Mutex::new(None))
-}
-
-#[cfg(test)]
-pub(super) fn observe_next_task_dispatch_gate_contention(
-  root_path: &Path,
-  task_id: &str,
-  result: std::sync::mpsc::Sender<bool>,
-) {
-  let mut observer = dispatch_gate_contention_observer()
-    .lock()
-    .unwrap_or_else(|poisoned| poisoned.into_inner());
-  *observer = Some((root_path.to_path_buf(), task_id.to_string(), result));
-}
-
 fn acquire_task_dispatch_gate(
   file: &std::fs::File,
   _root_path: &Path,
   _task_id: &str,
 ) -> AppResult<()> {
   #[cfg(test)]
-  if let Some(observer) = take_dispatch_gate_contention_observer(_root_path, _task_id) {
+  if let Some(observer) =
+    takeover_tests::take_dispatch_gate_contention_observer(_root_path, _task_id)
+  {
     match FileExt::try_lock(file) {
       Ok(()) => {
         observer.send(false).ok();
@@ -627,24 +618,6 @@ fn acquire_task_dispatch_gate(
     }
   }
   FileExt::lock(file).map_err(|error| dispatch_lock_acquisition_error(&error))
-}
-
-#[cfg(test)]
-fn take_dispatch_gate_contention_observer(
-  root_path: &Path,
-  task_id: &str,
-) -> Option<std::sync::mpsc::Sender<bool>> {
-  let mut observer = dispatch_gate_contention_observer()
-    .lock()
-    .unwrap_or_else(|poisoned| poisoned.into_inner());
-  if observer
-    .as_ref()
-    .is_some_and(|value| value.0 == root_path && value.1 == task_id)
-  {
-    observer.take().map(|value| value.2)
-  } else {
-    None
-  }
 }
 
 fn dispatch_lock_acquisition_error(error: &std::io::Error) -> AppError {
@@ -793,3 +766,12 @@ mod snapshot_tests;
 #[cfg(test)]
 #[path = "worker_takeover_tests.rs"]
 mod takeover_tests;
+
+#[cfg(test)]
+pub(super) fn observe_next_task_dispatch_gate_contention(
+  root_path: &Path,
+  task_id: &str,
+  result: std::sync::mpsc::Sender<bool>,
+) {
+  takeover_tests::observe_next_task_dispatch_gate_contention(root_path, task_id, result);
+}
