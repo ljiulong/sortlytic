@@ -402,10 +402,18 @@ pub fn list_latest_task_runs(root_path: impl AsRef<Path>) -> AppResult<Vec<TaskR
                 ORDER BY log.created_at DESC, log.id DESC LIMIT 1
               ), '{}')
        FROM task_run run
-       WHERE NOT EXISTS (
+       WHERE run.plan_id = (
+         SELECT plan.id
+         FROM collection_plan AS plan
+         WHERE plan.task_id = run.task_id
+         ORDER BY plan.created_at DESC, plan.id DESC
+         LIMIT 1
+       )
+       AND NOT EXISTS (
          SELECT 1
          FROM task_run candidate
          WHERE candidate.task_id = run.task_id
+           AND candidate.plan_id = run.plan_id
            AND candidate.run_sequence > run.run_sequence
        )
        ORDER BY run.run_sequence DESC",

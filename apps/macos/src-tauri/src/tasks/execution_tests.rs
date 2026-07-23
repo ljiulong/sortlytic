@@ -263,6 +263,12 @@ fn latest_task_runs_prefers_new_plan_even_when_attempt_number_restarts() {
     ),
   )
   .expect("failed task should be revised in place");
+  let before_new_run =
+    list_latest_task_runs(&root_path).expect("latest runs should list after revision");
+  assert!(
+    before_new_run.is_empty(),
+    "an old-plan failure must not be exposed as the current run for a revised plan"
+  );
   confirm_collection_plan(&root_path, &task.id, &revised.collection_plan.id)
     .expect("revised plan should confirm");
   let new_run = enqueue_task(&root_path, &task.id).expect("revised plan should enqueue");

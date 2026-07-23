@@ -493,19 +493,20 @@ fn latest_task_runs_follow_monotonic_sequence_when_the_clock_moves_backwards() {
   let root_path = unique_temp_workspace("latest-run-monotonic-sequence");
   create_workspace("运行单调序号测试", &root_path).expect("workspace should be created");
   let task = create_collection_task(&root_path, create_task_input()).expect("task created");
+  let plan = save_collection_plan(&root_path, plan_input(&task.id)).expect("plan saved");
   let connection = open_workspace_connection(&root_path).expect("database should open");
   connection
     .execute(
-      "INSERT INTO task_run (id, task_id, status, started_at)
-       VALUES ('run-before-clock-change', ?1, 'failed', '2026-07-21T02:00:00Z')",
-      [&task.id],
+      "INSERT INTO task_run (id, task_id, plan_id, attempt_number, status, started_at)
+       VALUES ('run-before-clock-change', ?1, ?2, 1, 'failed', '2026-07-21T02:00:00Z')",
+      params![task.id, plan.id],
     )
     .unwrap();
   connection
     .execute(
-      "INSERT INTO task_run (id, task_id, status, started_at)
-       VALUES ('run-after-clock-change', ?1, 'failed', '2026-07-21T01:00:00Z')",
-      [&task.id],
+      "INSERT INTO task_run (id, task_id, plan_id, attempt_number, status, started_at)
+       VALUES ('run-after-clock-change', ?1, ?2, 2, 'failed', '2026-07-21T01:00:00Z')",
+      params![task.id, plan.id],
     )
     .unwrap();
   drop(connection);
