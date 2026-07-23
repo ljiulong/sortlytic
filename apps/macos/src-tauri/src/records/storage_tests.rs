@@ -283,6 +283,43 @@ fn invalid_or_conflicting_page_rolls_back_without_files() {
 }
 
 #[test]
+fn stale_worker_fence_rejects_records_without_raw_files() {
+  let workspace = TestWorkspace::new("stale-fence", &["keyword_search"]);
+  let run_id = workspace.insert_running_task_run();
+  let connection =
+    open_workspace_database(workspace.root.join(DATABASE_FILE_NAME)).expect("database should open");
+  let now = chrono::Utc::now();
+  connection
+    .execute(
+      "INSERT INTO task_worker_lease (
+         id, owner_id, lease_expires_at, created_at, updated_at, generation
+       ) VALUES ('task_worker', 'replacement-owner', ?1, ?2, ?2, 2)",
+      params![now.timestamp_millis() + 120_000, now.to_rfc3339()],
+    )
+    .expect("replacement lease should be installed");
+  let stale = crate::tasks::WorkerFence::new("stale-owner".to_string(), 1)
+    .expect("stale fence should be valid");
+
+  super::super::persist_collection_page_with_fence(
+    &workspace.root,
+    super::super::PersistCollectionPageInput {
+      task_id: workspace.task_id.clone(),
+      task_run_id: run_id,
+      platform: "tiktok".to_string(),
+      data_type: "keyword_search".to_string(),
+      records: vec![tiktok_video("stale-record", "旧代响应")],
+      collected_at: Some("2026-07-12T08:00:00+00:00".to_string()),
+    },
+    &stale,
+  )
+  .expect_err("a stale generation must not persist records or raw files");
+
+  assert_eq!(workspace.count_rows("raw_record"), 0);
+  assert_eq!(workspace.count_rows("normalized_record"), 0);
+  assert_eq!(json_file_count(&workspace.root.join(RAW_DIRECTORY)), 0);
+}
+
+#[test]
 fn rejects_oversized_record_before_file_or_database_write() {
   let workspace = TestWorkspace::new("oversized", &["keyword_search"]);
   let run_id = workspace.insert_running_task_run();

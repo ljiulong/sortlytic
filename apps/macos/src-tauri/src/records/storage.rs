@@ -11,6 +11,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::domain::AppResult;
+use crate::tasks::WorkerFence;
 use crate::workspace::{open_workspace_database, CURRENT_SCHEMA_VERSION, DATABASE_FILE_NAME};
 
 use super::{
@@ -29,12 +30,33 @@ pub(super) fn persist_prepared_records(
   input: &NormalizedInput,
   prepared: Vec<PreparedRecord>,
 ) -> AppResult<PersistCollectionPageResult> {
+  persist_prepared_records_guarded(root_path, input, prepared, None)
+}
+
+pub(super) fn persist_prepared_records_with_fence(
+  root_path: &Path,
+  input: &NormalizedInput,
+  prepared: Vec<PreparedRecord>,
+  fence: &WorkerFence,
+) -> AppResult<PersistCollectionPageResult> {
+  persist_prepared_records_guarded(root_path, input, prepared, Some(fence))
+}
+
+fn persist_prepared_records_guarded(
+  root_path: &Path,
+  input: &NormalizedInput,
+  prepared: Vec<PreparedRecord>,
+  fence: Option<&WorkerFence>,
+) -> AppResult<PersistCollectionPageResult> {
   let paths = WorkspacePaths::validate(root_path)?;
   let mut connection = open_workspace_database(&paths.database)?;
   validate_registered_workspace_root(&connection, &paths.root)?;
   let transaction = connection
     .transaction_with_behavior(TransactionBehavior::Immediate)
     .map_err(database_error)?;
+  if let Some(fence) = fence {
+    fence.ensure_current(&transaction)?;
+  }
   validate_running_scope(&transaction, input)?;
   let mut created_files = Vec::new();
   let persisted = persist_records(&transaction, &paths, input, prepared, &mut created_files);

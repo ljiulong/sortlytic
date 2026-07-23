@@ -9,6 +9,7 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
+use crate::tasks::WorkerFence;
 use crate::workspace::{open_workspace_database, DATABASE_FILE_NAME};
 
 mod account_fields;
@@ -124,6 +125,16 @@ pub fn persist_collection_page(
   let input = normalize_input(input)?;
   let prepared = prepare_records(&input)?;
   storage::persist_prepared_records(root_path.as_ref(), &input, prepared)
+}
+
+pub(crate) fn persist_collection_page_with_fence(
+  root_path: impl AsRef<Path>,
+  input: PersistCollectionPageInput,
+  fence: &WorkerFence,
+) -> AppResult<PersistCollectionPageResult> {
+  let input = normalize_input(input)?;
+  let prepared = prepare_records(&input)?;
+  storage::persist_prepared_records_with_fence(root_path.as_ref(), &input, prepared, fence)
 }
 
 pub fn list_task_record_counts(root_path: impl AsRef<Path>) -> AppResult<Vec<TaskRecordCountView>> {
