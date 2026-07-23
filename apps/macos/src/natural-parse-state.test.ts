@@ -136,4 +136,17 @@ describe('NaturalParseState', () => {
       },
     })
   })
+
+  it('应用启动时不把用户修订的溯源记录恢复为待补充错误', () => {
+    const state = resolveNaturalParseState(createIdleNaturalParseState(), [{
+      ...attempt,
+      parse_status: 'needs_review',
+      parse_phase: 'needs_review',
+      error_code: 'VALIDATION_ERROR',
+      error_message: '原始自然语言需求已由用户编辑',
+      error_safe_details_json: { source: 'user_edited' },
+    }])
+
+    expect(state).toEqual(createIdleNaturalParseState())
+  })
 })

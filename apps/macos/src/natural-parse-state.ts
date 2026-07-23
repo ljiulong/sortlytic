@@ -68,9 +68,11 @@ export function resolveNaturalParseState(
   localState: NaturalParseState,
   attempts: NaturalParseAttemptView[],
 ): NaturalParseState {
-  const latestAttempts = [...attempts].sort(
+  const latestAttempts = attempts
+    .filter((attempt) => !isNaturalParseProvenanceOnly(attempt))
+    .sort(
     (left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at),
-  )
+    )
   if (localState.phase === 'idle') {
     const latestAttempt = latestAttempts[0]
     if (!latestAttempt || latestAttempt.parse_status === 'valid') return localState
@@ -84,6 +86,11 @@ export function resolveNaturalParseState(
   return !Number.isFinite(localStartedAt) || persistedUpdatedAt >= localStartedAt
     ? naturalParseStateFromAttempt(persisted)
     : localState
+}
+
+export function isNaturalParseProvenanceOnly(attempt: NaturalParseAttemptView) {
+  const source = attempt.error_safe_details_json.source
+  return source === 'user_edited' || source === 'user_edited_copy'
 }
 
 function phaseFromAttempt(attempt: NaturalParseAttemptView): NaturalParsePhase {
