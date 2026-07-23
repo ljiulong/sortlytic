@@ -1,4 +1,5 @@
 import {
+  ChevronDown,
   FilePenLine,
   HeartPulse,
   RefreshCcw,
@@ -78,54 +79,65 @@ export default function TaskProblemPanel({
       aria-atomic="true"
       className="task-problem"
       data-kind={kind}
+      data-tone={needsReview ? 'warning' : 'danger'}
       role={needsReview ? 'status' : 'alert'}
     >
-      <header>
-        <div>
-          <span>{needsReview
-            ? '解析完成，需要补充信息'
-            : kind === 'natural_parse' ? '解析失败' : '运行失败'}</span>
-          <strong>{message}</strong>
-        </div>
-        <code>{displayCode}</code>
-      </header>
-      <dl>
-        <div><dt>{needsReview ? '状态码' : '错误码'}</dt><dd>{displayCode}</dd></div>
-        <div><dt>可重试</dt><dd>{retryable ? '是' : '否'}</dd></div>
-        <div><dt>最近尝试</dt><dd>{formatAttemptTime(attemptedAt)}</dd></div>
-        <div><dt>草稿与记录</dt><dd>{draftPreserved ? '已保留' : '状态未知'}</dd></div>
-      </dl>
-      {safeDetails.retry_after !== undefined && (
-        <p className="task-problem__retry-after">
-          Retry-After：{String(safeDetails.retry_after)}
-        </p>
-      )}
+      <div className="task-problem__message">
+        <span>{needsReview ? '解析完成，需要补充信息' : '问题原因'}</span>
+        <strong>{message}</strong>
+      </div>
       <p className="task-problem__remediation">
-        <strong>修改方式：</strong>{remediation.message}
+        <span>修改方式</span>
+        {remediation.message}
       </p>
       {onAction && (
         <div className="task-problem__actions">
           {actions.map((action) => {
             const Icon = actionIcons[action]
+            const isPrimary = action === remediation.primaryAction
             return (
               <button
-                className={action === remediation.primaryAction ? 'ghost-button' : 'text-button'}
+                className={isPrimary
+                  ? 'ghost-button task-problem__action'
+                  : 'task-problem__action task-problem__action--quiet'}
                 disabled={isBusy}
                 key={action}
                 type="button"
                 onClick={() => onAction(action)}
               >
-                <Icon size={14} aria-hidden="true" />
-                {isBusy && action === 'retry'
-                  ? '正在重新尝试'
-                  : kind === 'natural_parse' && action === 'view_diagnostics'
-                    ? '查看解析记录'
-                    : actionLabels[action]}
+                <Icon size={15} aria-hidden="true" />
+                <span>
+                  {isBusy && action === 'retry'
+                    ? '正在重新尝试'
+                    : kind === 'natural_parse' && action === 'view_diagnostics'
+                      ? '查看解析记录'
+                      : actionLabels[action]}
+                </span>
               </button>
             )
           })}
         </div>
       )}
+      <details className="task-problem__details">
+        <summary>
+          <span>技术详情</span>
+          <ChevronDown size={15} aria-hidden="true" />
+        </summary>
+        <dl>
+          <div>
+            <dt>{needsReview ? '状态码' : '错误码'}</dt>
+            <dd><code>{displayCode}</code></dd>
+          </div>
+          <div><dt>可重试</dt><dd>{retryable ? '是' : '否'}</dd></div>
+          <div><dt>最近尝试</dt><dd>{formatAttemptTime(attemptedAt)}</dd></div>
+          <div><dt>草稿与记录</dt><dd>{draftPreserved ? '已保留' : '状态未知'}</dd></div>
+        </dl>
+        {safeDetails.retry_after !== undefined && (
+          <p className="task-problem__retry-after">
+            Retry-After：{String(safeDetails.retry_after)}
+          </p>
+        )}
+      </details>
     </section>
   )
 }

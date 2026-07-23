@@ -25,6 +25,24 @@ describe('TaskProblemPanel', () => {
     expect(markup).toContain('已保留')
   })
 
+  it('失败摘要不重复状态和错误码，并把技术事实收进默认折叠详情', () => {
+    const markup = renderToStaticMarkup(createElement(TaskProblemPanel, {
+      kind: 'natural_parse',
+      code: 'MODEL_CONFIG_ERROR',
+      message: '尚未设置当前 AI 配置，请先在设置中完成真实连通性测试',
+      retryable: false,
+      attemptedAt: '2026-07-20T08:00:17Z',
+      onAction: () => undefined,
+    }))
+
+    expect(markup.match(/MODEL_CONFIG_ERROR/g)).toHaveLength(1)
+    expect(markup).not.toContain('>解析失败</span>')
+    expect(markup).toContain('<details class="task-problem__details">')
+    expect(markup).toContain('<summary><span>技术详情</span>')
+    expect(markup).toContain('class="ghost-button task-problem__action"')
+    expect(markup).toContain('<span>打开 AI 设置</span>')
+  })
+
   it('白名单运行错误显示可直接修正的编辑指引', () => {
     const markup = renderToStaticMarkup(createElement(TaskProblemPanel, {
       kind: 'run',
