@@ -16,10 +16,12 @@ use crate::tikhub::{
   build_collection_request, send_collection_request, CollectionPage, TikHubCollectionRequest,
 };
 
+#[cfg(test)]
+use super::claim_next_task;
 use super::execution::fail_task_run_with_safe_details;
 use super::{
-  claim_next_task, complete_task_run, database_error, get_task_run, open_workspace_connection,
-  task_error, TaskRunView,
+  claim_next_task_with_fence, complete_task_run, database_error, get_task_run,
+  open_workspace_connection, task_error, TaskRunView, WorkerFence,
 };
 
 mod pipeline;
@@ -53,11 +55,16 @@ pub(super) struct RunStep {
 
 #[cfg(test)]
 pub fn execute_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRunView>> {
-  execute_next_task_with_owner(root_path, || Ok(()))
+  let root_path = root_path.as_ref();
+  let Some(run) = claim_next_task(root_path)? else {
+    return Ok(None);
+  };
+  execute_and_finalize_claimed_run(root_path, run, || Ok(()))
 }
 
 pub(super) fn execute_next_task_with_owner<G>(
   root_path: impl AsRef<Path>,
+  fence: &WorkerFence,
   ensure_owner: G,
 ) -> AppResult<Option<TaskRunView>>
 where
@@ -65,10 +72,20 @@ where
 {
   let root_path = root_path.as_ref();
   ensure_owner()?;
-  let Some(run) = claim_next_task(root_path)? else {
+  let Some(run) = claim_next_task_with_fence(root_path, fence)? else {
     return Ok(None);
   };
+  execute_and_finalize_claimed_run(root_path, run, ensure_owner)
+}
 
+fn execute_and_finalize_claimed_run<G>(
+  root_path: &Path,
+  run: TaskRunView,
+  ensure_owner: G,
+) -> AppResult<Option<TaskRunView>>
+where
+  G: Fn() -> AppResult<()>,
+{
   let result = execute_claimed_run(root_path, &run, &ensure_owner);
   ensure_owner()?;
   finalize_claimed_run(root_path, &run, result).map(Some)

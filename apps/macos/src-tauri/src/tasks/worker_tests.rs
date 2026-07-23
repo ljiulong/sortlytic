@@ -941,6 +941,58 @@ fn worker_treats_cancellation_during_an_inflight_request_as_cancelled() {
 }
 
 #[test]
+fn production_worker_does_not_claim_after_lease_takeover() {
+  let root = std::env::temp_dir().join(format!("worker-claim-fence-{}", Uuid::new_v4()));
+  create_workspace("执行器领取栅栏测试", &root).expect("workspace should be created");
+  install_successful_tikhub_profile(&root).expect("TikHub profile should install");
+  let (task, _) = create_confirmed_item_detail_task(&root);
+  let queued = enqueue_task(&root, &task.id).expect("task should be queued");
+  let connection = super::open_workspace_connection(&root).expect("database should open");
+  let now = chrono::Utc::now();
+  connection
+    .execute(
+      "INSERT INTO task_worker_lease (
+         id, owner_id, lease_expires_at, created_at, updated_at, generation
+       ) VALUES ('task_worker', 'stale-owner', ?1, ?2, ?2, 1)",
+      rusqlite::params![now.timestamp_millis() + 120_000, now.to_rfc3339()],
+    )
+    .expect("stale lease should be installed");
+  let stale = crate::tasks::WorkerFence::new("stale-owner".to_string(), 1)
+    .expect("stale fence should be valid");
+  let first_check = std::cell::Cell::new(true);
+
+  execute_next_task_with_owner(&root, &stale, || {
+    let connection = super::open_workspace_connection(&root)?;
+    stale.ensure_current(&connection)?;
+    if first_check.replace(false) {
+      connection
+        .execute(
+          "UPDATE task_worker_lease
+           SET owner_id = 'replacement-owner', generation = 2, lease_expires_at = ?1
+           WHERE id = 'task_worker'",
+          [chrono::Utc::now().timestamp_millis() + 120_000],
+        )
+        .map_err(database_error)?;
+    }
+    Ok(())
+  })
+  .expect_err("a stale production worker must fail before claiming the queued run");
+
+  let status: String = connection
+    .query_row(
+      "SELECT status FROM task_run WHERE id = ?1",
+      [&queued.id],
+      |row| row.get(0),
+    )
+    .expect("queued run should remain readable");
+  assert_eq!(
+    status, "queued",
+    "lease takeover between the owner check and claim must fence the claim transaction"
+  );
+  std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn worker_marks_checkpoint_uncertain_when_record_persistence_fails() {
   let root = std::env::temp_dir().join(format!("worker-persist-failure-{}", Uuid::new_v4()));
   create_workspace("执行器落库失败测试", &root).expect("workspace should be created");

@@ -121,7 +121,9 @@ pub fn execute_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRu
   let Some(mut owner) = TaskWorkerOwner::try_acquire(root_path)? else {
     return Ok(None);
   };
-  let result = super::worker::execute_next_task_with_owner(root_path, || owner.ensure_current());
+  let result = super::worker::execute_next_task_with_owner(root_path, owner.fence(), || {
+    owner.ensure_current()
+  });
   finish_with_release(&mut owner, result)
 }
 
