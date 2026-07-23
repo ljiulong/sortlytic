@@ -293,10 +293,20 @@ fn cost_error(message: impl Into<String>) -> AppError {
 }
 
 #[cfg(test)]
+#[path = "pricing/test_support.rs"]
+mod test_support;
+
+#[cfg(test)]
 mod tests {
+  use std::sync::mpsc;
+  use std::thread;
+  use std::time::Duration;
+
+  use super::test_support::*;
   use super::*;
-  use crate::tikhub::build_collection_request;
-  use crate::workspace::{create_workspace, open_workspace_database, DATABASE_FILE_NAME};
+  use crate::tasks::cancel_task;
+  use crate::tasks::test_support::install_successful_tikhub_profile;
+  use crate::tikhub::test_support::override_tikhub_base_url_for_current_test;
 
   #[test]
   fn gate_requires_both_budget_and_live_available_credit() {
@@ -374,70 +384,12 @@ mod tests {
   #[test]
   fn cancelled_run_is_rejected_before_tikhub_configuration_is_read() {
     let root = std::env::temp_dir().join(format!("worker-pricing-cancel-{}", Uuid::new_v4()));
-    create_workspace("计价取消测试", &root).expect("workspace should be created");
-    let connection =
-      open_workspace_database(root.join(DATABASE_FILE_NAME)).expect("database should open");
-    let now = Utc::now().to_rfc3339();
-    connection
-      .execute(
-        "INSERT INTO collection_task (
-           id, name, source_type, status, created_at, updated_at
-         ) VALUES ('task-pricing-cancelled', '已取消计价任务', 'form', 'cancelled', ?1, ?1)",
-        [&now],
-      )
-      .expect("task should insert");
-    connection
-      .execute(
-        "INSERT INTO collection_plan (
-           id, task_id, source, schema_version, plan_json, validation_status,
-           confirmed_by_user, created_at, updated_at
-         ) VALUES (
-           'plan-pricing-cancelled', 'task-pricing-cancelled', 'form', 4, ?1, 'valid', 1, ?2, ?2
-         )",
-        params![
-          serde_json::json!({
-            "budget_limit": {
-              "currency": "USD",
-              "amount_micros": 1_000_000
-            }
-          })
-          .to_string(),
-          now
-        ],
-      )
-      .expect("plan should insert");
-    connection
-      .execute(
-        "INSERT INTO task_run (
-           id, task_id, plan_id, status, started_at
-         ) VALUES (
-           'run-pricing-cancelled', 'task-pricing-cancelled',
-           'plan-pricing-cancelled', 'cancelled', ?1
-         )",
-        [&now],
-      )
-      .expect("run should insert");
-    connection
-      .execute(
-        "INSERT INTO task_worker_lease (
-           id, owner_id, lease_expires_at, created_at, updated_at, generation
-         ) VALUES (
-           'task_worker', 'current-owner', 9223372036854775807, ?1, ?1, 1
-         )",
-        [&now],
-      )
-      .expect("worker lease should insert");
+    let connection = create_pricing_fixture(&root, "cancelled", "current-owner", 1);
     let current = crate::tasks::WorkerFence::new("current-owner".to_string(), 1)
       .expect("current fence should be valid");
-    let request = build_collection_request(
-      "tiktok",
-      "user_search",
-      &serde_json::json!({ "keyword": "汽车", "page_size": 1 }),
-      None,
-    )
-    .expect("request should build");
+    let request = pricing_request();
 
-    let error = guard_request(&root, "run-pricing-cancelled", &request, Some(&current))
+    let error = guard_request(&root, PRICING_RUN_ID, &request, Some(&current))
       .expect_err("cancelled run must be rejected before TikHub configuration is read");
 
     assert_eq!(error.code, AppErrorCode::Cancelled);
@@ -445,8 +397,8 @@ mod tests {
       connection
         .query_row(
           "SELECT COUNT(*) FROM pricing_quote_snapshot
-           WHERE task_run_id = 'run-pricing-cancelled'",
-          [],
+           WHERE task_run_id = ?1",
+          [PRICING_RUN_ID],
           |row| row.get::<_, i64>(0),
         )
         .unwrap(),
@@ -457,64 +409,181 @@ mod tests {
   }
 
   #[test]
+  fn committed_cancellation_prevents_all_pricing_http_requests() {
+    let root = std::env::temp_dir().join(format!("worker-pricing-http-zero-{}", Uuid::new_v4()));
+    let connection = create_pricing_fixture(&root, "running", "current-owner", 1);
+    install_successful_tikhub_profile(&root).expect("TikHub profile should install");
+    let current = crate::tasks::WorkerFence::new("current-owner".to_string(), 1)
+      .expect("current fence should be valid");
+    let request = pricing_request();
+    let server = PricingHttpServer::start(None);
+
+    cancel_task(&root, PRICING_TASK_ID).expect("running task should cancel");
+    let _override = override_tikhub_base_url_for_current_test(server.base_url.clone());
+    let error = guard_request(&root, PRICING_RUN_ID, &request, Some(&current))
+      .expect_err("committed cancellation must reject pricing");
+    let request_count = server.finish();
+
+    assert_eq!(error.code, AppErrorCode::Cancelled);
+    assert_eq!(request_count, 0);
+    assert_eq!(
+      connection
+        .query_row(
+          "SELECT status FROM collection_task WHERE id = ?1",
+          [PRICING_TASK_ID],
+          |row| row.get::<_, String>(0),
+        )
+        .unwrap(),
+      "cancelled"
+    );
+    assert_eq!(
+      connection
+        .query_row(
+          "SELECT status FROM task_run WHERE id = ?1",
+          [PRICING_RUN_ID],
+          |row| row.get::<_, String>(0),
+        )
+        .unwrap(),
+      "cancelled"
+    );
+    assert_eq!(
+      connection
+        .query_row(
+          "SELECT generation FROM task_worker_lease WHERE id = 'task_worker'",
+          [],
+          |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+      1
+    );
+    assert_eq!(
+      connection
+        .query_row(
+          "SELECT COUNT(*) FROM pricing_quote_snapshot WHERE task_run_id = ?1",
+          [PRICING_RUN_ID],
+          |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+      0
+    );
+    drop(connection);
+    std::fs::remove_dir_all(root).ok();
+  }
+
+  #[test]
+  fn cancellation_waits_for_inflight_pricing_before_committing() {
+    let root = std::env::temp_dir().join(format!("worker-pricing-http-gate-{}", Uuid::new_v4()));
+    let connection = create_pricing_fixture(&root, "running", "current-owner", 1);
+    install_successful_tikhub_profile(&root).expect("TikHub profile should install");
+    let current = crate::tasks::WorkerFence::new("current-owner".to_string(), 1)
+      .expect("current fence should be valid");
+    let request = pricing_request();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let server = PricingHttpServer::start(Some(FirstRequestGate {
+      entered: entered_tx,
+      release: release_rx,
+    }));
+    let pricing_root = root.clone();
+    let base_url = server.base_url.clone();
+    let pricing = thread::spawn(move || {
+      let _override = override_tikhub_base_url_for_current_test(base_url);
+      guard_request(&pricing_root, PRICING_RUN_ID, &request, Some(&current))
+    });
+    entered_rx
+      .recv_timeout(Duration::from_secs(3))
+      .expect("quota request should reach the local server");
+
+    let cancel_root = root.clone();
+    let (cancel_started_tx, cancel_started_rx) = mpsc::channel();
+    let (cancel_done_tx, cancel_done_rx) = mpsc::channel();
+    let cancellation = thread::spawn(move || {
+      cancel_started_tx
+        .send(())
+        .expect("cancel start signal should send");
+      let result = cancel_task(&cancel_root, PRICING_TASK_ID);
+      cancel_done_tx
+        .send(result)
+        .expect("cancel result should send");
+    });
+    cancel_started_rx
+      .recv_timeout(Duration::from_secs(1))
+      .expect("cancel thread should start");
+    assert!(matches!(
+      cancel_done_rx.recv_timeout(Duration::from_millis(150)),
+      Err(mpsc::RecvTimeoutError::Timeout)
+    ));
+    assert_eq!(
+      connection
+        .query_row(
+          "SELECT task.status, run.status
+           FROM collection_task AS task
+           JOIN task_run AS run ON run.task_id = task.id
+           WHERE task.id = ?1 AND run.id = ?2",
+          params![PRICING_TASK_ID, PRICING_RUN_ID],
+          |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .unwrap(),
+      ("running".to_string(), "running".to_string())
+    );
+
+    release_tx
+      .send(())
+      .expect("quota response should be released");
+    assert_eq!(
+      pricing
+        .join()
+        .expect("pricing thread should finish")
+        .expect("pricing should finish before cancellation"),
+      10_000
+    );
+    cancel_done_rx
+      .recv_timeout(Duration::from_secs(3))
+      .expect("cancellation should finish after pricing")
+      .expect("running task should cancel");
+    cancellation
+      .join()
+      .expect("cancellation thread should finish");
+    assert_eq!(server.request_count(), 2);
+    assert_eq!(server.finish(), 2);
+
+    assert_eq!(
+      connection
+        .query_row(
+          "SELECT task.status, run.status
+           FROM collection_task AS task
+           JOIN task_run AS run ON run.task_id = task.id
+           WHERE task.id = ?1 AND run.id = ?2",
+          params![PRICING_TASK_ID, PRICING_RUN_ID],
+          |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .unwrap(),
+      ("cancelled".to_string(), "cancelled".to_string())
+    );
+    assert_eq!(
+      connection
+        .query_row(
+          "SELECT COUNT(*) FROM pricing_quote_snapshot WHERE task_run_id = ?1",
+          [PRICING_RUN_ID],
+          |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+      1
+    );
+    drop(connection);
+    std::fs::remove_dir_all(root).ok();
+  }
+
+  #[test]
   fn stale_worker_fence_rejects_quote_ledger_writes() {
     let root = std::env::temp_dir().join(format!("worker-pricing-fence-{}", Uuid::new_v4()));
-    create_workspace("计价栅栏测试", &root).expect("workspace should be created");
-    let connection =
-      open_workspace_database(root.join(DATABASE_FILE_NAME)).expect("database should open");
-    let now = Utc::now().to_rfc3339();
-    connection
-      .execute(
-        "INSERT INTO collection_task (
-           id, name, source_type, status, created_at, updated_at
-         ) VALUES ('task-pricing', '计价任务', 'form', 'running', ?1, ?1)",
-        [&now],
-      )
-      .expect("task should insert");
-    connection
-      .execute(
-        "INSERT INTO collection_plan (
-           id, task_id, source, schema_version, plan_json, validation_status,
-           confirmed_by_user, created_at, updated_at
-         ) VALUES (
-           'plan-pricing', 'task-pricing', 'form', 4, ?1, 'valid', 1, ?2, ?2
-         )",
-        params![
-          serde_json::json!({
-            "budget_limit": {
-              "currency": "USD",
-              "amount_micros": 1_000_000
-            }
-          })
-          .to_string(),
-          now
-        ],
-      )
-      .expect("plan should insert");
-    connection
-      .execute(
-        "INSERT INTO task_run (
-           id, task_id, plan_id, status, started_at
-         ) VALUES ('run-pricing', 'task-pricing', 'plan-pricing', 'running', ?1)",
-        [&now],
-      )
-      .expect("run should insert");
-    connection
-      .execute(
-        "INSERT INTO task_worker_lease (
-           id, owner_id, lease_expires_at, created_at, updated_at, generation
-         ) VALUES (
-           'task_worker', 'replacement-owner', 9223372036854775807, ?1, ?1, 2
-         )",
-        [&now],
-      )
-      .expect("replacement lease should insert");
+    let connection = create_pricing_fixture(&root, "running", "replacement-owner", 2);
     let stale = crate::tasks::WorkerFence::new("stale-owner".to_string(), 1)
       .expect("stale fence should be valid");
 
     persist_guarded_quotes(
       &root,
-      "run-pricing",
+      PRICING_RUN_ID,
       TikhubAccountQuota {
         balance: 1.0,
         free_credit: 0.0,
@@ -535,8 +604,8 @@ mod tests {
     assert_eq!(
       connection
         .query_row(
-          "SELECT COUNT(*) FROM pricing_quote_snapshot WHERE task_run_id = 'run-pricing'",
-          [],
+          "SELECT COUNT(*) FROM pricing_quote_snapshot WHERE task_run_id = ?1",
+          [PRICING_RUN_ID],
           |row| row.get::<_, i64>(0),
         )
         .unwrap(),
