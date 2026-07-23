@@ -85,15 +85,29 @@ pub(super) fn validate_existing_task_run_sequence_migration(
 }
 
 pub(super) fn apply_task_run_sequence_migration(connection: &mut Connection) -> AppResult<()> {
+  apply_task_run_sequence_migration_with_before_transaction(connection, || {})
+}
+
+fn apply_task_run_sequence_migration_with_before_transaction(
+  connection: &mut Connection,
+  before_transaction: impl FnOnce(),
+) -> AppResult<()> {
   if let Some((name, checksum)) = marker(connection)? {
     validate_marker_and_schema(connection, &name, &checksum)?;
     update_workspace_schema_version(connection, MIGRATION_VERSION)?;
     return ensure_foreign_key_integrity(connection);
   }
 
+  before_transaction();
   let transaction = connection
     .transaction_with_behavior(TransactionBehavior::Immediate)
     .map_err(database_error)?;
+  if let Some((name, checksum)) = marker(&transaction)? {
+    validate_marker_and_schema(&transaction, &name, &checksum)?;
+    update_workspace_schema_version(&transaction, MIGRATION_VERSION)?;
+    transaction.commit().map_err(database_error)?;
+    return ensure_foreign_key_integrity(connection);
+  }
   if !column_exists(&transaction, "task_run", "run_sequence")? {
     transaction
       .execute_batch(ADD_RUN_SEQUENCE_SQL)
@@ -264,6 +278,8 @@ fn normalized_schema_sql(sql: &str) -> String {
 #[cfg(test)]
 mod tests {
   use std::fs;
+  use std::sync::{Arc, Barrier};
+  use std::thread;
 
   use rusqlite::params;
   use uuid::Uuid;
@@ -379,6 +395,60 @@ mod tests {
       12
     );
     assert_eq!(marker(&connection).unwrap().unwrap().0, MIGRATION_NAME);
+    assert!(schema_is_current(&connection).unwrap());
+    drop(connection);
+    fs::remove_dir_all(root).ok();
+  }
+
+  #[test]
+  fn concurrent_v11_upgrades_recheck_the_marker_after_acquiring_the_write_lock() {
+    let root = std::env::temp_dir().join(format!("task-run-sequence-race-{}", Uuid::new_v4()));
+    create_workspace("运行序号并发升级", &root).expect("workspace should create");
+    let connection =
+      open_workspace_database(root.join(DATABASE_FILE_NAME)).expect("database should open");
+    connection
+      .execute_batch(
+        "DROP TRIGGER trg_task_run_sequence_not_null;
+         DROP TRIGGER trg_task_run_assign_sequence;
+         DROP INDEX idx_task_run_task_sequence;
+         DELETE FROM schema_migrations WHERE version = 12;
+         UPDATE workspace SET schema_version = 11;
+         ALTER TABLE task_run DROP COLUMN run_sequence;",
+      )
+      .unwrap();
+    drop(connection);
+
+    let barrier = Arc::new(Barrier::new(2));
+    let handles = (0..2)
+      .map(|_| {
+        let root = root.clone();
+        let barrier = barrier.clone();
+        thread::spawn(move || {
+          let mut connection = open_workspace_database(root.join(DATABASE_FILE_NAME)).unwrap();
+          apply_task_run_sequence_migration_with_before_transaction(&mut connection, || {
+            barrier.wait();
+          })
+        })
+      })
+      .collect::<Vec<_>>();
+    let results = handles
+      .into_iter()
+      .map(|handle| handle.join().unwrap())
+      .collect::<Vec<_>>();
+
+    assert!(
+      results.iter().all(Result::is_ok),
+      "both concurrent migration callers must observe the same committed v12 state: {results:?}"
+    );
+    let connection = open_workspace_database(root.join(DATABASE_FILE_NAME)).unwrap();
+    let marker_count: i64 = connection
+      .query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 12",
+        [],
+        |row| row.get(0),
+      )
+      .unwrap();
+    assert_eq!(marker_count, 1);
     assert!(schema_is_current(&connection).unwrap());
     drop(connection);
     fs::remove_dir_all(root).ok();
