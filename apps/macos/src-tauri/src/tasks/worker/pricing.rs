@@ -18,13 +18,74 @@ pub(super) fn guard_request(
   request: &TikHubCollectionRequest,
   fence: Option<&WorkerFence>,
 ) -> AppResult<i64> {
-  let quota = get_tikhub_account_quota(root_path)?;
-  let quotes = request
-    .paths()
-    .iter()
-    .map(|endpoint| quote_tikhub_connector_price(root_path, endpoint, 1))
-    .collect::<AppResult<Vec<_>>>()?;
-  persist_guarded_quotes(root_path, run_id, quota, quotes, fence)
+  let task_id = fence
+    .map(|_| task_id_for_run(root_path, run_id))
+    .transpose()?;
+  super::with_task_dispatch_gate(
+    root_path,
+    task_id.as_deref().unwrap_or_default(),
+    fence.is_some(),
+    || {
+      if let (Some(fence), Some(task_id)) = (fence, task_id.as_deref()) {
+        ensure_run_accepts_pricing(root_path, task_id, run_id, fence)?;
+      }
+      let quota = get_tikhub_account_quota(root_path)?;
+      let quotes = request
+        .paths()
+        .iter()
+        .map(|endpoint| quote_tikhub_connector_price(root_path, endpoint, 1))
+        .collect::<AppResult<Vec<_>>>()?;
+      persist_guarded_quotes(root_path, run_id, quota, quotes, fence)
+    },
+  )
+}
+
+fn task_id_for_run(root_path: &Path, run_id: &str) -> AppResult<String> {
+  let connection = open_workspace_connection(root_path)?;
+  connection
+    .query_row(
+      "SELECT task_id FROM task_run WHERE id = ?1",
+      params![run_id],
+      |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(database_error)?
+    .ok_or_else(|| cost_error("任务运行不存在，禁止发送计价请求"))
+}
+
+fn ensure_run_accepts_pricing(
+  root_path: &Path,
+  task_id: &str,
+  run_id: &str,
+  fence: &WorkerFence,
+) -> AppResult<()> {
+  let connection = open_workspace_connection(root_path)?;
+  fence.ensure_current(&connection)?;
+  let state = connection
+    .query_row(
+      "SELECT task.status = 'running' AND run.status = 'running',
+              task.status = 'cancelled' OR run.status = 'cancelled'
+       FROM collection_task AS task
+       JOIN task_run AS run ON run.task_id = task.id
+       WHERE task.id = ?1 AND run.id = ?2",
+      params![task_id, run_id],
+      |row| Ok((row.get::<_, bool>(0)?, row.get::<_, bool>(1)?)),
+    )
+    .optional()
+    .map_err(database_error)?
+    .ok_or_else(|| cost_error("任务或运行不属于当前计价请求"))?;
+  if state.1 {
+    return Err(AppError::new(
+      AppErrorCode::Cancelled,
+      "任务已取消，不会发送新的计价请求",
+      AppErrorStage::Collection,
+      false,
+    ));
+  }
+  if !state.0 {
+    return Err(cost_error("任务或运行状态已变化，禁止发送计价请求"));
+  }
+  Ok(())
 }
 
 pub(super) fn checkpoint_quote_json(
@@ -186,8 +247,11 @@ fn load_budget_state(connection: &rusqlite::Connection, run_id: &str) -> AppResu
     .query_row(
       "SELECT plan.plan_json
        FROM task_run AS run
+       JOIN collection_task AS task ON task.id = run.task_id
        JOIN collection_plan AS plan ON plan.id = run.plan_id
-       WHERE run.id = ?1 AND run.status = 'running'",
+       WHERE run.id = ?1
+         AND run.status = 'running'
+         AND task.status = 'running'",
       params![run_id],
       |row| row.get::<_, String>(0),
     )
@@ -231,6 +295,7 @@ fn cost_error(message: impl Into<String>) -> AppError {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::tikhub::build_collection_request;
   use crate::workspace::{create_workspace, open_workspace_database, DATABASE_FILE_NAME};
 
   #[test]
@@ -304,6 +369,91 @@ mod tests {
   fn usd_values_convert_to_exact_micros() {
     assert_eq!(usd_to_micros(0.05, "额度").expect("金额应转换"), 50_000);
     assert!(usd_to_micros(f64::NAN, "额度").is_err());
+  }
+
+  #[test]
+  fn cancelled_run_is_rejected_before_tikhub_configuration_is_read() {
+    let root = std::env::temp_dir().join(format!("worker-pricing-cancel-{}", Uuid::new_v4()));
+    create_workspace("计价取消测试", &root).expect("workspace should be created");
+    let connection =
+      open_workspace_database(root.join(DATABASE_FILE_NAME)).expect("database should open");
+    let now = Utc::now().to_rfc3339();
+    connection
+      .execute(
+        "INSERT INTO collection_task (
+           id, name, source_type, status, created_at, updated_at
+         ) VALUES ('task-pricing-cancelled', '已取消计价任务', 'form', 'cancelled', ?1, ?1)",
+        [&now],
+      )
+      .expect("task should insert");
+    connection
+      .execute(
+        "INSERT INTO collection_plan (
+           id, task_id, source, schema_version, plan_json, validation_status,
+           confirmed_by_user, created_at, updated_at
+         ) VALUES (
+           'plan-pricing-cancelled', 'task-pricing-cancelled', 'form', 4, ?1, 'valid', 1, ?2, ?2
+         )",
+        params![
+          serde_json::json!({
+            "budget_limit": {
+              "currency": "USD",
+              "amount_micros": 1_000_000
+            }
+          })
+          .to_string(),
+          now
+        ],
+      )
+      .expect("plan should insert");
+    connection
+      .execute(
+        "INSERT INTO task_run (
+           id, task_id, plan_id, status, started_at
+         ) VALUES (
+           'run-pricing-cancelled', 'task-pricing-cancelled',
+           'plan-pricing-cancelled', 'cancelled', ?1
+         )",
+        [&now],
+      )
+      .expect("run should insert");
+    connection
+      .execute(
+        "INSERT INTO task_worker_lease (
+           id, owner_id, lease_expires_at, created_at, updated_at, generation
+         ) VALUES (
+           'task_worker', 'current-owner', 9223372036854775807, ?1, ?1, 1
+         )",
+        [&now],
+      )
+      .expect("worker lease should insert");
+    let current = crate::tasks::WorkerFence::new("current-owner".to_string(), 1)
+      .expect("current fence should be valid");
+    let request = build_collection_request(
+      "tiktok",
+      "user_search",
+      &serde_json::json!({ "keyword": "汽车", "page_size": 1 }),
+      None,
+    )
+    .expect("request should build");
+
+    let error = guard_request(&root, "run-pricing-cancelled", &request, Some(&current))
+      .expect_err("cancelled run must be rejected before TikHub configuration is read");
+
+    assert_eq!(error.code, AppErrorCode::Cancelled);
+    assert_eq!(
+      connection
+        .query_row(
+          "SELECT COUNT(*) FROM pricing_quote_snapshot
+           WHERE task_run_id = 'run-pricing-cancelled'",
+          [],
+          |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+      0
+    );
+    drop(connection);
+    std::fs::remove_dir_all(root).ok();
   }
 
   #[test]
