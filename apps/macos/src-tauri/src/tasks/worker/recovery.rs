@@ -144,27 +144,6 @@ pub(super) fn parse_response_checkpoint(
   Ok(page)
 }
 
-pub(super) fn mark_response_checkpoint_completed(
-  connection: &Connection,
-  checkpoint_id: &str,
-  persisted_count: i64,
-  committed_at: &str,
-) -> AppResult<()> {
-  let changed = connection
-    .execute(
-      "UPDATE collection_page_checkpoint
-       SET status = 'completed', record_count_persisted = ?1,
-           committed_at = ?2, updated_at = ?2
-       WHERE id = ?3 AND status = 'response_received'",
-      params![persisted_count, committed_at, checkpoint_id],
-    )
-    .map_err(database_error)?;
-  if changed != 1 {
-    return Err(task_error("响应检查点无法进入 completed 状态"));
-  }
-  Ok(())
-}
-
 pub(super) fn resume_position(checkpoints: &[Checkpoint]) -> AppResult<(i64, Option<Value>)> {
   for (index, checkpoint) in checkpoints.iter().enumerate() {
     if checkpoint.page_index != index as i64 {

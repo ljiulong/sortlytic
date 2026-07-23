@@ -36,13 +36,10 @@ mod targets;
 use mutations::{
   insert_prepared_checkpoint, mark_checkpoint_completed, mark_checkpoint_failed,
   mark_checkpoint_failed_with_retryable, mark_checkpoint_requesting,
-  mark_checkpoint_response_received, mark_checkpoint_uncertain, mark_step_running,
-  mark_step_stopped, mark_step_success,
+  mark_checkpoint_response_received, mark_checkpoint_uncertain, mark_response_checkpoint_completed,
+  mark_step_running, mark_step_stopped, mark_step_success,
 };
-use recovery::{
-  ensure_record_limit, load_checkpoints, mark_response_checkpoint_completed,
-  parse_response_checkpoint, resume_position,
-};
+use recovery::{ensure_record_limit, load_checkpoints, parse_response_checkpoint, resume_position};
 use runtime::load_runtime_snapshot;
 
 pub(super) struct RunStep {
@@ -375,6 +372,7 @@ where
       let committed_at = Utc::now().to_rfc3339();
       mark_response_checkpoint_completed(
         &connection,
+        fence,
         &checkpoint.id,
         i64::try_from(persisted_count).map_err(|_| task_error("持久化记录数超出数据库范围"))?,
         &committed_at,

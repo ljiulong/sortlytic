@@ -279,6 +279,30 @@ pub(super) fn mark_checkpoint_completed(
   })
 }
 
+pub(super) fn mark_response_checkpoint_completed(
+  connection: &Connection,
+  fence: Option<&WorkerFence>,
+  checkpoint_id: &str,
+  persisted_count: i64,
+  committed_at: &str,
+) -> AppResult<()> {
+  with_fenced_write(connection, fence, |connection| {
+    let changed = connection
+      .execute(
+        "UPDATE collection_page_checkpoint
+         SET status = 'completed', record_count_persisted = ?1,
+             committed_at = ?2, updated_at = ?2
+         WHERE id = ?3 AND status = 'response_received'",
+        params![persisted_count, committed_at, checkpoint_id],
+      )
+      .map_err(database_error)?;
+    if changed != 1 {
+      return Err(task_error("响应检查点无法进入 completed 状态"));
+    }
+    Ok(())
+  })
+}
+
 fn with_fenced_write<T>(
   connection: &Connection,
   fence: Option<&WorkerFence>,
@@ -324,7 +348,9 @@ mod tests {
            id TEXT PRIMARY KEY,
            status TEXT NOT NULL,
            request_attempt_count INTEGER NOT NULL DEFAULT 0,
+           record_count_persisted INTEGER NOT NULL DEFAULT 0,
            requested_at TEXT,
+           committed_at TEXT,
            updated_at TEXT NOT NULL
          );
          INSERT INTO task_worker_lease (
@@ -335,7 +361,9 @@ mod tests {
          INSERT INTO task_run_step (id, status, updated_at)
          VALUES ('step-1', 'pending', 'now');
          INSERT INTO collection_page_checkpoint (id, status, updated_at)
-         VALUES ('checkpoint-1', 'prepared', 'now');",
+         VALUES ('checkpoint-1', 'prepared', 'now');
+         INSERT INTO collection_page_checkpoint (id, status, updated_at)
+         VALUES ('checkpoint-response', 'response_received', 'now');",
       )
       .expect("mutation fixture should install");
     let stale =
@@ -345,6 +373,14 @@ mod tests {
       .expect_err("a stale generation must not start a step");
     mark_checkpoint_requesting(&connection, Some(&stale), "checkpoint-1", "later")
       .expect_err("a stale generation must not dispatch a checkpoint");
+    mark_response_checkpoint_completed(
+      &connection,
+      Some(&stale),
+      "checkpoint-response",
+      1,
+      "later",
+    )
+    .expect_err("a stale generation must not complete a recovered response checkpoint");
 
     assert_eq!(
       connection
@@ -365,6 +401,16 @@ mod tests {
         )
         .unwrap(),
       "prepared"
+    );
+    assert_eq!(
+      connection
+        .query_row(
+          "SELECT status FROM collection_page_checkpoint WHERE id = 'checkpoint-response'",
+          [],
+          |row| row.get::<_, String>(0),
+        )
+        .unwrap(),
+      "response_received"
     );
   }
 }
