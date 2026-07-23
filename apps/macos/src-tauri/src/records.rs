@@ -130,16 +130,38 @@ pub fn list_task_record_counts(root_path: impl AsRef<Path>) -> AppResult<Vec<Tas
   let connection = open_workspace_database(root_path.as_ref().join(DATABASE_FILE_NAME))?;
   let mut statement = connection
     .prepare(
-      "SELECT task.id, COUNT(account.id)
-       FROM collection_task AS task
-       LEFT JOIN task_run AS latest_run ON latest_run.id = (
-         SELECT candidate.id
-         FROM task_run AS candidate
-         WHERE candidate.task_id = task.id
-           AND candidate.status IN ('success', 'partial_success', 'failed', 'cancelled')
-         ORDER BY candidate.run_sequence DESC
-         LIMIT 1
+      "WITH ranked_plans AS (
+         SELECT
+           plan.id,
+           plan.task_id,
+           ROW_NUMBER() OVER (
+             PARTITION BY plan.task_id
+             ORDER BY plan.created_at DESC, plan.id DESC
+           ) AS plan_rank
+         FROM collection_plan AS plan
+       ),
+       current_plans AS (
+         SELECT id, task_id
+         FROM ranked_plans
+         WHERE plan_rank = 1
+       ),
+       ranked_terminal_runs AS (
+         SELECT
+           run.id,
+           run.task_id,
+           ROW_NUMBER() OVER (
+             PARTITION BY run.task_id
+             ORDER BY run.run_sequence DESC
+           ) AS run_rank
+         FROM task_run AS run
+         JOIN current_plans AS plan
+           ON plan.task_id = run.task_id AND plan.id = run.plan_id
+         WHERE run.status IN ('success', 'partial_success', 'failed', 'cancelled')
        )
+       SELECT task.id, COUNT(account.id)
+       FROM collection_task AS task
+       LEFT JOIN ranked_terminal_runs AS latest_run
+         ON latest_run.task_id = task.id AND latest_run.run_rank = 1
        LEFT JOIN collected_account AS account
          ON account.task_run_id = latest_run.id AND account.output_included = 1
        GROUP BY task.id
@@ -184,8 +206,15 @@ pub fn list_task_results(
               task.selected_fields_json
        FROM task_run AS run
        JOIN collection_task AS task ON task.id = run.task_id
-       LEFT JOIN collection_plan AS plan ON plan.id = run.plan_id
+       JOIN collection_plan AS plan ON plan.id = run.plan_id
        WHERE run.task_id = ?1 AND run.status IN ('success', 'partial_success')
+         AND run.plan_id = (
+           SELECT current.id
+           FROM collection_plan AS current
+           WHERE current.task_id = ?1
+           ORDER BY current.created_at DESC, current.id DESC
+           LIMIT 1
+         )
        ORDER BY run.run_sequence DESC
        LIMIT 1",
       params![task_id],

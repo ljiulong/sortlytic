@@ -54,20 +54,32 @@ fn lists_included_account_counts_from_each_tasks_latest_terminal_run() {
       )
       .expect("normalized record should insert");
   }
-  for (run_id, status, started_at) in [
-    ("run-old", "success", "2026-07-17T00:00:00Z"),
+  connection
+    .execute(
+      "INSERT INTO collection_plan (
+         id, task_id, source, schema_version, plan_json, validation_status,
+         confirmed_by_user, created_at, updated_at
+       ) VALUES ('plan-records', 'task-with-records', 'form_generated', 4, '{}',
+                 'valid', 1, ?1, ?1)",
+      [now],
+    )
+    .expect("current plan should insert");
+  for (run_id, attempt_number, status, started_at) in [
+    ("run-old", 1, "success", "2026-07-17T00:00:00Z"),
     (
       "run-latest-terminal",
+      2,
       "partial_success",
       "2026-07-16T00:00:00Z",
     ),
-    ("run-current", "running", "2026-07-18T00:00:00Z"),
+    ("run-current", 3, "running", "2026-07-18T00:00:00Z"),
   ] {
     connection
       .execute(
-        "INSERT INTO task_run (id, task_id, status, started_at)
-         VALUES (?1, 'task-with-records', ?2, ?3)",
-        params![run_id, status, started_at],
+        "INSERT INTO task_run (
+           id, task_id, plan_id, attempt_number, status, started_at
+         ) VALUES (?1, 'task-with-records', 'plan-records', ?2, ?3, ?4)",
+        params![run_id, attempt_number, status, started_at],
       )
       .expect("task run should insert");
   }
@@ -105,6 +117,71 @@ fn lists_included_account_counts_from_each_tasks_latest_terminal_run() {
       },
     ]
   );
+
+  fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn revised_plan_does_not_expose_records_from_an_old_plan_as_current() {
+  let root = std::env::temp_dir().join(format!("record-counts-revised-{}", Uuid::new_v4()));
+  create_workspace("修订计划记录边界", &root).expect("workspace should create");
+  let connection =
+    open_workspace_database(root.join(DATABASE_FILE_NAME)).expect("database should open");
+  connection
+    .execute(
+      "INSERT INTO collection_task (
+         id, name, source_type, status, platforms_json, data_types_json, created_at, updated_at
+       ) VALUES ('task-revised', '已修订任务', 'form', 'waiting_confirmation',
+                 '[\"tiktok\"]', '[\"account\"]', ?1, ?1)",
+      ["2026-07-18T00:00:00Z"],
+    )
+    .unwrap();
+  for (plan_id, created_at) in [
+    ("plan-old", "2026-07-18T00:00:00Z"),
+    ("plan-current", "2026-07-19T00:00:00Z"),
+  ] {
+    connection
+      .execute(
+        "INSERT INTO collection_plan (
+           id, task_id, source, schema_version, plan_json, validation_status,
+           confirmed_by_user, created_at, updated_at
+         ) VALUES (?1, 'task-revised', 'user_edited', 4, '{}', 'valid', 0, ?2, ?2)",
+        params![plan_id, created_at],
+      )
+      .unwrap();
+  }
+  connection
+    .execute(
+      "INSERT INTO task_run (
+         id, task_id, plan_id, attempt_number, status, started_at, ended_at
+       ) VALUES ('run-old', 'task-revised', 'plan-old', 1, 'success', ?1, ?1)",
+      ["2026-07-18T01:00:00Z"],
+    )
+    .unwrap();
+  connection
+    .execute(
+      "INSERT INTO collected_account (
+         id, task_run_id, platform, identity_key, username, data_source, collected_at,
+         output_included, created_at, updated_at
+       ) VALUES ('old-account', 'run-old', 'tiktok', 'id:old-account', '旧计划账号',
+                 'TikHub API', ?1, 1, ?1, ?1)",
+      ["2026-07-18T01:00:00Z"],
+    )
+    .unwrap();
+  drop(connection);
+
+  let counts = list_task_record_counts(&root).expect("record counts should list");
+  assert_eq!(
+    counts,
+    vec![TaskRecordCountView {
+      task_id: "task-revised".to_string(),
+      record_count: 0,
+    }]
+  );
+  let error = list_task_results(&root, "task-revised", 50, 0)
+    .expect_err("old-plan results must not be exposed as current results");
+  assert_eq!(error.code, AppErrorCode::ValidationError);
+  assert!(error.message.contains("没有可查看的成功运行"));
 
   fs::remove_dir_all(root).ok();
 }
