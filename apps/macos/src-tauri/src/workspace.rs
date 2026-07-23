@@ -66,6 +66,7 @@ mod worker_lease_migration;
 
 pub const CURRENT_SCHEMA_VERSION: i64 = 14;
 pub const DATABASE_FILE_NAME: &str = "app.sqlite";
+pub(crate) use dispatch_locks::open_task_dispatch_lock;
 
 const WORKSPACE_DIRS: &[&str] = &[
   "secrets",

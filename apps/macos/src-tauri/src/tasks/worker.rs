@@ -1,6 +1,4 @@
-use std::fs::{self, File, OpenOptions};
 use std::io::ErrorKind;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
 use chrono::Utc;
@@ -22,6 +20,7 @@ use crate::secrets::read_secret_for_snapshot;
 use crate::tikhub::{
   build_collection_request, send_collection_request, CollectionPage, TikHubCollectionRequest,
 };
+use crate::workspace::open_task_dispatch_lock;
 
 #[cfg(test)]
 use super::claim_next_task;
@@ -48,8 +47,6 @@ use mutations::{
 };
 use recovery::{ensure_record_limit, load_checkpoints, parse_response_checkpoint, resume_position};
 use runtime::load_runtime_snapshot;
-
-const PRIVATE_LOCK_MODE: u32 = 0o600;
 
 pub(super) struct RunStep {
   pub(super) id: String,
@@ -581,9 +578,26 @@ pub(super) fn with_task_dispatch_gate<T>(
     return operation();
   }
   let file = open_task_dispatch_lock(root_path, task_id)?;
-  FileExt::lock(&file)
-    .map_err(|error| dispatch_lock_error("无法取得任务请求分发锁", Some(&error)))?;
+  FileExt::lock(&file).map_err(|error| dispatch_lock_acquisition_error(&error))?;
   operation()
+}
+
+fn dispatch_lock_acquisition_error(error: &std::io::Error) -> AppError {
+  let kind = error.kind();
+  AppError::new(
+    if kind == ErrorKind::PermissionDenied {
+      AppErrorCode::PermissionError
+    } else {
+      AppErrorCode::WorkspaceError
+    },
+    format!("无法取得任务请求分发锁：{error}"),
+    AppErrorStage::Workspace,
+    matches!(
+      kind,
+      ErrorKind::Interrupted | ErrorKind::WouldBlock | ErrorKind::TimedOut
+    ),
+  )
+  .with_safe_detail("operation", "task_dispatch_gate")
 }
 
 pub(super) fn ensure_run_accepts_dispatch(
@@ -621,89 +635,6 @@ pub(super) fn ensure_run_accepts_dispatch(
     ));
   }
   Ok(())
-}
-
-fn open_task_dispatch_lock(root_path: &Path, task_id: &str) -> AppResult<File> {
-  let directory = root_path.join("temp");
-  let metadata = fs::symlink_metadata(&directory)
-    .map_err(|error| dispatch_lock_error("无法读取任务请求分发锁目录", Some(&error)))?;
-  if metadata.file_type().is_symlink() || !metadata.is_dir() {
-    return Err(dispatch_lock_error(
-      "任务请求分发锁目录必须是工作区内的真实目录",
-      None,
-    ));
-  }
-  let task_hash = format!("{:x}", Sha256::digest(task_id.as_bytes()));
-  let path = directory.join(format!("task-dispatch-{task_hash}.lock"));
-  let file = match OpenOptions::new()
-    .read(true)
-    .write(true)
-    .create_new(true)
-    .mode(PRIVATE_LOCK_MODE)
-    .open(&path)
-  {
-    Ok(file) => file,
-    Err(error) if error.kind() == ErrorKind::AlreadyExists => {
-      let metadata = fs::symlink_metadata(&path)
-        .map_err(|error| dispatch_lock_error("无法检查任务请求分发锁", Some(&error)))?;
-      if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(dispatch_lock_error(
-          "任务请求分发锁必须是工作区内的普通文件",
-          None,
-        ));
-      }
-      OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&path)
-        .map_err(|error| dispatch_lock_error("无法打开任务请求分发锁", Some(&error)))?
-    }
-    Err(error) => return Err(dispatch_lock_error("无法创建任务请求分发锁", Some(&error))),
-  };
-  file
-    .set_permissions(fs::Permissions::from_mode(PRIVATE_LOCK_MODE))
-    .map_err(|error| dispatch_lock_error("无法收紧任务请求分发锁权限", Some(&error)))?;
-  validate_task_dispatch_lock(&path, &file)?;
-  Ok(file)
-}
-
-fn validate_task_dispatch_lock(path: &Path, file: &File) -> AppResult<()> {
-  let opened = file
-    .metadata()
-    .map_err(|error| dispatch_lock_error("无法验证任务请求分发锁", Some(&error)))?;
-  let current = fs::symlink_metadata(path)
-    .map_err(|error| dispatch_lock_error("无法复核任务请求分发锁", Some(&error)))?;
-  if current.file_type().is_symlink()
-    || !opened.is_file()
-    || !current.is_file()
-    || opened.dev() != current.dev()
-    || opened.ino() != current.ino()
-    || opened.permissions().mode() & 0o7777 != PRIVATE_LOCK_MODE
-  {
-    return Err(dispatch_lock_error(
-      "任务请求分发锁身份或权限校验失败",
-      None,
-    ));
-  }
-  Ok(())
-}
-
-fn dispatch_lock_error(message: &str, error: Option<&std::io::Error>) -> AppError {
-  let kind = error.map(std::io::Error::kind);
-  AppError::new(
-    if kind.is_none() || kind == Some(ErrorKind::PermissionDenied) {
-      AppErrorCode::PermissionError
-    } else {
-      AppErrorCode::WorkspaceError
-    },
-    error.map_or(message.to_string(), |error| format!("{message}：{error}")),
-    AppErrorStage::Workspace,
-    matches!(
-      kind,
-      Some(ErrorKind::Interrupted | ErrorKind::WouldBlock | ErrorKind::TimedOut)
-    ),
-  )
-  .with_safe_detail("operation", "task_dispatch_gate")
 }
 
 pub(super) fn ensure_run_accepts_response(root_path: &Path, run_id: &str) -> AppResult<()> {

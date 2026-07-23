@@ -488,60 +488,97 @@ mod tests {
   }
 
   #[test]
-  fn dispatch_gate_uses_a_private_hashed_regular_file() {
+  fn dispatch_gate_uses_only_the_bounded_private_shard_pool() {
     let root = std::env::temp_dir().join(format!("worker-dispatch-lock-{}", uuid::Uuid::new_v4()));
     create_workspace("请求分发锁文件测试", &root).expect("workspace should be created");
 
-    super::super::with_task_dispatch_gate(&root, "sensitive-task-id", true, || Ok(()))
+    for index in 0..96 {
+      super::super::with_task_dispatch_gate(
+        &root,
+        &format!("sensitive-task-id-{index}"),
+        true,
+        || Ok(()),
+      )
       .expect("dispatch gate should lock");
+    }
 
-    let entries = std::fs::read_dir(root.join("temp"))
-      .expect("temp directory should read")
+    let dynamic_locks = std::fs::read_dir(root.join("temp"))
+      .expect("temp directory should be readable")
+      .filter_map(Result::ok)
+      .filter(|entry| {
+        entry.file_type().is_ok_and(|file_type| file_type.is_file())
+          && entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with("task-dispatch-")
+      })
+      .count();
+    assert_eq!(dynamic_locks, 0);
+
+    let entries = std::fs::read_dir(root.join("temp").join("task-dispatch-gates-v1"))
+      .expect("dispatch lock pool should read")
       .collect::<Result<Vec<_>, _>>()
       .expect("lock entries should read");
-    assert_eq!(entries.len(), 2);
-    let lock_entry = entries
-      .iter()
-      .find(|entry| {
+    assert_eq!(entries.len(), 64);
+    for entry in entries {
+      let file_name = entry.file_name().to_string_lossy().into_owned();
+      assert!(file_name.starts_with("task-dispatch-"));
+      assert!(file_name.ends_with(".lock"));
+      assert!(!file_name.contains("sensitive-task-id"));
+      assert_eq!(
         entry
-          .file_name()
-          .to_string_lossy()
-          .starts_with("task-dispatch-")
-      })
-      .expect("dynamic dispatch lock should exist");
-    let file_name = lock_entry.file_name().to_string_lossy().into_owned();
-    assert!(file_name.starts_with("task-dispatch-"));
-    assert!(file_name.ends_with(".lock"));
-    assert!(!file_name.contains("sensitive-task-id"));
-    assert_eq!(
-      lock_entry
-        .metadata()
-        .expect("lock metadata should read")
-        .permissions()
-        .mode()
-        & 0o7777,
-      0o600
-    );
+          .metadata()
+          .expect("lock metadata should read")
+          .permissions()
+          .mode()
+          & 0o7777,
+        0o600
+      );
+    }
 
     std::fs::remove_dir_all(root).ok();
   }
 
   #[test]
-  fn dispatch_gate_rejects_a_preexisting_symlink() {
+  fn dispatch_gate_rejects_a_removed_registered_shard() {
+    let root =
+      std::env::temp_dir().join(format!("worker-dispatch-removed-{}", uuid::Uuid::new_v4()));
+    create_workspace("请求分发锁删除测试", &root).expect("workspace should be created");
+    let task_id = "removed-shard-task";
+    let shard = usize::from(Sha256::digest(task_id.as_bytes())[0]) % 64;
+    std::fs::remove_file(
+      root
+        .join("temp")
+        .join("task-dispatch-gates-v1")
+        .join(format!("task-dispatch-{shard:02x}.lock")),
+    )
+    .expect("registered shard should be removed");
+
+    let error = super::super::with_task_dispatch_gate(&root, task_id, true, || Ok(()))
+      .expect_err("dispatch gate must reject a removed registered shard");
+
+    assert_eq!(
+      error.safe_details.get("operation").map(String::as_str),
+      Some("task_dispatch_gate")
+    );
+    std::fs::remove_dir_all(root).ok();
+  }
+
+  #[test]
+  fn dispatch_gate_rejects_a_registered_shard_symlink() {
     let root =
       std::env::temp_dir().join(format!("worker-dispatch-symlink-{}", uuid::Uuid::new_v4()));
     create_workspace("请求分发锁符号链接测试", &root).expect("workspace should be created");
     let task_id = "symlink-task";
-    let task_hash = format!("{:x}", Sha256::digest(task_id.as_bytes()));
+    let shard = usize::from(Sha256::digest(task_id.as_bytes())[0]) % 64;
+    let lock_path = root
+      .join("temp")
+      .join("task-dispatch-gates-v1")
+      .join(format!("task-dispatch-{shard:02x}.lock"));
+    std::fs::remove_file(&lock_path).expect("registered shard should be removed");
     let sentinel = root.join("sentinel");
     std::fs::write(&sentinel, b"do-not-follow").expect("sentinel should write");
-    symlink(
-      &sentinel,
-      root
-        .join("temp")
-        .join(format!("task-dispatch-{task_hash}.lock")),
-    )
-    .expect("symlink fixture should create");
+    symlink(&sentinel, &lock_path).expect("symlink fixture should create");
 
     let error = super::super::with_task_dispatch_gate(&root, task_id, true, || Ok(()))
       .expect_err("dispatch gate must reject symlink lock paths");
