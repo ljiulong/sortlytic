@@ -461,6 +461,9 @@ function TaskQueue({
             const parseFailed = parseAttempt
               && ['failed', 'interrupted'].includes(parseAttempt.parse_status)
             const parseNeedsReview = parseAttempt?.parse_status === 'needs_review'
+            const displayTaskName = parseNeedsAttention && parseAttempt
+              ? parseAttempt.intent_text
+              : task.name
 
             return (
               <article
@@ -490,7 +493,7 @@ function TaskQueue({
                   ) : null}
                   <div className="task-card__identity">
                     <div className="task-card__title-view">
-                      <h3 id={titleId}>{task.name}</h3>
+                      <h3 id={titleId}>{displayTaskName}</h3>
                       <p className="task-card__meta">{task.platform} · {sourceLabel}</p>
                     </div>
                   </div>
@@ -519,7 +522,7 @@ function TaskQueue({
                       <strong>{progress}%</strong>
                     </div>
                     <div
-                      aria-label={t('taskQueue.progressAriaLabel', { taskName: task.name })}
+                      aria-label={t('taskQueue.progressAriaLabel', { taskName: displayTaskName })}
                       aria-valuemax={100}
                       aria-valuemin={0}
                       aria-valuenow={progress}
@@ -533,7 +536,6 @@ function TaskQueue({
 
                 {parseNeedsAttention ? (
                   <div className="task-card__parse-problem">
-                    <p>原始需求：{parseAttempt.intent_text}</p>
                     <TaskProblemPanel
                       kind="natural_parse"
                       naturalState={parseAttempt.parse_status === 'needs_review'
@@ -588,6 +590,37 @@ function TaskQueue({
                       className="task-card__actions"
                       data-visible={!isConfirming}
                     >
+                      <div className="task-card__run-action">
+                        {capabilities.canExport && resultsTaskId !== task.id ? (
+                          <button
+                            aria-label={t('taskQueue.viewResults')}
+                            className="primary-button"
+                            disabled={isBusy || isConfirming}
+                            type="button"
+                            onClick={() => {
+                              setActiveMode(undefined)
+                              exitBulkMode()
+                              setResultsTaskId(task.id)
+                              setPreviewTaskId(task.id)
+                            }}
+                          >
+                            <Table2 size={15} aria-hidden="true" />
+                            {t('taskQueue.viewResults')}
+                          </button>
+                        ) : null}
+                        {capabilities.canConfirm ? (
+                          <button
+                            className="primary-button"
+                            disabled={isBusy || isConfirming}
+                            aria-label={t('taskQueue.confirmRun')}
+                            type="button"
+                            onClick={() => setActiveMode({ taskId: task.id, type: 'confirm-run' })}
+                          >
+                            <Play size={15} aria-hidden="true" />
+                            {t('taskQueue.confirmRun')}
+                          </button>
+                        ) : null}
+                      </div>
                       <div className="task-card__secondary-actions">
                         <button
                           className="ghost-button"
@@ -622,37 +655,6 @@ function TaskQueue({
                           <Trash2 size={15} aria-hidden="true" />
                           {t('taskQueue.delete')}
                         </button>
-                      </div>
-                      <div className="task-card__run-action">
-                        {capabilities.canExport && resultsTaskId !== task.id ? (
-                          <button
-                            aria-label={t('taskQueue.viewResults')}
-                            className="primary-button"
-                            disabled={isBusy || isConfirming}
-                            type="button"
-                            onClick={() => {
-                              setActiveMode(undefined)
-                              exitBulkMode()
-                              setResultsTaskId(task.id)
-                              setPreviewTaskId(task.id)
-                            }}
-                          >
-                            <Table2 size={15} aria-hidden="true" />
-                            {t('taskQueue.viewResults')}
-                          </button>
-                        ) : null}
-                        {capabilities.canConfirm ? (
-                          <button
-                            className="primary-button"
-                            disabled={isBusy || isConfirming}
-                            aria-label={t('taskQueue.confirmRun')}
-                            type="button"
-                            onClick={() => setActiveMode({ taskId: task.id, type: 'confirm-run' })}
-                          >
-                            <Play size={15} aria-hidden="true" />
-                            {t('taskQueue.confirmRun')}
-                          </button>
-                        ) : null}
                       </div>
                       <div className="task-card__export">
                         <div className="task-card__export-field">

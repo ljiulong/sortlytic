@@ -146,9 +146,15 @@ describe('TaskQueue', () => {
     expect(markup).not.toContain('progress-cell')
     expect(markup).toContain('role="progressbar"')
     expect(markup).toContain('aria-valuenow="0"')
+
+    const primaryActionIndex = markup.indexOf('task-card__run-action')
+    const secondaryActionsIndex = markup.indexOf('task-card__secondary-actions')
+    const exportIndex = markup.indexOf('task-card__export')
+    expect(primaryActionIndex).toBeLessThan(secondaryActionsIndex)
+    expect(secondaryActionsIndex).toBeLessThan(exportIndex)
   })
 
-  it('自然语言失败任务显示解析失败、原始需求、真实错误和修改方式', () => {
+  it('自然语言失败任务显示解析失败、完整需求、真实错误和修改方式', () => {
     const markup = renderQueue([{
       ...waitingTask,
       id: 'task-natural-failed',
@@ -171,12 +177,45 @@ describe('TaskQueue', () => {
     }])
 
     expect(markup).toContain('解析失败')
-    expect(markup).toContain('原始需求：用中文查找英国 TikTok 宠物用品账号')
+    expect(markup).toContain(
+      '<h3 id="task-title-task-natural-failed">用中文查找英国 TikTok 宠物用品账号</h3>',
+    )
+    expect(markup).not.toContain('原始需求：')
     expect(markup).toContain('MODEL_RATE_LIMIT')
     expect(markup).toContain('AI 服务请求过于频繁或额度不足')
     expect(markup).toContain('修改方式')
     expect(markup).toContain('重新尝试')
     expect(markup).not.toContain('发生未知错误')
+  })
+
+  it('未解析自然语言任务只用完整原始需求作为标题并明确平台待解析', () => {
+    const intentText = '最终验收：用中文查找英国 TikTok 办公用品账号，最多 2 个，预算 0.1 美元。'
+    const markup = renderQueue([{
+      ...waitingTask,
+      id: 'task-natural-unparsed',
+      name: '最终验收：用中文查找英国 TikTok 办公用品账号，最多 2 个，预算 0.1 美',
+      platform: '平台待解析',
+      source: '自然语言',
+      sourceType: 'natural_language',
+      status: '待人工确认',
+      naturalParseAttempt: {
+        id: 'attempt-unparsed',
+        task_id: 'task-natural-unparsed',
+        intent_text: intentText,
+        parse_status: 'failed',
+        parse_phase: 'requesting_ai',
+        error_code: 'MODEL_CONFIG_ERROR',
+        error_message: '尚未设置当前 AI 配置，请先完成真实连通性测试',
+        retryable: false,
+        error_safe_details_json: {},
+        created_at: '2026-07-20T08:00:00Z',
+        updated_at: '2026-07-20T08:00:17Z',
+      },
+    }])
+
+    expect(markup).toContain(`<h3 id="task-title-task-natural-unparsed">${intentText}</h3>`)
+    expect(markup).toContain('>平台待解析 · 自然语言</p>')
+    expect(markup).not.toContain('原始需求：')
   })
 
   it('自然语言待补充任务显示待修正而不是待人工确认', () => {
