@@ -22,6 +22,25 @@ describe('workbench task status mapping', () => {
     })
   })
 
+  it('未知数据类型代码不伪装成评论用户', () => {
+    expect(mapTaskRow({
+      id: 'task-unknown-data-type',
+      name: '未来数据类型任务',
+      source_type: 'form',
+      status: 'waiting_confirmation',
+      platforms_json: ['tiktok'],
+      data_types_json: ['future_account_signal'],
+      created_at: '2026-07-20T00:00:00Z',
+      updated_at: '2026-07-20T00:01:00Z',
+      cancelled_at: null,
+      cost_estimate_json: { request_count_estimate: 1 },
+      actual_cost_json: {},
+    })).toMatchObject({
+      cost: '预计 1 次请求 · 数据类型待解析',
+      dataTypeCode: undefined,
+    })
+  })
+
   it('将 Schema v4 account 任务显示为账号数据而不是评论用户', () => {
     expect(mapTaskRow({
       id: 'task-account-v4',

@@ -3,11 +3,22 @@ import type { DataType, Platform, TaskStatus } from './workbench-data'
 
 export type TaskPlatform = Platform | '平台待解析'
 
+const knownDataTypes = new Set([
+  'account',
+  'keyword_search',
+  'account_profile',
+  'item_detail',
+  'account_posts',
+  'comments',
+])
+
 export function mapTaskRow(task: CollectionTaskView) {
   const platforms = stringArrayFromJson(task.platforms_json)
   const dataTypes = stringArrayFromJson(task.data_types_json)
   const requestCount = numberFromJson(task.cost_estimate_json)
-  const dataType = dataTypes[0]
+  const dataType = dataTypes[0] && knownDataTypes.has(dataTypes[0])
+    ? dataTypes[0]
+    : undefined
 
   return {
     id: task.id,
