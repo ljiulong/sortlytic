@@ -20,6 +20,7 @@ use collection_pipeline_migration::{
 use collection_runtime_migration::{
   apply_collection_runtime_migration, validate_existing_collection_runtime_migration,
 };
+use dispatch_locks::initialize_task_dispatch_lock_pool;
 use plan_review_migration::{apply_plan_review_migration, validate_existing_plan_review_migration};
 use run_checkpoint_migration::{
   apply_run_checkpoint_migration, validate_existing_run_checkpoint_migration,
@@ -53,6 +54,7 @@ mod active_run_migration;
 mod api_profile_migration;
 mod collection_pipeline_migration;
 mod collection_runtime_migration;
+mod dispatch_locks;
 mod plan_review_migration;
 mod run_checkpoint_migration;
 mod schema;
@@ -152,6 +154,7 @@ pub fn create_workspace(name: &str, root_path: impl AsRef<Path>) -> AppResult<Wo
     )
     .map_err(database_error)?;
 
+  initialize_task_dispatch_lock_pool(&root_path, &mut connection)?;
   let summary = get_workspace_summary(&connection, &root_path, &database_path)?;
   validate_private_workspace_permissions(&root_path, &database_path)?;
   drop(connection);
@@ -187,6 +190,7 @@ pub fn open_workspace(root_path: impl AsRef<Path>) -> AppResult<WorkspaceSummary
   apply_schema(&mut connection)?;
   let mut summary = get_workspace_summary(&connection, &root_path, &database_path)?;
   create_private_workspace_directories(&root_path)?;
+  initialize_task_dispatch_lock_pool(&root_path, &mut connection)?;
   let now = Utc::now().to_rfc3339();
 
   connection

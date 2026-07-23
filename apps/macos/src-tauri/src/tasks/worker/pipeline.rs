@@ -499,13 +499,22 @@ mod tests {
       .expect("temp directory should read")
       .collect::<Result<Vec<_>, _>>()
       .expect("lock entries should read");
-    assert_eq!(entries.len(), 1);
-    let file_name = entries[0].file_name().to_string_lossy().into_owned();
+    assert_eq!(entries.len(), 2);
+    let lock_entry = entries
+      .iter()
+      .find(|entry| {
+        entry
+          .file_name()
+          .to_string_lossy()
+          .starts_with("task-dispatch-")
+      })
+      .expect("dynamic dispatch lock should exist");
+    let file_name = lock_entry.file_name().to_string_lossy().into_owned();
     assert!(file_name.starts_with("task-dispatch-"));
     assert!(file_name.ends_with(".lock"));
     assert!(!file_name.contains("sensitive-task-id"));
     assert_eq!(
-      entries[0]
+      lock_entry
         .metadata()
         .expect("lock metadata should read")
         .permissions()
