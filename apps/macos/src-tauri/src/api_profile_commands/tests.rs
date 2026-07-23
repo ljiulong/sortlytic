@@ -724,11 +724,26 @@ fn serve_ai_probe_once() -> (String, thread::JoinHandle<bool>) {
         Err(error) => panic!("probe server failed: {error}"),
       }
     };
-    let mut request = [0_u8; 32 * 1024];
-    let bytes_read = stream
-      .read(&mut request)
-      .expect("probe request should read");
-    let request = String::from_utf8_lossy(&request[..bytes_read]);
+    stream
+      .set_nonblocking(false)
+      .expect("accepted probe stream should block while reading");
+    stream
+      .set_read_timeout(Some(Duration::from_secs(2)))
+      .expect("probe request read timeout should set");
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 512];
+    while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+      let bytes_read = stream.read(&mut buffer).expect("probe request should read");
+      if bytes_read == 0 {
+        break;
+      }
+      request.extend_from_slice(&buffer[..bytes_read]);
+      assert!(
+        request.len() <= 32 * 1024,
+        "probe request headers too large"
+      );
+    }
+    let request = String::from_utf8_lossy(&request);
     assert!(request.starts_with("POST /v1/chat/completions HTTP/1.1"));
     let content = r#"{"ok":true}"#;
     let body = serde_json::json!({
