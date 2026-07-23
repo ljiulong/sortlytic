@@ -129,12 +129,27 @@ fn validate_marker_and_schema(
 }
 
 fn schema_is_current(connection: &Connection) -> AppResult<bool> {
-  if !column_exists(connection, "task_run", "run_sequence")?
-    || !object_exists(connection, "index", "idx_task_run_task_sequence")?
-    || !object_exists(connection, "trigger", "trg_task_run_assign_sequence")?
-    || !object_exists(connection, "trigger", "trg_task_run_sequence_not_null")?
-  {
+  if !column_exists(connection, "task_run", "run_sequence")? {
     return Ok(false);
+  }
+  for (kind, name, expected_sql) in [
+    ("index", "idx_task_run_task_sequence", INDEX_SQL),
+    (
+      "trigger",
+      "trg_task_run_assign_sequence",
+      ASSIGN_TRIGGER_SQL,
+    ),
+    (
+      "trigger",
+      "trg_task_run_sequence_not_null",
+      GUARD_TRIGGER_SQL,
+    ),
+  ] {
+    if object_sql(connection, kind, name)?.as_deref()
+      != Some(normalized_schema_sql(expected_sql).as_str())
+    {
+      return Ok(false);
+    }
   }
   let invalid_rows = connection
     .query_row(
@@ -201,6 +216,34 @@ fn object_exists(connection: &Connection, object_type: &str, name: &str) -> AppR
       |row| row.get(0),
     )
     .map_err(database_error)
+}
+
+fn object_sql(connection: &Connection, object_type: &str, name: &str) -> AppResult<Option<String>> {
+  connection
+    .query_row(
+      "SELECT sql FROM sqlite_schema WHERE type = ?1 AND name = ?2",
+      params![object_type, name],
+      |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map(|sql| sql.map(|value| normalized_schema_sql(&value)))
+    .map_err(database_error)
+}
+
+fn normalized_schema_sql(sql: &str) -> String {
+  sql
+    .trim()
+    .trim_end_matches(';')
+    .split_whitespace()
+    .collect::<Vec<_>>()
+    .join(" ")
+    .to_ascii_lowercase()
+    .replacen(
+      "create unique index if not exists ",
+      "create unique index ",
+      1,
+    )
+    .replacen("create trigger if not exists ", "create trigger ", 1)
 }
 
 #[cfg(test)]
@@ -322,6 +365,32 @@ mod tests {
     );
     assert_eq!(marker(&connection).unwrap().unwrap().0, MIGRATION_NAME);
     assert!(schema_is_current(&connection).unwrap());
+    drop(connection);
+    fs::remove_dir_all(root).ok();
+  }
+
+  #[test]
+  fn schema_validation_rejects_a_same_name_noop_sequence_trigger() {
+    let root = std::env::temp_dir().join(format!("task-run-sequence-tamper-{}", Uuid::new_v4()));
+    create_workspace("运行序号结构校验", &root).expect("workspace should create");
+    let connection =
+      open_workspace_database(root.join(DATABASE_FILE_NAME)).expect("database should open");
+    connection
+      .execute_batch(
+        "DROP TRIGGER trg_task_run_assign_sequence;
+         CREATE TRIGGER trg_task_run_assign_sequence
+         AFTER INSERT ON task_run
+         BEGIN
+           SELECT 1;
+         END;",
+      )
+      .expect("same-name no-op trigger should install for the regression");
+
+    assert!(
+      !schema_is_current(&connection).unwrap(),
+      "matching object names must not conceal a broken sequence trigger contract"
+    );
+    assert!(validate_existing_task_run_sequence_migration(&connection).is_err());
     drop(connection);
     fs::remove_dir_all(root).ok();
   }
