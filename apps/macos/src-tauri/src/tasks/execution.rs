@@ -19,6 +19,7 @@ use super::validation::validate_plan_for_task;
 use super::{
   database_error, get_task_by_id, get_task_run, latest_plan_for_task, map_task_run,
   normalize_required, open_workspace_connection, task_error, CollectionTaskView, TaskRunView,
+  WorkerFence,
 };
 
 mod terminal;
@@ -88,9 +89,26 @@ pub fn enqueue_task(root_path: impl AsRef<Path>, task_id: &str) -> AppResult<Tas
 }
 
 pub fn claim_next_task(root_path: impl AsRef<Path>) -> AppResult<Option<TaskRunView>> {
+  claim_next_task_guarded(root_path, None)
+}
+
+pub(crate) fn claim_next_task_with_fence(
+  root_path: impl AsRef<Path>,
+  fence: &WorkerFence,
+) -> AppResult<Option<TaskRunView>> {
+  claim_next_task_guarded(root_path, Some(fence))
+}
+
+fn claim_next_task_guarded(
+  root_path: impl AsRef<Path>,
+  fence: Option<&WorkerFence>,
+) -> AppResult<Option<TaskRunView>> {
   let root_path = root_path.as_ref();
   let mut connection = open_workspace_connection(root_path)?;
   let transaction = immediate_transaction(&mut connection)?;
+  if let Some(fence) = fence {
+    fence.ensure_current(&transaction)?;
+  }
   loop {
     let queued = transaction
       .query_row(

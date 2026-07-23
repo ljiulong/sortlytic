@@ -24,6 +24,7 @@ mod worker_lock;
 mod test_support;
 
 pub use deletion::delete_task;
+pub(crate) use execution::claim_next_task_with_fence;
 pub use execution::{
   cancel_task, claim_next_task, complete_task_run, enqueue_task, fail_task_run, retry_task,
 };

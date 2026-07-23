@@ -1,6 +1,38 @@
 use super::*;
 
 #[test]
+fn stale_worker_fence_cannot_claim_a_queued_run() {
+  let (root_path, task, _) = prepared_task_workspace("execution-stale-fence");
+  let queued = enqueue_task(&root_path, &task.id).expect("task should enqueue");
+  let connection = open_workspace_connection(&root_path).expect("database should open");
+  connection
+    .execute(
+      "INSERT INTO task_worker_lease (
+         id, owner_id, lease_expires_at, created_at, updated_at, generation
+       ) VALUES ('task_worker', 'current-owner', ?1, ?2, ?2, 2)",
+      params![
+        Utc::now().timestamp_millis() + 120_000,
+        Utc::now().to_rfc3339()
+      ],
+    )
+    .unwrap();
+  let stale = WorkerFence::new("stale-owner".to_string(), 1).unwrap();
+
+  claim_next_task_with_fence(&root_path, &stale)
+    .expect_err("stale generation must be rejected inside the claim transaction");
+
+  let status: String = connection
+    .query_row(
+      "SELECT status FROM task_run WHERE id = ?1",
+      [&queued.id],
+      |row| row.get(0),
+    )
+    .unwrap();
+  assert_eq!(status, "queued");
+  std::fs::remove_dir_all(root_path).ok();
+}
+
+#[test]
 fn interrupted_running_task_without_step_snapshot_fails_closed() {
   let (root_path, task, plan) = prepared_task_workspace("execution-recovery");
   enqueue_task(&root_path, &task.id).expect("task should enqueue");
