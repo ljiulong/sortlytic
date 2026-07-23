@@ -647,3 +647,7 @@ mod v4_tests;
 #[cfg(test)]
 #[path = "worker_snapshot_tests.rs"]
 mod snapshot_tests;
+
+#[cfg(test)]
+#[path = "worker_takeover_tests.rs"]
+mod takeover_tests;
