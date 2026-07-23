@@ -10,6 +10,7 @@ mod failure;
 #[path = "partial.rs"]
 mod partial;
 
+pub(crate) use failure::fail_task_run_with_safe_details_with_fence;
 pub use failure::{cancel_task, fail_task_run, fail_task_run_with_safe_details};
 
 struct CompletionStep {
@@ -65,10 +66,31 @@ struct CompletionTotals {
 pub fn complete_task_run(
   root_path: impl AsRef<Path>,
   run_id: &str,
+  actual_cost_json: Value,
+) -> AppResult<TaskRunView> {
+  complete_task_run_guarded(root_path, run_id, actual_cost_json, None)
+}
+
+pub(crate) fn complete_task_run_with_fence(
+  root_path: impl AsRef<Path>,
+  run_id: &str,
+  actual_cost_json: Value,
+  fence: &WorkerFence,
+) -> AppResult<TaskRunView> {
+  complete_task_run_guarded(root_path, run_id, actual_cost_json, Some(fence))
+}
+
+fn complete_task_run_guarded(
+  root_path: impl AsRef<Path>,
+  run_id: &str,
   _actual_cost_json: Value,
+  fence: Option<&WorkerFence>,
 ) -> AppResult<TaskRunView> {
   let mut connection = open_workspace_connection(root_path)?;
   let transaction = immediate_transaction(&mut connection)?;
+  if let Some(fence) = fence {
+    fence.ensure_current(&transaction)?;
+  }
   let run = get_task_run(&transaction, run_id)?;
   require_running(&run)?;
   let task = get_task_by_id(&transaction, &run.task_id)?;

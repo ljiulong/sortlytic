@@ -27,8 +27,51 @@ pub fn fail_task_run_with_safe_details(
   retryable: bool,
   safe_details: &BTreeMap<String, String>,
 ) -> AppResult<TaskRunView> {
+  fail_task_run_with_safe_details_guarded(
+    root_path,
+    run_id,
+    error_code,
+    error_message,
+    retryable,
+    safe_details,
+    None,
+  )
+}
+
+pub(crate) fn fail_task_run_with_safe_details_with_fence(
+  root_path: impl AsRef<Path>,
+  run_id: &str,
+  error_code: &str,
+  error_message: &str,
+  retryable: bool,
+  safe_details: &BTreeMap<String, String>,
+  fence: &WorkerFence,
+) -> AppResult<TaskRunView> {
+  fail_task_run_with_safe_details_guarded(
+    root_path,
+    run_id,
+    error_code,
+    error_message,
+    retryable,
+    safe_details,
+    Some(fence),
+  )
+}
+
+fn fail_task_run_with_safe_details_guarded(
+  root_path: impl AsRef<Path>,
+  run_id: &str,
+  error_code: &str,
+  error_message: &str,
+  retryable: bool,
+  safe_details: &BTreeMap<String, String>,
+  fence: Option<&WorkerFence>,
+) -> AppResult<TaskRunView> {
   let mut connection = open_workspace_connection(root_path)?;
   let transaction = immediate_transaction(&mut connection)?;
+  if let Some(fence) = fence {
+    fence.ensure_current(&transaction)?;
+  }
   let run = get_task_run(&transaction, run_id)?;
   require_running(&run)?;
   let code = normalize_required("错误代码", error_code)?;

@@ -27,6 +27,9 @@ mod terminal;
 pub use terminal::{
   cancel_task, complete_task_run, fail_task_run, fail_task_run_with_safe_details,
 };
+pub(crate) use terminal::{
+  complete_task_run_with_fence, fail_task_run_with_safe_details_with_fence,
+};
 
 struct PersistedPlanStep {
   order: i64,
