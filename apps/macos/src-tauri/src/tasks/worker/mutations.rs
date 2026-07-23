@@ -303,7 +303,7 @@ pub(super) fn mark_response_checkpoint_completed(
   })
 }
 
-fn with_fenced_write<T>(
+pub(super) fn with_fenced_write<T>(
   connection: &Connection,
   fence: Option<&WorkerFence>,
   write: impl FnOnce(&Connection) -> AppResult<T>,

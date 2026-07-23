@@ -7,6 +7,9 @@ use uuid::Uuid;
 
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 
+use super::mutations::with_fenced_write;
+use super::WorkerFence;
+
 #[derive(Debug, Clone)]
 pub(super) struct TargetStepInput {
   pub task_run_id: String,
@@ -34,52 +37,53 @@ pub(super) struct PipelineTarget {
 pub(super) fn materialize_targets(
   connection: &Connection,
   input: &TargetStepInput,
+  fence: Option<&WorkerFence>,
 ) -> AppResult<Vec<PipelineTarget>> {
-  let target_field = target_field(&input.data_type)?;
-  let target_values = if input.depends_on_step_key.is_some() {
-    dependency_values(connection, input, target_field)?
-  } else {
-    BTreeSet::from([required_param(&input.params, target_field)?])
-  };
-  let transaction = connection.unchecked_transaction().map_err(database_error)?;
-  let now = Utc::now().to_rfc3339();
-  for target_value in target_values {
-    let mut resolved_params = input
-      .params
-      .as_object()
-      .cloned()
-      .ok_or_else(|| validation_error("采集步骤 params 必须是对象"))?;
-    resolved_params.insert(
-      target_field.to_string(),
-      Value::String(target_value.clone()),
-    );
-    transaction
-      .execute(
-        "INSERT INTO collection_pipeline_target (
-           id, task_run_id, step_key, data_type, target_key, resolved_params_json,
-           status, request_count, output_selected, created_at, updated_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', 0, ?7, ?8, ?8)
-         ON CONFLICT(task_run_id, step_key, target_key) DO UPDATE SET
-           resolved_params_json = excluded.resolved_params_json,
-           output_selected = excluded.output_selected,
-           updated_at = excluded.updated_at",
-        params![
-          Uuid::new_v4().to_string(),
-          input.task_run_id,
-          input.step_key,
-          input.data_type,
-          target_value,
-          Value::Object(resolved_params).to_string(),
-          i64::from(input.output_selected),
-          now
-        ],
-      )
-      .map_err(database_error)?;
-  }
-  transaction.commit().map_err(database_error)?;
-  let targets = load_targets(connection, &input.task_run_id, &input.step_key)?;
-  validate_materialized_targets(&targets)?;
-  Ok(targets)
+  with_fenced_write(connection, fence, |connection| {
+    let target_field = target_field(&input.data_type)?;
+    let target_values = if input.depends_on_step_key.is_some() {
+      dependency_values(connection, input, target_field)?
+    } else {
+      BTreeSet::from([required_param(&input.params, target_field)?])
+    };
+    let now = Utc::now().to_rfc3339();
+    for target_value in target_values {
+      let mut resolved_params = input
+        .params
+        .as_object()
+        .cloned()
+        .ok_or_else(|| validation_error("采集步骤 params 必须是对象"))?;
+      resolved_params.insert(
+        target_field.to_string(),
+        Value::String(target_value.clone()),
+      );
+      connection
+        .execute(
+          "INSERT INTO collection_pipeline_target (
+             id, task_run_id, step_key, data_type, target_key, resolved_params_json,
+             status, request_count, output_selected, created_at, updated_at
+           ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', 0, ?7, ?8, ?8)
+           ON CONFLICT(task_run_id, step_key, target_key) DO UPDATE SET
+             resolved_params_json = excluded.resolved_params_json,
+             output_selected = excluded.output_selected,
+             updated_at = excluded.updated_at",
+          params![
+            Uuid::new_v4().to_string(),
+            input.task_run_id,
+            input.step_key,
+            input.data_type,
+            target_value,
+            Value::Object(resolved_params).to_string(),
+            i64::from(input.output_selected),
+            now
+          ],
+        )
+        .map_err(database_error)?;
+    }
+    let targets = load_targets(connection, &input.task_run_id, &input.step_key)?;
+    validate_materialized_targets(&targets)?;
+    Ok(targets)
+  })
 }
 
 pub(super) fn load_targets(
@@ -270,7 +274,7 @@ mod tests {
         dependency_data_type: Some("keyword_search".to_string()),
       },
     ] {
-      materialize_targets(&connection, &input).expect("依赖目标应物化");
+      materialize_targets(&connection, &input, None).expect("依赖目标应物化");
     }
 
     let targets = connection
@@ -338,12 +342,59 @@ mod tests {
         input_binding: Some("account_handle".to_string()),
         dependency_data_type: Some("user_search".to_string()),
       },
+      None,
     )
     .expect("v4 账号名补全目标应物化");
 
     assert_eq!(targets.len(), 1);
     assert_eq!(targets[0].target_key, "account-handle-1");
     assert_eq!(targets[0].params["account_id"], "account-handle-1");
+  }
+
+  #[test]
+  fn stale_worker_fence_rejects_target_materialization() {
+    let connection = target_connection();
+    connection
+      .execute(
+        "INSERT INTO task_worker_lease (
+           id, owner_id, lease_expires_at, created_at, updated_at, generation
+         ) VALUES (
+           'task_worker', 'replacement-owner', 9223372036854775807, 'now', 'now', 2
+         )",
+        [],
+      )
+      .expect("replacement lease should be installed");
+    let stale =
+      WorkerFence::new("stale-owner".to_string(), 1).expect("stale fence should be valid");
+
+    materialize_targets(
+      &connection,
+      &TargetStepInput {
+        task_run_id: "run-stale".to_string(),
+        step_key: "item_detail".to_string(),
+        platform: "tiktok".to_string(),
+        data_type: "item_detail".to_string(),
+        params: json!({ "item_id": "stale-video" }),
+        target_limit: 1,
+        output_selected: true,
+        depends_on_step_key: None,
+        input_binding: None,
+        dependency_data_type: None,
+      },
+      Some(&stale),
+    )
+    .expect_err("a stale generation must not materialize pipeline targets");
+
+    assert_eq!(
+      connection
+        .query_row(
+          "SELECT COUNT(*) FROM collection_pipeline_target WHERE task_run_id = 'run-stale'",
+          [],
+          |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+      0
+    );
   }
 
   fn target_connection() -> Connection {
@@ -366,6 +417,14 @@ mod tests {
            output_selected INTEGER NOT NULL, failure_json TEXT,
            created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
            UNIQUE (task_run_id, step_key, target_key)
+         );
+         CREATE TABLE task_worker_lease (
+           id TEXT PRIMARY KEY,
+           owner_id TEXT NOT NULL,
+           lease_expires_at INTEGER NOT NULL,
+           created_at TEXT NOT NULL,
+           updated_at TEXT NOT NULL,
+           generation INTEGER NOT NULL
          );",
       )
       .expect("目标测试表应创建");

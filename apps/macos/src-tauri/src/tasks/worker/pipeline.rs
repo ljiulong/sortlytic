@@ -7,6 +7,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use super::mutations::with_fenced_write;
 use super::pricing::checkpoint_quote_json;
 use super::targets::{materialize_targets, PipelineTarget, TargetStepInput};
 use super::{
@@ -55,6 +56,7 @@ where
       input_binding: step.input_binding.clone(),
       dependency_data_type: step.dependency_data_type.clone(),
     },
+    fence,
   )?;
   mark_step_running(&connection, fence, &step.id)?;
   if targets.is_empty() {
@@ -85,7 +87,7 @@ where
     if step.depends_on_step_key.is_none()
       && output_count(&connection, &run_id)? >= step.record_limit
     {
-      stop_remaining_targets(&connection, &run_id, &step.step_key)?;
+      stop_remaining_targets(&connection, fence, &run_id, &step.step_key)?;
       return mark_step_stopped(
         &connection,
         fence,
@@ -96,7 +98,7 @@ where
     }
     if target.request_count >= step.request_limit {
       let cursor = target.cursor.clone();
-      update_target(&connection, &mut target, "exhausted", cursor)?;
+      update_target(&connection, fence, &mut target, "exhausted", cursor)?;
       request_limited = true;
       continue;
     }
@@ -149,7 +151,7 @@ where
   )?;
   guard_request(&request)?;
   let current_cursor = target.cursor.clone();
-  update_target(connection, target, "running", current_cursor)?;
+  update_target(connection, fence, target, "running", current_cursor)?;
   let (checkpoint_id, idempotency_key) = insert_prepared_checkpoint(
     connection,
     fence,
@@ -167,12 +169,15 @@ where
     Err(error) if is_isolated_target_failure(&error) => {
       persist_target_failure(
         connection,
-        step,
-        run_id,
-        &checkpoint_id,
+        fence,
         target,
-        &request,
-        &error,
+        TargetFailureContext {
+          step,
+          run_id,
+          checkpoint_id: &checkpoint_id,
+          request: &request,
+          error: &error,
+        },
       )?;
       return Ok(());
     }
@@ -250,7 +255,7 @@ where
     mark_checkpoint_failed(connection, fence, &checkpoint_id, ERROR_CODE, ERROR_MESSAGE)?;
     target.request_count += 1;
     let cursor = target.cursor.clone();
-    update_target(connection, target, "failed", cursor)?;
+    update_target(connection, fence, target, "failed", cursor)?;
     return Err(worker_error(ERROR_CODE, ERROR_MESSAGE, false));
   }
 
@@ -279,11 +284,11 @@ where
 
   target.request_count += 1;
   if page.has_more && target.request_count < step.request_limit {
-    update_target(connection, target, "pending", page.next_cursor)?;
+    update_target(connection, fence, target, "pending", page.next_cursor)?;
   } else if page.has_more {
-    update_target(connection, target, "exhausted", page.next_cursor)?;
+    update_target(connection, fence, target, "exhausted", page.next_cursor)?;
   } else {
-    update_target(connection, target, "success", None)?;
+    update_target(connection, fence, target, "success", None)?;
   }
   Ok(())
 }
@@ -292,97 +297,123 @@ fn is_isolated_target_failure(error: &AppError) -> bool {
   error.code == AppErrorCode::TikhubRequestError && !error.retryable
 }
 
+struct TargetFailureContext<'a> {
+  step: &'a RunStep,
+  run_id: &'a str,
+  checkpoint_id: &'a str,
+  request: &'a TikHubCollectionRequest,
+  error: &'a AppError,
+}
+
 fn persist_target_failure(
   connection: &Connection,
-  step: &RunStep,
-  run_id: &str,
-  checkpoint_id: &str,
+  fence: Option<&WorkerFence>,
   target: &mut PipelineTarget,
-  request: &TikHubCollectionRequest,
-  error: &AppError,
+  context: TargetFailureContext<'_>,
 ) -> AppResult<()> {
   let now = Utc::now().to_rfc3339();
-  let error_code = serde_json::to_string(&error.code)
+  let error_code = serde_json::to_string(&context.error.code)
     .unwrap_or_else(|_| "\"TIKHUB_REQUEST_ERROR\"".to_string())
     .trim_matches('"')
     .to_string();
-  let quote_json = checkpoint_quote_json(connection, run_id, request)?;
-  let transaction = connection.unchecked_transaction().map_err(database_error)?;
-  let checkpoint_changed = transaction
-    .execute(
-      "UPDATE collection_page_checkpoint
-       SET status = 'failed', retryable = 0, last_error_code = ?1,
-           last_error_message = ?2, cost_actual_json = ?3,
-           committed_at = ?4, updated_at = ?4
-       WHERE id = ?5 AND status = 'requesting'",
-      params![error_code, error.message, quote_json, now, checkpoint_id],
-    )
-    .map_err(database_error)?;
-  if checkpoint_changed != 1 {
-    return Err(task_error("逐目标失败检查点无法形成确定终态"));
-  }
-  target.request_count += 1;
-  transaction
-    .execute(
-      "UPDATE collection_pipeline_target
-       SET status = 'failed', request_count = ?1, updated_at = ?2
-       WHERE id = ?3 AND status IN ('pending', 'running')",
-      params![target.request_count, now, target.id],
-    )
-    .map_err(database_error)?;
-  let endpoint_key = format!("{}.{}", step.platform, step.data_type);
-  transaction
-    .execute(
-      "INSERT INTO collection_failure_evidence (
-         id, task_run_id, target_id, step_key, endpoint_key, target_key,
-         error_code, error_message, retryable, evidence_json, created_at
-       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9, ?10)",
-      params![
-        Uuid::new_v4().to_string(),
-        run_id,
-        target.id,
-        step.step_key,
-        endpoint_key,
-        target.target_key,
-        error_code,
-        error.message,
-        serde_json::json!({
-          "checkpoint_id": checkpoint_id,
-          "candidate_paths": request.paths(),
-          "source_params": request.source_params(),
-          "billing": serde_json::from_str::<Value>(&quote_json).unwrap_or(Value::Null)
-        })
-        .to_string(),
-        now
-      ],
-    )
-    .map_err(database_error)?;
-  transaction.commit().map_err(database_error)?;
+  let quote_json = checkpoint_quote_json(connection, context.run_id, context.request)?;
+  let request_count = target
+    .request_count
+    .checked_add(1)
+    .ok_or_else(|| task_error("逐目标请求次数溢出"))?;
+  let endpoint_key = format!("{}.{}", context.step.platform, context.step.data_type);
+  with_fenced_write(connection, fence, |connection| {
+    let checkpoint_changed = connection
+      .execute(
+        "UPDATE collection_page_checkpoint
+         SET status = 'failed', retryable = 0, last_error_code = ?1,
+             last_error_message = ?2, cost_actual_json = ?3,
+             committed_at = ?4, updated_at = ?4
+         WHERE id = ?5 AND status = 'requesting'",
+        params![
+          error_code,
+          context.error.message,
+          quote_json,
+          now,
+          context.checkpoint_id
+        ],
+      )
+      .map_err(database_error)?;
+    if checkpoint_changed != 1 {
+      return Err(task_error("逐目标失败检查点无法形成确定终态"));
+    }
+    let target_changed = connection
+      .execute(
+        "UPDATE collection_pipeline_target
+         SET status = 'failed', request_count = ?1, updated_at = ?2
+         WHERE id = ?3 AND status IN ('pending', 'running')",
+        params![request_count, now, target.id],
+      )
+      .map_err(database_error)?;
+    if target_changed != 1 {
+      return Err(task_error("逐目标失败状态无法形成确定终态"));
+    }
+    connection
+      .execute(
+        "INSERT INTO collection_failure_evidence (
+           id, task_run_id, target_id, step_key, endpoint_key, target_key,
+           error_code, error_message, retryable, evidence_json, created_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9, ?10)",
+        params![
+          Uuid::new_v4().to_string(),
+          context.run_id,
+          target.id,
+          context.step.step_key,
+          endpoint_key,
+          target.target_key,
+          error_code,
+          context.error.message,
+          serde_json::json!({
+            "checkpoint_id": context.checkpoint_id,
+            "candidate_paths": context.request.paths(),
+            "source_params": context.request.source_params(),
+            "billing": serde_json::from_str::<Value>(&quote_json).unwrap_or(Value::Null)
+          })
+          .to_string(),
+          now
+        ],
+      )
+      .map_err(database_error)?;
+    Ok(())
+  })?;
+  target.request_count = request_count;
   target.status = "failed".to_string();
   Ok(())
 }
 
 fn update_target(
   connection: &Connection,
+  fence: Option<&WorkerFence>,
   target: &mut PipelineTarget,
   status: &str,
   cursor: Option<Value>,
 ) -> AppResult<()> {
   let now = Utc::now().to_rfc3339();
-  connection
-    .execute(
-      "UPDATE collection_pipeline_target
-       SET status = ?1, cursor_json = ?2, request_count = ?3, updated_at = ?4
-       WHERE id = ?5",
-      params![
-        status,
-        cursor.as_ref().map(Value::to_string),
-        target.request_count,
-        now,
-        target.id
-      ],
-    )
-    .map_err(database_error)?;
+  with_fenced_write(connection, fence, |connection| {
+    let changed = connection
+      .execute(
+        "UPDATE collection_pipeline_target
+         SET status = ?1, cursor_json = ?2, request_count = ?3, updated_at = ?4
+         WHERE id = ?5",
+        params![
+          status,
+          cursor.as_ref().map(Value::to_string),
+          target.request_count,
+          now,
+          target.id
+        ],
+      )
+      .map_err(database_error)?;
+    if changed != 1 {
+      return Err(task_error("采集流水线目标状态已变化"));
+    }
+    Ok(())
+  })?;
   target.status = status.to_string();
   target.cursor = cursor;
   Ok(())
@@ -409,14 +440,21 @@ fn output_count(connection: &Connection, run_id: &str) -> AppResult<i64> {
     .map_err(database_error)
 }
 
-fn stop_remaining_targets(connection: &Connection, run_id: &str, step_key: &str) -> AppResult<()> {
-  connection
-    .execute(
-      "UPDATE collection_pipeline_target
-       SET status = 'exhausted', updated_at = ?1
-       WHERE task_run_id = ?2 AND step_key = ?3 AND status IN ('pending', 'running')",
-      params![Utc::now().to_rfc3339(), run_id, step_key],
-    )
-    .map_err(database_error)?;
-  Ok(())
+fn stop_remaining_targets(
+  connection: &Connection,
+  fence: Option<&WorkerFence>,
+  run_id: &str,
+  step_key: &str,
+) -> AppResult<()> {
+  with_fenced_write(connection, fence, |connection| {
+    connection
+      .execute(
+        "UPDATE collection_pipeline_target
+         SET status = 'exhausted', updated_at = ?1
+         WHERE task_run_id = ?2 AND step_key = ?3 AND status IN ('pending', 'running')",
+        params![Utc::now().to_rfc3339(), run_id, step_key],
+      )
+      .map_err(database_error)?;
+    Ok(())
+  })
 }
