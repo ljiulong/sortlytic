@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use fs4::{FileExt, TryLockError};
-use rusqlite::{params, TransactionBehavior};
+use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use uuid::Uuid;
 
-use super::{database_error, TaskRunView};
+use super::{database_error, TaskRunView, WorkerFence};
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 use crate::workspace::{open_workspace_database, DATABASE_FILE_NAME};
 
@@ -20,7 +20,7 @@ const WORKER_LEASE_MILLIS: i64 = 120_000;
 struct TaskWorkerOwner {
   _file: File,
   root_path: PathBuf,
-  owner_id: String,
+  fence: WorkerFence,
   released: bool,
 }
 
@@ -31,13 +31,13 @@ impl TaskWorkerOwner {
     match FileExt::try_lock(&file) {
       Ok(()) => {
         let owner_id = Uuid::new_v4().to_string();
-        if !claim_database_lease(root_path, &owner_id)? {
+        let Some(fence) = claim_database_lease(root_path, &owner_id)? else {
           return Ok(None);
-        }
+        };
         Ok(Some(Self {
           _file: file,
           root_path: root_path.to_path_buf(),
-          owner_id,
+          fence,
           released: false,
         }))
       }
@@ -54,8 +54,15 @@ impl TaskWorkerOwner {
       .execute(
         "UPDATE task_worker_lease
          SET lease_expires_at = ?1, updated_at = ?2
-         WHERE id = 'task_worker' AND owner_id = ?3 AND lease_expires_at > ?4",
-        params![expires_at, Utc::now().to_rfc3339(), self.owner_id, now],
+         WHERE id = 'task_worker' AND owner_id = ?3 AND generation = ?4
+           AND lease_expires_at > ?5",
+        params![
+          expires_at,
+          Utc::now().to_rfc3339(),
+          self.fence.owner_id(),
+          self.fence.generation(),
+          now
+        ],
       )
       .map_err(database_error)?;
     if changed == 1 {
@@ -67,6 +74,10 @@ impl TaskWorkerOwner {
     }
   }
 
+  fn fence(&self) -> &WorkerFence {
+    &self.fence
+  }
+
   fn release(&mut self) -> AppResult<()> {
     if self.released {
       return Ok(());
@@ -76,8 +87,12 @@ impl TaskWorkerOwner {
       .execute(
         "UPDATE task_worker_lease
          SET lease_expires_at = 0, updated_at = ?1
-         WHERE id = 'task_worker' AND owner_id = ?2",
-        params![Utc::now().to_rfc3339(), self.owner_id],
+         WHERE id = 'task_worker' AND owner_id = ?2 AND generation = ?3",
+        params![
+          Utc::now().to_rfc3339(),
+          self.fence.owner_id(),
+          self.fence.generation()
+        ],
       )
       .map_err(database_error)?;
     self.released = true;
@@ -118,29 +133,36 @@ fn finish_with_release<T>(owner: &mut TaskWorkerOwner, result: AppResult<T>) -> 
   }
 }
 
-fn claim_database_lease(root_path: &Path, owner_id: &str) -> AppResult<bool> {
+fn claim_database_lease(root_path: &Path, owner_id: &str) -> AppResult<Option<WorkerFence>> {
   let now = Utc::now().timestamp_millis();
   let expires_at = lease_expiry(now)?;
   let mut connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME))?;
   let transaction = connection
     .transaction_with_behavior(TransactionBehavior::Immediate)
     .map_err(database_error)?;
-  let changed = transaction
-    .execute(
+  let claimed = transaction
+    .query_row(
       "INSERT INTO task_worker_lease (
-         id, owner_id, lease_expires_at, created_at, updated_at
-       ) VALUES ('task_worker', ?1, ?2, ?3, ?3)
+         id, owner_id, lease_expires_at, created_at, updated_at, generation
+       ) VALUES ('task_worker', ?1, ?2, ?3, ?3, 1)
        ON CONFLICT(id) DO UPDATE SET
          owner_id = excluded.owner_id,
          lease_expires_at = excluded.lease_expires_at,
-         updated_at = excluded.updated_at
-       WHERE task_worker_lease.lease_expires_at <= ?4
-          OR task_worker_lease.owner_id = excluded.owner_id",
+         updated_at = excluded.updated_at,
+         generation = task_worker_lease.generation + 1
+       WHERE (task_worker_lease.lease_expires_at <= ?4
+          OR task_worker_lease.owner_id = excluded.owner_id)
+         AND task_worker_lease.generation < 9223372036854775807
+      RETURNING owner_id, generation",
       params![owner_id, expires_at, Utc::now().to_rfc3339(), now],
+      |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
     )
+    .optional()
     .map_err(database_error)?;
   transaction.commit().map_err(database_error)?;
-  Ok(changed == 1)
+  claimed
+    .map(|(owner_id, generation)| WorkerFence::new(owner_id, generation))
+    .transpose()
 }
 
 fn lease_expiry(now: i64) -> AppResult<i64> {
@@ -305,6 +327,39 @@ mod tests {
 
     assert!(error.message.contains("租约已失效"));
     drop(owner);
+    fs::remove_dir_all(root).ok();
+  }
+
+  #[test]
+  fn replacing_an_expired_owner_advances_the_fence_generation() {
+    let root = std::env::temp_dir().join(format!("worker-fence-generation-{}", Uuid::new_v4()));
+    create_workspace("执行器栅栏代次回归", &root).expect("workspace should create");
+    let first = TaskWorkerOwner::try_acquire(&root)
+      .expect("first owner should acquire")
+      .expect("lease should be available");
+    let first_generation = first.fence().generation();
+    let connection = open_workspace_database(root.join(DATABASE_FILE_NAME)).unwrap();
+    connection
+      .execute(
+        "UPDATE task_worker_lease SET lease_expires_at = 0 WHERE id = 'task_worker'",
+        [],
+      )
+      .unwrap();
+    fs::remove_file(root.join("temp").join(WORKER_LOCK_FILE)).unwrap();
+
+    let second = TaskWorkerOwner::try_acquire(&root)
+      .expect("replacement owner should acquire")
+      .expect("expired lease should be replaceable");
+
+    assert_eq!(second.fence().generation(), first_generation + 1);
+    first
+      .ensure_current()
+      .expect_err("an older generation must remain fenced out");
+    second
+      .ensure_current()
+      .expect("the latest generation must remain current");
+    drop(first);
+    drop(second);
     fs::remove_dir_all(root).ok();
   }
 }

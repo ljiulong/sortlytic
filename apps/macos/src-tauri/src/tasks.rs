@@ -17,6 +17,7 @@ mod revisions;
 mod snapshot;
 mod validation;
 mod worker;
+mod worker_fence;
 mod worker_lock;
 
 #[cfg(test)]
@@ -30,6 +31,7 @@ use plans::latest_plan_for_task;
 pub(crate) use plans::save_collection_plan_in_transaction;
 pub use plans::{confirm_collection_plan, estimate_task_cost, save_collection_plan};
 pub use revisions::revise_collection_task;
+pub(crate) use worker_fence::WorkerFence;
 pub use worker_lock::{execute_next_task, recover_interrupted_runs};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
