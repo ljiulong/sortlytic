@@ -2,7 +2,7 @@ use super::*;
 use crate::workspace::{create_workspace, open_workspace_database, DATABASE_FILE_NAME};
 
 #[test]
-fn natural_task_creation_atomically_persists_the_complete_initial_intent() {
+fn natural_task_creation_persists_intent_without_claiming_a_running_attempt() {
   let root_path = unique_temp_workspace("natural-initial-intent");
   create_workspace("自然语言原子草稿", &root_path).expect("workspace should be created");
   let intent_text = "用中文查找英国 TikTok 宠物用品账号，保留完整原始输入并在进程中断后恢复，最多 10 个，预算 0.1 美元。";
@@ -21,21 +21,27 @@ fn natural_task_creation_atomically_persists_the_complete_initial_intent() {
   let connection = open_workspace_database(root_path.join(DATABASE_FILE_NAME)).unwrap();
   let attempt = connection
     .query_row(
-      "SELECT intent_text, parse_status, parse_phase FROM task_intent WHERE task_id = ?1",
+      "SELECT intent_text, parse_status, parse_phase, error_safe_details_json
+       FROM task_intent WHERE task_id = ?1",
       [&task.id],
       |row| {
         Ok((
           row.get::<_, String>(0)?,
           row.get::<_, String>(1)?,
           row.get::<_, String>(2)?,
+          row.get::<_, String>(3)?,
         ))
       },
     )
     .expect("initial attempt should exist before model invocation");
 
   assert_eq!(attempt.0, intent_text);
-  assert_eq!(attempt.1, "running");
+  assert_eq!(attempt.1, "needs_review");
   assert_eq!(attempt.2, "preparing");
+  assert_eq!(
+    serde_json::from_str::<Value>(&attempt.3).unwrap()["source"],
+    "pending_generation"
+  );
   std::fs::remove_dir_all(root_path).ok();
 }
 

@@ -406,17 +406,33 @@ pub(super) fn claim_initial_task_intent_attempt(
   connection
     .query_row(
       "UPDATE task_intent
-       SET parse_phase = 'requesting_ai', updated_at = ?1
+       SET parse_status = 'running', parse_phase = 'requesting_ai', updated_at = ?1
        WHERE id = (
          SELECT id FROM task_intent
          WHERE task_id = ?2 AND intent_text = ?3
-           AND parse_status = 'running' AND parse_phase = 'preparing'
+           AND parse_phase = 'preparing'
            AND ai_run_id IS NULL
+           AND (
+             parse_status = 'running'
+             OR (
+               parse_status = 'needs_review'
+               AND json_valid(error_safe_details_json)
+               AND json_extract(error_safe_details_json, '$.source') = 'pending_generation'
+             )
+           )
          ORDER BY created_at ASC, id ASC
          LIMIT 1
        )
-         AND parse_status = 'running' AND parse_phase = 'preparing'
+         AND parse_phase = 'preparing'
          AND ai_run_id IS NULL
+         AND (
+           parse_status = 'running'
+           OR (
+             parse_status = 'needs_review'
+             AND json_valid(error_safe_details_json)
+             AND json_extract(error_safe_details_json, '$.source') = 'pending_generation'
+           )
+         )
        RETURNING id",
       params![claimed_at, task_id, intent_text],
       |row| row.get::<_, String>(0),

@@ -204,7 +204,10 @@ pub fn create_collection_task_with_initial_intent(
         "INSERT INTO task_intent (
           id, task_id, intent_text, parse_status, parse_phase,
           error_safe_details_json, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, 'running', 'preparing', '{}', ?4, ?4)",
+        ) VALUES (
+          ?1, ?2, ?3, 'needs_review', 'preparing',
+          '{\"source\":\"pending_generation\"}', ?4, ?4
+        )",
         params![Uuid::new_v4().to_string(), id, intent_text, now],
       )
       .map_err(database_error)?;
