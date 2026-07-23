@@ -2,6 +2,26 @@ import { describe, expect, it } from 'vitest'
 import { mapTaskRow, toUiTaskStatus } from './workbench-task-mapper'
 
 describe('workbench task status mapping', () => {
+  it('自然语言尚未解析出结构化事实时不伪造默认平台和数据类型', () => {
+    expect(mapTaskRow({
+      id: 'task-natural-unparsed',
+      name: '用中文查找英国 TikTok 办公用品账号',
+      source_type: 'natural_language',
+      status: 'draft',
+      platforms_json: [],
+      data_types_json: [],
+      created_at: '2026-07-20T00:00:00Z',
+      updated_at: '2026-07-20T00:01:00Z',
+      cancelled_at: null,
+      cost_estimate_json: {},
+      actual_cost_json: {},
+    })).toMatchObject({
+      platform: '平台待解析',
+      cost: '尚无请求估算 · 数据类型待解析',
+      dataTypeCode: undefined,
+    })
+  })
+
   it('将 Schema v4 account 任务显示为账号数据而不是评论用户', () => {
     expect(mapTaskRow({
       id: 'task-account-v4',

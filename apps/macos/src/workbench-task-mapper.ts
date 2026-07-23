@@ -1,24 +1,36 @@
 import type { CollectionTaskView } from './backend-api'
 import type { DataType, Platform, TaskStatus } from './workbench-data'
 
+export type TaskPlatform = Platform | '平台待解析'
+
 export function mapTaskRow(task: CollectionTaskView) {
   const platforms = stringArrayFromJson(task.platforms_json)
   const dataTypes = stringArrayFromJson(task.data_types_json)
   const requestCount = numberFromJson(task.cost_estimate_json)
+  const dataType = dataTypes[0]
 
   return {
     id: task.id,
     name: task.name,
-    platform: toUiPlatform(platforms[0] ?? 'xiaohongshu'),
+    platform: toTaskPlatform(platforms[0]),
     status: toUiTaskStatus(task.status),
     source: task.source_type === 'natural_language' ? '自然语言' : '表单式',
     sourceType: task.source_type === 'natural_language' ? 'natural_language' : 'form',
     progress: progressForTaskStatus(task.status),
     records: 0,
-    cost: `${requestCount ? `预计 ${requestCount} 次请求` : '尚无请求估算'} · ${toUiDataType(dataTypes[0] ?? 'comments')}`,
+    cost: `${requestCount ? `预计 ${requestCount} 次请求` : '尚无请求估算'} · ${dataType
+      ? toUiDataType(dataType)
+      : '数据类型待解析'}`,
     requestCount,
-    dataTypeCode: dataTypes[0] ?? 'comments',
+    dataTypeCode: dataType,
   } as const
+}
+
+function toTaskPlatform(platform: string | undefined): TaskPlatform {
+  if (!platform || !['tiktok', 'douyin', 'xiaohongshu'].includes(platform)) {
+    return '平台待解析'
+  }
+  return toUiPlatform(platform)
 }
 
 export function toUiPlatform(platform: string): Platform {

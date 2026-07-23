@@ -12,10 +12,10 @@ import type {
 import {
   mapTaskRow,
   numberFromJson,
+  type TaskPlatform,
 } from './workbench-task-mapper'
 import type {
   ConnectionIcon,
-  Platform,
   SocialRecord,
   TaskStatus,
   Tone,
@@ -40,7 +40,7 @@ export type WorkbenchRuntimeData = {
   tasks: Array<{
     id: string
     name: string
-    platform: Platform
+    platform: TaskPlatform
     status: TaskStatus
     source: string
     sourceType?: 'natural_language' | 'form'
