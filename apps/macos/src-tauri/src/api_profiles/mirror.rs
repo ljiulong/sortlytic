@@ -175,6 +175,7 @@ pub(super) fn rebuild_mirror(
           "ai_profile_count": registry.ai_profiles.len(),
           "has_active_tikhub": registry.active_profile_ids.tikhub.is_some(),
           "has_active_ai": registry.active_profile_ids.ai.is_some(),
+          "registry_view": super::safe_snapshot::value(registry),
         })
         .to_string(),
         Utc::now().to_rfc3339(),

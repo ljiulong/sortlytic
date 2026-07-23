@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::domain::{AppError, AppErrorCode, AppErrorStage, AppResult};
 
 mod mirror;
+mod safe_snapshot;
 mod storage;
 
 #[cfg(test)]
@@ -222,6 +223,12 @@ pub fn sync_api_profile_mirror(root_path: impl AsRef<Path>) -> AppResult<()> {
     concurrency_tests::run_before_mirror_hook(root_path);
     mirror::mirror_registry(root_path, &registry)
   })
+}
+
+pub(crate) fn load_api_profile_safe_snapshot(
+  root_path: impl AsRef<Path>,
+) -> AppResult<serde_json::Value> {
+  safe_snapshot::read(root_path.as_ref())
 }
 
 pub(crate) fn rebuild_api_profile_mirror(
