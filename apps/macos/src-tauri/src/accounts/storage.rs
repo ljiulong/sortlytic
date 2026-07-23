@@ -90,6 +90,7 @@ fn persist_account_observations_guarded(
     .map_err(database_error)?;
   if let Some(fence) = fence {
     fence.ensure_current(&transaction)?;
+    validate_running_scope(&transaction, &input.task_run_id)?;
   }
   let filters = active_account_filters(&transaction, &input.task_run_id, &input.collected_at)?;
   let mut observed_count = 0;
@@ -122,6 +123,25 @@ fn persist_account_observations_guarded(
   };
   transaction.commit().map_err(database_error)?;
   Ok(result)
+}
+
+fn validate_running_scope(connection: &Connection, task_run_id: &str) -> AppResult<()> {
+  let state = connection
+    .query_row(
+      "SELECT task.status, run.status
+       FROM task_run AS run
+       JOIN collection_task AS task ON task.id = run.task_id
+       WHERE run.id = ?1 AND run.task_id = task.id",
+      params![task_run_id],
+      |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    )
+    .optional()
+    .map_err(database_error)?
+    .ok_or_else(|| validation_error("任务运行记录不存在或不属于任何任务"))?;
+  if state.0 != "running" || state.1 != "running" {
+    return Err(validation_error("只允许为运行中的任务持久化账号观察"));
+  }
+  Ok(())
 }
 
 fn source_kind(data_type: &str) -> AppResult<SourceKind> {

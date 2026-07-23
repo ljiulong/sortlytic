@@ -4,6 +4,11 @@ use rusqlite::Connection;
 use serde_json::{json, Value};
 
 use super::*;
+use crate::tasks::{
+  cancel_task, confirm_collection_plan, create_collection_task, enqueue_task, save_collection_plan,
+  CreateCollectionTaskInput, SaveCollectionPlanInput,
+};
+use crate::workspace::{create_workspace, open_workspace_database, DATABASE_FILE_NAME};
 
 #[test]
 fn explicit_age_range_is_inclusive_and_unknown_age_is_excluded() {
@@ -386,6 +391,111 @@ fn stale_worker_fence_rejects_account_mutations() {
       .expect("account count should query"),
     0
   );
+}
+
+#[test]
+fn cancelled_run_rejects_account_mutations_with_a_current_worker_fence() {
+  let root = std::env::temp_dir().join(format!("account-cancel-fence-{}", uuid::Uuid::new_v4()));
+  create_workspace("账号取消栅栏测试", &root).expect("workspace should be created");
+  let task = create_collection_task(
+    &root,
+    CreateCollectionTaskInput {
+      name: "取消后账号不得落库".to_string(),
+      source_type: "form".to_string(),
+      platforms: vec!["tiktok".to_string()],
+      data_types: vec!["comments".to_string()],
+    },
+  )
+  .expect("task should create");
+  let draft = crate::collection::generate_form_collection_plan(
+    crate::collection::FormCollectionPlanRequest {
+      platform: "tiktok".to_string(),
+      data_type: None,
+      data_types: vec!["comments".to_string()],
+      params: json!({ "item_id": "video-cancelled" }),
+      age_range: None,
+      request_limit: Some(1),
+      record_limit: Some(1),
+      budget_limit_micros: Some(1_000_000),
+    },
+  )
+  .expect("plan should generate");
+  let plan = save_collection_plan(
+    &root,
+    SaveCollectionPlanInput {
+      task_id: task.id.clone(),
+      source: draft.source,
+      plan_json: draft.plan_json,
+      validation_status: draft.validation_status,
+      validation_errors_json: Some(draft.validation_errors_json),
+      cost_estimate_json: Some(draft.cost_estimate_json),
+    },
+  )
+  .expect("plan should save");
+  confirm_collection_plan(&root, &task.id, &plan.id).expect("plan should confirm");
+  let run = enqueue_task(&root, &task.id).expect("task should enqueue");
+  let connection =
+    open_workspace_database(root.join(DATABASE_FILE_NAME)).expect("database should open");
+  connection
+    .execute(
+      "UPDATE collection_task SET status = 'running' WHERE id = ?1",
+      [&task.id],
+    )
+    .expect("task should enter the running fixture state");
+  connection
+    .execute(
+      "UPDATE task_run SET status = 'running' WHERE id = ?1",
+      [&run.id],
+    )
+    .expect("run should enter the running fixture state");
+  let now = chrono::Utc::now();
+  connection
+    .execute(
+      "INSERT INTO task_worker_lease (
+         id, owner_id, lease_expires_at, created_at, updated_at, generation
+       ) VALUES ('task_worker', 'current-owner', ?1, ?2, ?2, 1)",
+      rusqlite::params![now.timestamp_millis() + 120_000, now.to_rfc3339()],
+    )
+    .expect("current lease should install");
+  let current = crate::tasks::WorkerFence::new("current-owner".to_string(), 1)
+    .expect("current fence should construct");
+
+  cancel_task(&root, &task.id).expect("running task should cancel");
+  let error = persist_account_observations_with_fence(
+    &connection,
+    AccountObservationInput {
+      task_run_id: run.id.clone(),
+      platform: "tiktok".to_string(),
+      data_type: "comments".to_string(),
+      records: vec![json!({
+        "user_id": "cancelled-account",
+        "nickname": "取消后账号"
+      })],
+      output_selected: true,
+      age_range: None,
+      record_limit: 1,
+      collected_at: "2026-07-24T00:00:00+08:00".to_string(),
+    },
+    &current,
+  )
+  .expect_err("a cancelled run must reject account persistence even with a current fence");
+  assert!(
+    error.message.contains("运行中的任务"),
+    "cancellation rejection should explain the running-state invariant"
+  );
+  assert_eq!(
+    connection
+      .query_row(
+        "SELECT COUNT(*) FROM collected_account WHERE task_run_id = ?1",
+        [&run.id],
+        |row| row.get::<_, i64>(0),
+      )
+      .expect("account count should query"),
+    0
+  );
+
+  drop(connection);
+  std::fs::remove_dir_all(root).ok();
 }
 
 #[test]
