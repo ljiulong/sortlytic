@@ -51,7 +51,7 @@ pub enum SaveApiProfileInput {
   },
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiProfileRegistryView {
   pub active_profile_ids: SafeActiveProfileIds,
@@ -59,13 +59,13 @@ pub struct ApiProfileRegistryView {
   pub ai_profiles: Vec<AiApiProfileView>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SafeActiveProfileIds {
   pub tikhub: Option<String>,
   pub ai: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TikhubApiProfileView {
   pub kind: ApiProfileKind,
@@ -83,7 +83,7 @@ pub struct TikhubApiProfileView {
   pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TikhubTestSummaryView {
   pub masked_account: Option<String>,
@@ -93,7 +93,7 @@ pub struct TikhubTestSummaryView {
   pub today_usage: Option<f64>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AiApiProfileView {
   pub kind: ApiProfileKind,
@@ -133,7 +133,7 @@ pub(super) fn get_api_profile_registry(
   state: tauri::State<'_, AppState>,
 ) -> AppResult<ApiProfileRegistryView> {
   let root = resolve_workspace_root(root_path, &state)?;
-  service::get_registry(&root).map(|registry| safe_registry_view(&registry))
+  service::get_registry_view(&root)
 }
 
 #[tauri::command]

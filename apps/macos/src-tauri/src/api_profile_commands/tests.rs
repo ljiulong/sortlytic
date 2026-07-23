@@ -271,6 +271,27 @@ fn safe_views_switch_profiles_and_keep_blank_edit_keys() {
 }
 
 #[test]
+fn registry_status_view_does_not_open_the_secret_registry() {
+  let root = workspace("safe-status-view");
+  service::save_profile(&root, ai_input(None, "只读状态", Some(AI_SECRET))).unwrap();
+  fs::write(
+    crate::api_profiles::api_profile_registry_path(&root),
+    b"{ secret registry must not be opened by status reads",
+  )
+  .unwrap();
+
+  assert!(service::get_registry(&root).is_err());
+  let view = service::get_registry_view(&root).unwrap();
+  let view_json = serde_json::to_string(&view).unwrap();
+
+  assert_eq!(view.ai_profiles.len(), 1);
+  assert_eq!(view.ai_profiles[0].name, "只读状态");
+  assert!(view.ai_profiles[0].has_credential);
+  assert!(!view_json.contains(AI_SECRET));
+  fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn changing_ai_provider_never_reuses_the_previous_provider_key() {
   let root = workspace("ai-provider-change");
   let original = service::save_profile(&root, ai_input(None, "OpenAI", Some(AI_SECRET))).unwrap();

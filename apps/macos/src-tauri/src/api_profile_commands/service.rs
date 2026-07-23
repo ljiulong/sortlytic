@@ -10,13 +10,13 @@ use super::validation::{
   required, same_url_authority, secret, tikhub_url, validate_ai_format, validate_ai_url,
 };
 pub(super) use super::ServiceTestResult;
-use super::{ApiProfileKind, SaveApiProfileInput};
+use super::{ApiProfileKind, ApiProfileRegistryView, SaveApiProfileInput};
 use crate::ai::provider_client::{call_model, connection_test_request, ProviderConfig};
 use crate::api_profiles::{
-  load_existing_api_profile_registry, rebuild_api_profile_mirror, save_api_profile_registry,
-  update_api_profile_registry, with_api_profile_mirror_lock, AiApiFormat, AiApiProfile,
-  AiProviderType, ApiCredential, ApiProfileRegistry, ApiProfileStatus, CredentialProviderType,
-  TikhubApiProfile, TikhubSafeTestSummary,
+  load_api_profile_safe_snapshot, load_existing_api_profile_registry, rebuild_api_profile_mirror,
+  save_api_profile_registry, update_api_profile_registry, with_api_profile_mirror_lock,
+  AiApiFormat, AiApiProfile, AiProviderType, ApiCredential, ApiProfileRegistry, ApiProfileStatus,
+  CredentialProviderType, TikhubApiProfile, TikhubSafeTestSummary,
 };
 use crate::domain::{redact_sensitive_text, AppError, AppErrorCode, AppErrorStage, AppResult};
 use crate::tikhub::{self, TikhubConnectionTestResult};
@@ -27,6 +27,11 @@ type ProfileTestResult = AppResult<ServiceTestResult>;
 pub(super) fn get_registry(root: &Path) -> AppResult<ApiProfileRegistry> {
   load_existing_api_profile_registry(root)?
     .ok_or_else(|| error("API 配置文件不存在，请重新打开工作区后再试"))
+}
+
+pub(super) fn get_registry_view(root: &Path) -> AppResult<ApiProfileRegistryView> {
+  serde_json::from_value(load_api_profile_safe_snapshot(root)?)
+    .map_err(|_| safe_snapshot_error("API 配置安全状态镜像无法解析"))
 }
 
 pub(super) fn save_profile(
@@ -703,6 +708,15 @@ fn today_usage(value: &Value) -> Option<f64> {
 
 fn safe_message(message: &str, secret: &str) -> String {
   redact_sensitive_text(&message.replace(secret, "[REDACTED]"))
+}
+
+fn safe_snapshot_error(message: &str) -> AppError {
+  AppError::new(
+    AppErrorCode::DatabaseError,
+    message,
+    AppErrorStage::Database,
+    false,
+  )
 }
 
 fn auto_activation_allowed(
