@@ -16,7 +16,7 @@ use checkpoint::{
 use super::execution::{
   append_task_log, quarantine_run_for_reconfirmation, require_executable_plan,
 };
-use super::{database_error, open_workspace_connection, task_error};
+use super::{database_error, open_workspace_connection, task_error, WorkerFence};
 
 const UNCERTAIN_REQUEST_CODE: &str = "UNCERTAIN_REQUEST_AFTER_CRASH";
 
@@ -168,11 +168,29 @@ pub(super) fn gate_queued_run_for_claim(
   Ok(false)
 }
 
+#[cfg(test)]
 pub fn recover_interrupted_runs(root_path: impl AsRef<Path>) -> AppResult<i64> {
+  recover_interrupted_runs_guarded(root_path, None)
+}
+
+pub(super) fn recover_interrupted_runs_with_fence(
+  root_path: impl AsRef<Path>,
+  fence: &WorkerFence,
+) -> AppResult<i64> {
+  recover_interrupted_runs_guarded(root_path, Some(fence))
+}
+
+fn recover_interrupted_runs_guarded(
+  root_path: impl AsRef<Path>,
+  fence: Option<&WorkerFence>,
+) -> AppResult<i64> {
   let mut connection = open_workspace_connection(root_path)?;
   let transaction = connection
     .transaction_with_behavior(TransactionBehavior::Immediate)
     .map_err(database_error)?;
+  if let Some(fence) = fence {
+    fence.ensure_current(&transaction)?;
+  }
   let interrupted = {
     let mut statement = transaction
       .prepare(

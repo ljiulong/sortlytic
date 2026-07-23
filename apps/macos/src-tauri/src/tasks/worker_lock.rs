@@ -112,7 +112,7 @@ pub fn recover_interrupted_runs(root_path: impl AsRef<Path>) -> AppResult<i64> {
     return Ok(0);
   };
   owner.ensure_current()?;
-  let result = super::recovery::recover_interrupted_runs(root_path);
+  let result = super::recovery::recover_interrupted_runs_with_fence(root_path, owner.fence());
   finish_with_release(&mut owner, result)
 }
 
@@ -355,6 +355,8 @@ mod tests {
     first
       .ensure_current()
       .expect_err("an older generation must remain fenced out");
+    super::super::recovery::recover_interrupted_runs_with_fence(&root, first.fence())
+      .expect_err("stale recovery must fail before mutating interrupted runs");
     second
       .ensure_current()
       .expect("the latest generation must remain current");
