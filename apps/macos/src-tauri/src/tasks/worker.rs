@@ -578,8 +578,73 @@ pub(super) fn with_task_dispatch_gate<T>(
     return operation();
   }
   let file = open_task_dispatch_lock(root_path, task_id)?;
-  FileExt::lock(&file).map_err(|error| dispatch_lock_acquisition_error(&error))?;
+  acquire_task_dispatch_gate(&file, root_path, task_id)?;
   operation()
+}
+
+#[cfg(test)]
+type DispatchGateContentionObserver = (std::path::PathBuf, String, std::sync::mpsc::Sender<bool>);
+
+#[cfg(test)]
+fn dispatch_gate_contention_observer(
+) -> &'static std::sync::Mutex<Option<DispatchGateContentionObserver>> {
+  static OBSERVER: std::sync::OnceLock<std::sync::Mutex<Option<DispatchGateContentionObserver>>> =
+    std::sync::OnceLock::new();
+  OBSERVER.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+#[cfg(test)]
+pub(super) fn observe_next_task_dispatch_gate_contention(
+  root_path: &Path,
+  task_id: &str,
+  result: std::sync::mpsc::Sender<bool>,
+) {
+  let mut observer = dispatch_gate_contention_observer()
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner());
+  *observer = Some((root_path.to_path_buf(), task_id.to_string(), result));
+}
+
+fn acquire_task_dispatch_gate(
+  file: &std::fs::File,
+  _root_path: &Path,
+  _task_id: &str,
+) -> AppResult<()> {
+  #[cfg(test)]
+  if let Some(observer) = take_dispatch_gate_contention_observer(_root_path, _task_id) {
+    match FileExt::try_lock(file) {
+      Ok(()) => {
+        observer.send(false).ok();
+        return Ok(());
+      }
+      Err(fs4::TryLockError::WouldBlock) => {
+        observer.send(true).ok();
+      }
+      Err(fs4::TryLockError::Error(error)) => {
+        observer.send(false).ok();
+        return Err(dispatch_lock_acquisition_error(&error));
+      }
+    }
+  }
+  FileExt::lock(file).map_err(|error| dispatch_lock_acquisition_error(&error))
+}
+
+#[cfg(test)]
+fn take_dispatch_gate_contention_observer(
+  root_path: &Path,
+  task_id: &str,
+) -> Option<std::sync::mpsc::Sender<bool>> {
+  let mut observer = dispatch_gate_contention_observer()
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner());
+  if observer
+    .as_ref()
+    .is_some_and(|value| value.0 == root_path && value.1 == task_id)
+  {
+    observer.take().map(|value| value.2)
+  } else {
+    None
+  }
 }
 
 fn dispatch_lock_acquisition_error(error: &std::io::Error) -> AppError {

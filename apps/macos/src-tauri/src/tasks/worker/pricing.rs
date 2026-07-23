@@ -486,32 +486,41 @@ mod tests {
     }));
     let pricing_root = root.clone();
     let base_url = server.base_url.clone();
+    let (pricing_done_tx, pricing_done_rx) = mpsc::channel();
     let pricing = thread::spawn(move || {
       let _override = override_tikhub_base_url_for_current_test(base_url);
-      guard_request(&pricing_root, PRICING_RUN_ID, &request, Some(&current))
+      let result = guard_request(&pricing_root, PRICING_RUN_ID, &request, Some(&current));
+      pricing_done_tx
+        .send(result)
+        .expect("pricing result should send");
     });
     entered_rx
       .recv_timeout(Duration::from_secs(3))
       .expect("quota request should reach the local server");
 
     let cancel_root = root.clone();
-    let (cancel_started_tx, cancel_started_rx) = mpsc::channel();
+    let (cancel_contended_tx, cancel_contended_rx) = mpsc::channel();
     let (cancel_done_tx, cancel_done_rx) = mpsc::channel();
+    super::super::observe_next_task_dispatch_gate_contention(
+      &root,
+      PRICING_TASK_ID,
+      cancel_contended_tx,
+    );
     let cancellation = thread::spawn(move || {
-      cancel_started_tx
-        .send(())
-        .expect("cancel start signal should send");
       let result = cancel_task(&cancel_root, PRICING_TASK_ID);
       cancel_done_tx
         .send(result)
         .expect("cancel result should send");
     });
-    cancel_started_rx
-      .recv_timeout(Duration::from_secs(1))
-      .expect("cancel thread should start");
+    assert!(
+      cancel_contended_rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("cancel path should report its dispatch gate attempt"),
+      "cancel path must observe the in-flight pricing lock"
+    );
     assert!(matches!(
-      cancel_done_rx.recv_timeout(Duration::from_millis(150)),
-      Err(mpsc::RecvTimeoutError::Timeout)
+      cancel_done_rx.try_recv(),
+      Err(mpsc::TryRecvError::Empty)
     ));
     assert_eq!(
       connection
@@ -531,9 +540,9 @@ mod tests {
       .send(())
       .expect("quota response should be released");
     assert_eq!(
-      pricing
-        .join()
-        .expect("pricing thread should finish")
+      pricing_done_rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("pricing should finish within the test deadline")
         .expect("pricing should finish before cancellation"),
       10_000
     );
@@ -541,6 +550,7 @@ mod tests {
       .recv_timeout(Duration::from_secs(3))
       .expect("cancellation should finish after pricing")
       .expect("running task should cancel");
+    pricing.join().expect("pricing thread should finish");
     cancellation
       .join()
       .expect("cancellation thread should finish");
